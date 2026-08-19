@@ -1,0 +1,5 @@
+requests>=2.31.0
+apscheduler>=3.10.0
+yt-dlp>=2024.0
+plyer>=2.1.0
+pyinstaller>=6.0.0
