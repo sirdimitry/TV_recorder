@@ -1,96 +1,66 @@
-# 📺 TV Recorder для macOS
+# TV Recorder for macOS
 
-> Настольное приложение для записи и просмотра федеральных телеканалов России на Python + Tkinter
+A desktop application for watching and recording Russian federal TV channels. It is built with Python and Tkinter and runs on macOS.
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+## Current features
 
-## ✨ Возможности
+- Downloads and updates a channel list from an open IPTV playlist, with a local fallback list.
+- Opens a stream preview through `ffplay`.
+- Records several channels at the same time through `ffmpeg`.
+- Supports scheduled recordings by channel, time range, and weekdays.
+- Stops scheduled recordings automatically at the selected end time.
+- Shows active recordings with elapsed time, pause, stop, remove, and Reveal in Finder controls.
+- Uses the system date and time as the default schedule values.
+- Supports scrolling channels with a mouse wheel or a two-finger trackpad gesture.
+- Monitors VPN and actual internet availability in the status bar.
+- Uses macOS-native notifications without extra macOS bindings.
 
-- 🔄 **Автозагрузка плейлистов** — актуальные ссылки из открытых источников (IPTVru)
-- 👁️ **Предпросмотр потоков** — через встроенный ffplay без сторонних плееров
-- ⏺️ **Множественные записи** — одновременная запись нескольких каналов с паузой и остановкой
-- 📅 **Планировщик** — запись по расписанию с выбором дней недели и времени
-- 🎛️ **Панель активных записей** — таймеры в реальном времени, управление одной кнопкой
--  **Умный парсер** — распознаёт каналы по синонимам (1TV, Первый, Perviy и т.д.)
-- ️ **Кэширование логотипов** — быстрая загрузка и локальное хранение
-- 🌙 **Тёмная тема** — современный интерфейс в стиле OBS
-- 🔒 **VPN-детектор** — автоматическая проверка статуса подключения
+## Requirements
 
-##  Установка
+- macOS 12 or newer
+- Python 3.12 or newer
+- FFmpeg, including `ffplay`
 
-### Требования
-- macOS 12+
-- Python 3.12+
-- ffmpeg (включая ffplay)
-
-### Шаги установки
+## Installation
 
 ```bash
-# 1. Клонируйте репозиторий
-git clone https://github.com/YOUR_USERNAME/tv-recorder-macos.git
-cd tv-recorder-macos
-
-# 2. Установите ffmpeg (если не установлен)
+git clone https://github.com/sirdimitry/TV_recorder.git
+cd TV_recorder
 brew install ffmpeg
-
-# 3. Установите зависимости Python
-pip install -r requirements.txt
-
-# 4. Запустите приложение
+python3 -m pip install -r requirements.txt
 python3 main.py
 ```
-Настройки
-Приложение автоматически создаёт необходимые папки при первом запуске:
-Папка
-Назначение
-data/
-Кэш каналов и расписание
-recordings/
-Сохранённые записи
-logs/
-Логи приложения
-data/logos/
-Кэшированные логотипы
-Путь для записей можно изменить в utils/config.py.
 
-🏗️ Структура проекта
+If Terminal is already open in the project directory, only run:
 
 ```bash
-tv_recorder/
-├── core/              # Логика приложения
-│   ├── m3u_parser.py      # Парсер плейлистов
-│   ├── recorder.py        # Система записи
-│   ├── scheduler.py       # Планировщик
-│   ├── storage.py         # Хранение данных
-│   └── checker.py         # Проверка потоков
-── gui/               # Интерфейс
-│   ├── app_window.py        # Главное окно
-│   ├── channel_list.py      # Список каналов
-│   ├── recording_panel.py   # Панель записей
-│   ├── schedule_panel.py    # Расписание
-│   ├── mini_player.py       # Предпросмотр
-│   └── status_bar.py        # Статус-бар
-├── utils/             # Утилиты
-│   ├── config.py            # Конфигурация
-│   ├── vpn_manager.py       # Детектор VPN
-│   ├── logo_cache.py        # Кэш логотипов
-│   └── logger.py            # Логирование
-├── data/              # Данные (создаётся автоматически)
-├── recordings/        # Записи (создаётся автоматически)
-├── logs/              # Логи (создаётся автоматически)
-├── main.py            # Точка входа
-└── requirements.txt
+python3 main.py
 ```
 
+## Usage
 
-🙏 Благодарности
-IPTVru — плейлисты и логотипы федеральных каналов (MIT License)
-ffmpeg — обработка медиапотоков
-Сообщество открытого IPTV
+1. Wait for the splash screen to synchronise the channel list.
+2. Click the record button next to a channel to start a manual recording.
+3. In **Schedule**, choose a channel, enter a start and end time, and select weekdays.
+4. Completed recording files appear in `recordings/`. The folder button reveals the selected file in Finder.
 
-Лицензия
-Проект распространяется под лицензией MIT. См. файл LICENSE.
+The schedule repeats on the selected weekdays. Start and end times must be different; equal values would mean a 24-hour recording.
 
-Сделано с ❤️ для macOS
+## Project layout
+
+```text
+core/       Recording, scheduling, playlist parsing, and data storage
+gui/        Tkinter user interface
+utils/      Configuration, logging, network, VPN, and logo helpers
+data/       Bundled fallback channel list
+recordings/ Saved videos (created locally and excluded from Git)
+logs/       Application logs (created locally and excluded from Git)
+```
+
+## Versioning
+
+The project uses patch-version auto-incrementing. Every local commit updates `VERSION` and creates a dated entry in `CHANGELOG.md`; use an English commit message for the short change description. The shared hook is stored in `.githooks/`; the repository is configured to use it automatically.
+
+## License
+
+MIT License.

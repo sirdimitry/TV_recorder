@@ -5,6 +5,7 @@ from typing import Dict
 import time
 import threading
 import json
+from queue import Empty, Queue
 from datetime import datetime
 from gui.channel_list import ChannelList
 from gui.schedule_panel import SchedulePanel
@@ -15,6 +16,7 @@ from core.scheduler import RecordingScheduler
 from core.recorder import Recorder
 from utils.config import Config
 from utils.vpn_manager import VPNManager
+from utils.network_monitor import NetworkMonitor
 from utils.logger import logger
 
 
@@ -44,7 +46,7 @@ class SplashScreen(tk.Toplevel):
                                background=c['bg_primary'], foreground=c['text_primary'])
         title_label.pack()
         
-        version_label = ttk.Label(self, text="v1.0.0 Beta", font=('Inter', 10),
+        version_label = ttk.Label(self, text=f"v{Config.APP_VERSION}", font=('Inter', 10),
                                  background=c['bg_primary'], foreground=c['text_secondary'])
         version_label.pack(pady=(0, 30))
         
@@ -112,8 +114,10 @@ class AppWindow:
         
         self.colors = Config.COLORS
         self.storage = Storage()
-        self.scheduler = RecordingScheduler()
         self.recorder = Recorder()
+        self.scheduler = RecordingScheduler(recorder=self.recorder)
+        self._network_results = Queue(maxsize=1)
+        self._network_monitor_running = False
         
         self.splash = SplashScreen(self.root)
         self.root.withdraw()
@@ -418,7 +422,7 @@ class AppWindow:
         c = self.colors
         dialog.configure(bg=c['bg_primary'])
         
-        content = """TV Recorder v1.0.0 Beta
+        content = f"""TV Recorder v{Config.APP_VERSION}
 
 Приложение для записи и просмотра 
 федеральных телеканалов России.
@@ -429,7 +433,7 @@ class AppWindow:
   (github.com/smolnp/IPTVru)
   Лицензия: MIT
 
-Разработано для macOS"""
+Built for macOS"""
         
         label = ttk.Label(dialog, text=content, font=('Inter', 10), 
                          background=c['bg_primary'], foreground=c['text_primary'],
@@ -439,16 +443,37 @@ class AppWindow:
         ttk.Button(dialog, text="Закрыть", command=dialog.destroy).pack(pady=10)
     
     def _start_background_checks(self):
-        def check():
-            self.status_bar.update_vpn_status(VPNManager.is_vpn_active())
+        """Обновляет статус сети каждые пять секунд, не замедляя окно."""
+        if self._network_monitor_running:
+            return
+        self._network_monitor_running = True
+
+        def monitor():
+            while self._network_monitor_running:
+                result = (VPNManager.is_vpn_active(), NetworkMonitor.is_internet_available())
+                while not self._network_results.empty():
+                    try:
+                        self._network_results.get_nowait()
+                    except Empty:
+                        break
+                self._network_results.put(result)
+                time.sleep(5)
+
+        def refresh_status_bar():
             try:
-                import requests; requests.get('https://google.com', timeout=3)
-                self.status_bar.update_net_status(True)
-            except: self.status_bar.update_net_status(False)
-            self.root.after(10000, check)
-        check()
+                vpn_active, internet_available = self._network_results.get_nowait()
+                self.status_bar.update_vpn_status(vpn_active)
+                self.status_bar.update_net_status(internet_available)
+            except Empty:
+                pass
+            if self._network_monitor_running:
+                self.root.after(500, refresh_status_bar)
+
+        threading.Thread(target=monitor, daemon=True).start()
+        self.root.after(0, refresh_status_bar)
     
     def _on_close(self):
+        self._network_monitor_running = False
         self.scheduler.stop()
         self.recorder.stop_all()
         self.root.destroy()

@@ -8,6 +8,43 @@ from utils.config import Config
 from utils.logger import logger
 
 
+class TimeEntry(ttk.Entry):
+    """Поле времени: пользователь вводит только цифры, двоеточие добавляется само."""
+
+    def __init__(self, parent, **kwargs):
+        self.value = tk.StringVar()
+        self._formatting = False
+        super().__init__(parent, textvariable=self.value, **kwargs)
+        self.value.trace_add('write', self._format_value)
+
+    def _format_value(self, *_):
+        if self._formatting:
+            return
+        raw_value = self.value.get()
+        try:
+            cursor_position = self.index(tk.INSERT)
+        except tk.TclError:
+            cursor_position = len(raw_value)
+        digits_before_cursor = sum(char.isdigit() for char in raw_value[:cursor_position])
+        digits = ''.join(char for char in raw_value if char.isdigit())[:4]
+        if len(digits) <= 2:
+            formatted = digits
+        else:
+            formatted = f"{digits[:2]}:{digits[2:]}"
+        if formatted != raw_value:
+            self._formatting = True
+            self.value.set(formatted)
+            self._formatting = False
+            # Не переносим курсор в конец: так можно заменить только минуты.
+            new_cursor_position = digits_before_cursor
+            if digits_before_cursor > 2:
+                new_cursor_position += 1
+            self.after_idle(lambda: self.icursor(min(new_cursor_position, len(formatted))))
+
+    def set_time(self, value: str):
+        self.value.set(value)
+
+
 class SchedulePanel(ttk.Frame):
     """Панель управления расписанием записей"""
     
@@ -18,6 +55,7 @@ class SchedulePanel(ttk.Frame):
         self.on_schedule_changed = on_schedule_changed
         
         self._setup_ui()
+        self._set_current_time()
         self.refresh()
     
     def _setup_ui(self):
@@ -35,18 +73,24 @@ class SchedulePanel(ttk.Frame):
         ttk.Label(channel_frame, text="Канал:").pack(side='left')
         self.channel_combo = ttk.Combobox(channel_frame, state='readonly', width=30)
         self.channel_combo.pack(side='left', padx=5, fill='x', expand=True)
+        self.channel_combo.bind('<MouseWheel>', self._scroll_channel_selection)
+        self.channel_combo.bind('<Button-4>', lambda event: self._scroll_channel_selection(event, -1))
+        self.channel_combo.bind('<Button-5>', lambda event: self._scroll_channel_selection(event, 1))
         
         # Время
         time_frame = ttk.Frame(form_frame)
         time_frame.pack(fill='x', padx=10, pady=5)
         
         ttk.Label(time_frame, text="С:").pack(side='left')
-        self.start_time = ttk.Entry(time_frame, width=8)
+        self.start_time = TimeEntry(time_frame, width=8)
         self.start_time.pack(side='left', padx=5)
         
         ttk.Label(time_frame, text="До:").pack(side='left', padx=(10, 0))
-        self.end_time = ttk.Entry(time_frame, width=8)
+        self.end_time = TimeEntry(time_frame, width=8)
         self.end_time.pack(side='left', padx=5)
+
+        self.date_label = ttk.Label(time_frame, foreground=self.colors['text_secondary'])
+        self.date_label.pack(side='left', padx=(12, 0))
         
         # Дни недели
         days_frame = ttk.Frame(form_frame)
@@ -139,29 +183,42 @@ class SchedulePanel(ttk.Frame):
             ))
     
     def _set_current_time(self):
-        """Устанавливает текущее время + 5 минут"""
+        """Подставляет системные дату, время и сегодняшний день недели."""
         now = datetime.now()
-        start = now + timedelta(minutes=5)
-        end = start + timedelta(hours=1)
-        
-        self.start_time.delete(0, 'end')
-        self.start_time.insert(0, start.strftime("%H:%M"))
-        
-        self.end_time.delete(0, 'end')
-        self.end_time.insert(0, end.strftime("%H:%M"))
+        start = now
+        end = start
+
+        self.start_time.set_time(start.strftime("%H:%M"))
+        self.end_time.set_time(end.strftime("%H:%M"))
+
+        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        self.date_label.config(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
         
         # Выбираем сегодняшний день недели
         today_idx = now.weekday()  # 0=Пн, 6=Вс
         for idx, var in self.day_vars.items():
             var.set(idx == today_idx)
+
+    def _scroll_channel_selection(self, event, direction=None):
+        """Меняет канал колёсиком мыши или жестом двумя пальцами."""
+        if not self.channel_combo['values']:
+            return 'break'
+        if direction is None:
+            direction = -1 if event.delta > 0 else 1
+        current = self.channel_combo.current()
+        if current < 0:
+            current = 0 if direction > 0 else len(self.channel_combo['values']) - 1
+        else:
+            current = max(0, min(len(self.channel_combo['values']) - 1, current + direction))
+        self.channel_combo.current(current)
+        return 'break'
     
     def _add_schedule(self):
         channel_name = self.channel_combo.get()
         start = self.start_time.get().strip()
         end = self.end_time.get().strip()
         
-        if not channel_name or not start or not end:
-            messagebox.showwarning("Внимание", "Заполните все поля")
+        if not self._valid_form(channel_name, start, end):
             return
         
         days = [idx for idx, var in self.day_vars.items() if var.get()]
@@ -197,8 +254,7 @@ class SchedulePanel(ttk.Frame):
         start = self.start_time.get().strip()
         end = self.end_time.get().strip()
         
-        if not channel_name or not start or not end:
-            messagebox.showwarning("Внимание", "Заполните все поля")
+        if not self._valid_form(channel_name, start, end):
             return
         
         days = [idx for idx, var in self.day_vars.items() if var.get()]
@@ -252,10 +308,8 @@ class SchedulePanel(ttk.Frame):
         
         # Заполняем форму
         self.channel_combo.set(item.get('channel_name', ''))
-        self.start_time.delete(0, 'end')
-        self.start_time.insert(0, item.get('start_time', ''))
-        self.end_time.delete(0, 'end')
-        self.end_time.insert(0, item.get('end_time', ''))
+        self.start_time.set_time(item.get('start_time', ''))
+        self.end_time.set_time(item.get('end_time', ''))
         
         for idx, var in self.day_vars.items():
             # Безопасная проверка дня недели при загрузке из файла
@@ -273,12 +327,35 @@ class SchedulePanel(ttk.Frame):
     def _on_tree_double_click(self, event):
         """Двойной клик = редактирование"""
         self._on_tree_select(event)
+
+    @staticmethod
+    def _is_valid_time(value: str) -> bool:
+        try:
+            datetime.strptime(value, '%H:%M')
+            return True
+        except ValueError:
+            return False
+
+    def _valid_form(self, channel_name: str, start: str, end: str) -> bool:
+        if not channel_name or not start or not end:
+            messagebox.showwarning("Внимание", "Заполните все поля")
+            return False
+        if not self._is_valid_time(start) or not self._is_valid_time(end):
+            messagebox.showwarning("Внимание", "Введите время в формате ЧЧ:ММ, например 09:30")
+            return False
+        if start == end:
+            messagebox.showwarning(
+                "Внимание",
+                "Измените время окончания: одинаковое время означало бы запись на 24 часа."
+            )
+            return False
+        return True
     
     def _clear_form(self):
         """Очищает форму и сбрасывает кнопки"""
         self.channel_combo.set('')
-        self.start_time.delete(0, 'end')
-        self.end_time.delete(0, 'end')
+        self.start_time.set_time('')
+        self.end_time.set_time('')
         for var in self.day_vars.values():
             var.set(False)
         

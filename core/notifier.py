@@ -20,7 +20,12 @@ class Notifier:
         logger.info(f"Уведомление: {title} — {message}")
         
         try:
-            if PLYER_AVAILABLE:
+            # В macOS встроенный osascript не требует дополнительных библиотек.
+            # Plyer на этой платформе требует pyobjus и иначе печатает ошибку при
+            # каждом уведомлении, хотя резервный способ уже надёжно работает.
+            if platform.system() == "Darwin":
+                self._fallback_notify(title, message)
+            elif PLYER_AVAILABLE:
                 notification.notify(
                     title=title,
                     message=message,

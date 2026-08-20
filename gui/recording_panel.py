@@ -1,6 +1,7 @@
 # gui/recording_panel.py
 import tkinter as tk
 from tkinter import ttk, messagebox
+import os
 import subprocess
 import platform
 from typing import Optional, Dict
@@ -178,14 +179,15 @@ class RecordingPanel(ttk.Frame):
     def _open_file(self, task: RecordingTask):
         try:
             if platform.system() == 'Darwin':
-                subprocess.Popen(['open', task.output_path])
+                # -R открывает Finder и выделяет файл, не запуская проигрывание.
+                subprocess.Popen(['open', '-R', task.output_path])
             elif platform.system() == 'Windows':
-                import os; os.startfile(task.output_path)
+                subprocess.Popen(['explorer', '/select,', os.path.normpath(task.output_path)])
             else:
-                subprocess.Popen(['xdg-open', task.output_path])
-            logger.info(f"RecordingPanel: Открыт файл {task.output_path}")
+                subprocess.Popen(['xdg-open', os.path.dirname(task.output_path)])
+            logger.info(f"RecordingPanel: Файл выделен в папке: {task.output_path}")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть файл:\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось открыть папку с файлом:\n{e}")
     
     def _remove_task(self, task: RecordingTask):
         self.recorder.remove_task(task.task_id)

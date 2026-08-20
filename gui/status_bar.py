@@ -57,7 +57,7 @@ class StatusBar(ttk.Frame):
         self.vpn_label.config(text="🟢 VPN подключен" if active else "⚪ VPN отключен")
     
     def update_net_status(self, connected: bool):
-        self.net_label.config(text=" Интернет" if connected else "🔴 Нет интернета")
+        self.net_label.config(text="🟢 Интернет доступен" if connected else "🔴 Нет интернета")
     
     def update_recording_status(self, recording: bool, channel_name: str = "", 
                                on_stop: callable = None):

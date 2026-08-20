@@ -1,0 +1,27 @@
+#!/bin/sh
+# Automatically increases the patch version before every commit.
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+version_file="$repo_root/VERSION"
+changelog_file="$repo_root/CHANGELOG.md"
+
+current=$(tr -d '[:space:]' < "$version_file")
+major=${current%%.*}
+remaining=${current#*.}
+minor=${remaining%%.*}
+patch=${remaining#*.}
+next_version="$major.$minor.$(( patch + 1 ))"
+today=$(date +%F)
+
+printf '%s\n' "$next_version" > "$version_file"
+temporary_file=$(mktemp)
+{
+    sed -n '1,3p' "$changelog_file"
+    printf '\n## [%s] - %s\n\n- See the accompanying Git commit message for details.\n' "$next_version" "$today"
+    sed -n '4,$p' "$changelog_file"
+} > "$temporary_file"
+mv "$temporary_file" "$changelog_file"
+
+git add VERSION CHANGELOG.md

@@ -6,6 +6,8 @@ class Config:
     """Глобальные настройки приложения"""
     
     BASE_DIR = Path(__file__).resolve().parent.parent
+    VERSION_FILE = BASE_DIR / "VERSION"
+    APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "0.0.0"
     
     # Пути к данным
     DATA_DIR = BASE_DIR / "data"

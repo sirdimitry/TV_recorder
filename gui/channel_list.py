@@ -27,17 +27,33 @@ class ChannelList(ttk.Frame):
         header = ttk.Label(self, text="КАНАЛЫ", font=('Inter', 11, 'bold'))
         header.pack(fill='x', padx=10, pady=(10, 5))
         
-        canvas = tk.Canvas(self, bg=self.colors['bg_secondary'], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient='vertical', command=canvas.yview)
-        self.scroll_frame = ttk.Frame(canvas)
+        self.canvas = tk.Canvas(self, bg=self.colors['bg_secondary'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient='vertical', command=self.canvas.yview)
+        self.scroll_frame = ttk.Frame(self.canvas)
         
-        self.scroll_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=self.scroll_frame, anchor='nw')
-        canvas.configure(yscrollcommand=scrollbar.set)
+        self.scroll_frame.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scroll_frame, anchor='nw')
+        self.canvas.bind('<Configure>', self._resize_scroll_frame)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
         
-        canvas.pack(side='left', fill='both', expand=True)
+        self.canvas.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
-        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(-int(e.delta/120), 'units'))
+        self.canvas.bind('<MouseWheel>', self._on_mousewheel)
+        self.canvas.bind('<Button-4>', lambda event: self.canvas.yview_scroll(-1, 'units'))
+        self.canvas.bind('<Button-5>', lambda event: self.canvas.yview_scroll(1, 'units'))
+
+    def _resize_scroll_frame(self, event):
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+
+    def _on_mousewheel(self, event):
+        delta = -1 if event.delta > 0 else 1
+        self.canvas.yview_scroll(delta, 'units')
+        return 'break'
+
+    def _enable_scroll_for(self, widget):
+        widget.bind('<MouseWheel>', self._on_mousewheel, add='+')
+        widget.bind('<Button-4>', lambda event: self.canvas.yview_scroll(-1, 'units'), add='+')
+        widget.bind('<Button-5>', lambda event: self.canvas.yview_scroll(1, 'units'), add='+')
     
     def load_channels(self, channels: List[Dict]):
         for widget in self.scroll_frame.winfo_children():
@@ -87,12 +103,6 @@ class ChannelList(ttk.Frame):
                              command=lambda n=name, ch=channel: self._on_edit(n, ch))
         btn_edit.pack(side='right', padx=2, pady=2)
         
-        # Кнопка проверки
-        btn_check = ttk.Button(row, text="⟳", width=3,
-                              command=lambda n=name, ind=status_indicator, ch=channel: 
-                                  self._check_single(n, ind, ch))
-        btn_check.pack(side='right', padx=2, pady=2)
-        
         self.channel_widgets[name] = {
             'logo_canvas': logo_canvas,
             'status_indicator': status_indicator,
@@ -118,6 +128,9 @@ class ChannelList(ttk.Frame):
         
         for widget in (row, info_frame, label_name, label_type):
             widget.bind('<Button-1>', lambda e, n=name: self._on_click(n))
+            self._enable_scroll_for(widget)
+        for widget in (logo_canvas, status_indicator, btn_record, btn_edit):
+            self._enable_scroll_for(widget)
     
     def _draw_placeholder(self, canvas: tk.Canvas):
         canvas.delete("all")
