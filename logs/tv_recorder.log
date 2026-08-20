@@ -1,0 +1,12 @@
+2026-08-19 19:57:01.324 | WARNING  | checker:<module>:15 | yt-dlp не установлен, проверка YouTube недоступна
+2026-08-19 19:57:11.353 | INFO     | storage:_load_default_channels_if_empty:50 | Загружено 20 каналов по умолчанию
+2026-08-19 19:57:14.044 | INFO     | m3u_parser:_fetch_playlist:129 | M3UParser: Загрузка плейлиста...
+2026-08-19 19:57:14.360 | INFO     | m3u_parser:fetch_and_parse:105 | M3UParser: Применен фикс для 'РЕН ТВ'
+2026-08-19 19:57:14.360 | INFO     | m3u_parser:fetch_and_parse:105 | M3UParser: Применен фикс для 'Россия 24'
+2026-08-19 19:57:14.360 | INFO     | m3u_parser:fetch_and_parse:118 | M3UParser: Добавлен канал 'Известия'
+2026-08-19 19:57:14.360 | INFO     | m3u_parser:fetch_and_parse:121 | M3UParser: Итого 18 федеральных каналов
+2026-08-19 19:57:58.226 | INFO     | m3u_parser:_fetch_playlist:129 | M3UParser: Загрузка плейлиста...
+2026-08-19 19:57:58.252 | INFO     | m3u_parser:fetch_and_parse:105 | M3UParser: Применен фикс для 'РЕН ТВ'
+2026-08-19 19:57:58.252 | INFO     | m3u_parser:fetch_and_parse:105 | M3UParser: Применен фикс для 'Россия 24'
+2026-08-19 19:57:58.252 | INFO     | m3u_parser:fetch_and_parse:118 | M3UParser: Добавлен канал 'Известия'
+2026-08-19 19:57:58.252 | INFO     | m3u_parser:fetch_and_parse:121 | M3UParser: Итого 18 федеральных каналов

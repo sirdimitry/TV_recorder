@@ -21,6 +21,11 @@ class RecordingScheduler:
         'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat', 'sunday': 'sun'
     }
     
+    # Маппинг чисел (0-6) в названия дней для cron
+    NUM_TO_DAY = {
+        0: 'mon', 1: 'tue', 2: 'wed', 3: 'thu', 4: 'fri', 5: 'sat', 6: 'sun'
+    }
+    
     def __init__(self):
         self.scheduler = BackgroundScheduler()
         self.checker = StreamChecker()
@@ -84,8 +89,14 @@ class RecordingScheduler:
             end_dt += timedelta(days=1)
         duration = int((end_dt - start_dt).total_seconds())
         
-        # Дни недели для cron
-        day_of_week = ','.join(self.DAYS_MAP.get(d, d) for d in days) if days else '*'
+        # Дни недели для cron (конвертируем числа и строки в формат cron)
+        day_list = []
+        for d in days:
+            if isinstance(d, int):
+                day_list.append(self.NUM_TO_DAY.get(d, str(d)))
+            else:
+                day_list.append(self.DAYS_MAP.get(d, d))
+        day_of_week = ','.join(day_list) if day_list else '*'
         
         trigger = CronTrigger(
             hour=hour, minute=minute,
