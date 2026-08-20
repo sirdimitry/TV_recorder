@@ -1,70 +1,46 @@
-# Python
+```gitignore
+# Python cache files
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
+*.pyo
+*.pyd
 
-# Данные приложения
-data/channels.json
-data/schedule.json
+# Logs
+*.log
 logs/
-recordings/
-data/logos/
 
-# Медиафайлы (видео, аудио, изображения)
-*.mp4
-*.mkv
-*.avi
-*.mov
-*.ts
-*.m3u8
-*.mp3
-*.aac
-*.wav
-*.flac
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.svg
-*.webp
+# Environment files
+.env
+.env.local
+*.env.*
 
-# macOS приложения и системные файлы
-*.app
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
+# Dependencies
+venv/
+.venv/
+.env/
+node_modules/
 
-# Архивы
-*.zip
-*.tar
-*.tar.gz
-*.tgz
-*.rar
-*.7z
-*.bz2
+# Build artifacts
+dist/
+build/
+target/
 
-# IDE
+# Editors/IDEs
 .vscode/
 .idea/
-*.sw
+*.swp
+*.swo
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+```
