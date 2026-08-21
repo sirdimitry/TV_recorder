@@ -22,6 +22,7 @@ class ChannelList(ctk.CTkFrame):
     """Список каналов: карточки с логотипом, индикатором статуса и действиями."""
 
     LOGO_SIZE = 38
+    ROW_HEIGHT = 60
 
     def __init__(self, parent, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
@@ -60,8 +61,10 @@ class ChannelList(ctk.CTkFrame):
         name = channel.get('name', 'Unknown')
         source_type = channel.get('type', 'iptv')
 
-        row = ctk.CTkFrame(self.scroll_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM)
+        row = ctk.CTkFrame(self.scroll_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
+                           height=self.ROW_HEIGHT)
         row.pack(fill='x', padx=4, pady=3)
+        row.grid_propagate(False)
 
         def on_enter(_e=None):
             row.configure(fg_color=c['bg_hover'])
@@ -98,7 +101,7 @@ class ChannelList(ctk.CTkFrame):
         actions.grid(row=0, column=2, padx=(4, 8), pady=8)
 
         def icon_btn(parent, icon_name, color, tooltip_cmd):
-            return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color, 14), width=28, height=28,
+            return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color, 18), width=34, height=34,
                                   corner_radius=Config.RADIUS_SM, fg_color='transparent',
                                   hover_color=c['bg_active'], command=tooltip_cmd)
 

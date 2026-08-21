@@ -138,14 +138,18 @@ class RecordingPanel(ctk.CTkFrame):
 
     def _icon_button(self, parent, icon_name, command, color=None):
         c = self.colors
-        return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color or c['text_secondary'], 12),
-                              width=26, height=26, corner_radius=Config.RADIUS_SM, fg_color='transparent',
+        return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color or c['text_secondary'], 14),
+                              width=30, height=30, corner_radius=Config.RADIUS_SM, fg_color='transparent',
                               hover_color=c['bg_active'], command=command)
+
+    ROW_HEIGHT = 48
 
     def _add_task_row(self, task: RecordingTask):
         c = self.colors
-        row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM)
+        row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
+                            height=self.ROW_HEIGHT)
         row.pack(fill='x', pady=3, padx=2)
+        row.pack_propagate(False)
 
         accent_bar = ctk.CTkFrame(row, fg_color=c['red'], width=4, corner_radius=2)
         accent_bar.pack(side='left', fill='y', padx=(0, 8), pady=6)
