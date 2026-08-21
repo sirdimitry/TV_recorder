@@ -323,14 +323,19 @@ class AppWindow:
         """Мгновенная запись выбранного канала по кнопке записи у канала"""
         output = str(self.recorder.build_output_path(name))
 
-        task_id = self.recorder.start_recording(
-            name, channel['url'], output, source="manual",
-            on_complete=self._on_record_complete
-        )
+        def start():
+            # start_recording теперь ходит в сеть (выбор варианта качества),
+            # поэтому запускаем его вне главного потока, чтобы не подвесить
+            # интерфейс по клику на кнопку записи. recorder.set_ui_callback
+            # уже надёжно обновляет панель записей из любого потока.
+            task_id = self.recorder.start_recording(
+                name, channel['url'], output, source="manual",
+                on_complete=self._on_record_complete
+            )
+            if task_id:
+                logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")
 
-        if task_id:
-            logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")
-            self.recording_panel.refresh()
+        threading.Thread(target=start, daemon=True).start()
 
     def _on_record_complete(self, success: bool, channel_name: str, output_path: str):
         if success:

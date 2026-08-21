@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 from typing import Optional, Callable, Dict
+from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
 
@@ -117,7 +118,13 @@ class Recorder:
         ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         ref = headers_info.get("ref", "https://www.google.com")
         headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
-        
+
+        # Если это HLS-мастер-плейлист с несколькими битрейтами, пишем
+        # вариант ближе к 720p/3-5 Мбит вместо того, что выберет сам ffmpeg
+        # (обычно самый тяжёлый) — без перекодирования, просто другой
+        # исходный вариант для copy-режима.
+        stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
+
         cmd = [
             'ffmpeg', '-y',
             '-headers', headers,
