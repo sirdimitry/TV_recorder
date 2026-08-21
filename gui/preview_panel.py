@@ -1,25 +1,23 @@
 # gui/preview_panel.py
-"""Встроенная (НЕ всплывающая) панель live-превью канала: снимок кадра,
-обновляемый раз в несколько секунд, прямо в макете окна приложения.
+"""Встроенная (НЕ всплывающая) панель почти-реалтайм превью канала —
+непрерывный низкочастотный видеопоток, а не снимок раз в несколько секунд,
+прямо в макете окна приложения.
 
 Не всплывающее окно — раньше превью открывалось как отдельный
 CTkToplevel(overrideredirect=True), но безрамочные окна на macOS
 периодически не отрисовываются нормально (известная особенность Tk/Aqua).
 Постоянная панель в layout снимает эту проблему полностью."""
-import io
-import threading
-import time
 from typing import Optional
 
 import customtkinter as ctk
-from PIL import Image
 
-from core.snapshot import grab_snapshot
+from core.live_stream import LiveThumbnailStream
+from core.snapshot import to_ctk_image
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
 
-REFRESH_MS = 5000
+FPS = 15  # один канал в разделе просмотра — можно себе позволить почти-видео
 IMG_SIZE = (260, 146)
 
 
@@ -28,9 +26,9 @@ class PreviewPanel(ctk.CTkFrame):
         c = Config.COLORS
         super().__init__(parent, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM)
         self._running = True
+        self._stream: Optional[LiveThumbnailStream] = None
+        self._frame_count = 0
         self._generation = 0
-        self._url: Optional[str] = None
-        self._headers: Optional[dict] = None
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
@@ -48,46 +46,47 @@ class PreviewPanel(ctk.CTkFrame):
         self.image_lbl.pack(padx=10, pady=(0, 10))
 
     def show(self, name: str, url: str, headers: Optional[dict] = None):
+        self._stop_stream()
         self._generation += 1
+        generation = self._generation
         self.name_lbl.configure(text=name)
-        self.status_lbl.configure(text="Загрузка…")
+        self.status_lbl.configure(text="Подключение…")
         self.image_lbl.configure(text="", image=get_icon('tv', Config.COLORS['text_muted'], 32))
-        self._url = url
-        self._headers = headers
-        self._loop(self._generation)
+        self._frame_count = 0
 
-    def _loop(self, generation: int):
-        if not self._running or generation != self._generation:
+        self._stream = LiveThumbnailStream(url, headers, fps=FPS, on_frame=lambda jb: self._on_frame(jb, generation),
+                                            width=IMG_SIZE[0] * 2)
+        self._stream.start()
+        self.after(8000, lambda: self._check_connected(generation))
+
+    def _check_connected(self, generation: int):
+        if generation == self._generation and self._frame_count == 0:
+            self.status_lbl.configure(text="Нет сигнала")
+
+    def _on_frame(self, jpeg_bytes: bytes, generation: int):
+        if self._running:
+            self.after(0, lambda: self._display(jpeg_bytes, generation))
+
+    def _display(self, jpeg_bytes: bytes, generation: int):
+        if not self._running or generation != self._generation or not self.winfo_exists():
             return
+        try:
+            img = to_ctk_image(jpeg_bytes, IMG_SIZE)
+        except Exception as e:
+            logger.debug(f"PreviewPanel: ошибка кадра: {e}")
+            return
+        self.image_lbl.configure(image=img, text="")
+        self.image_lbl._img_ref = img
+        self._frame_count += 1
+        # Не дёргаем текстовый лейбл на каждый кадр — просто держим отметку "в эфире".
+        if self._frame_count == 1:
+            self.status_lbl.configure(text="В эфире")
 
-        def worker():
-            jpeg_bytes = grab_snapshot(self._url, self._headers)
-
-            def apply():
-                if not self._running or generation != self._generation:
-                    return
-                if jpeg_bytes:
-                    try:
-                        pil = Image.open(io.BytesIO(jpeg_bytes)).convert('RGB')
-                        pil.thumbnail(IMG_SIZE, Image.LANCZOS)
-                        canvas = Image.new('RGB', IMG_SIZE, Config.COLORS['bg_tertiary'])
-                        offset = ((IMG_SIZE[0] - pil.width) // 2, (IMG_SIZE[1] - pil.height) // 2)
-                        canvas.paste(pil, offset)
-                        img = ctk.CTkImage(light_image=canvas, dark_image=canvas, size=IMG_SIZE)
-                        self.image_lbl.configure(image=img, text="")
-                        self.image_lbl._img_ref = img
-                        self.status_lbl.configure(text=f"Обновлено {time.strftime('%H:%M:%S')}")
-                    except Exception as e:
-                        logger.debug(f"PreviewPanel: ошибка кадра: {e}")
-                        self.status_lbl.configure(text="Ошибка кадра")
-                else:
-                    self.status_lbl.configure(text="Нет сигнала")
-                if self._running:
-                    self.after(REFRESH_MS, lambda: self._loop(generation))
-
-            self.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
+    def _stop_stream(self):
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream = None
 
     def stop(self):
         self._running = False
+        self._stop_stream()

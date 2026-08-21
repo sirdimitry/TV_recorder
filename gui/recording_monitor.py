@@ -17,7 +17,7 @@ from utils.icons import get_icon
 from utils.logger import logger
 
 TILE_IMG_SIZE = (220, 124)
-POLL_MS = 1000
+POLL_MS = 250  # снимки в Recorder идут непрерывно на ~4 fps — опрашиваем в том же темпе
 
 
 class RecordingMonitorWindow(ctk.CTkToplevel):

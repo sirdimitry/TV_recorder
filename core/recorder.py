@@ -1,5 +1,4 @@
 # core/recorder.py
-import random
 import subprocess
 import threading
 import time
@@ -7,12 +6,12 @@ from datetime import datetime
 from pathlib import Path
 import re
 from typing import Optional, Callable, Dict
-from core.snapshot import grab_snapshot
+from core.live_stream import LiveThumbnailStream
 from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
 
-SNAPSHOT_INTERVAL = 5  # секунд между кадрами на одну запись
+SNAPSHOT_FPS = 4  # активных записей может быть много одновременно (1-16+) — держим частоту скромной
 
 
 class RecordingTask:
@@ -40,6 +39,7 @@ class RecordingTask:
         self.headers: Optional[dict] = None  # заголовки, с которыми реально шла запись — для live-превью того же потока
         self.last_snapshot: Optional[bytes] = None  # JPEG-байты последнего пойманного кадра
         self.snapshot_seq = 0  # растёт при каждом новом кадре — по нему потребители понимают, что картинку пора перерисовать
+        self.snapshot_stream: Optional[LiveThumbnailStream] = None
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -209,7 +209,7 @@ class Recorder:
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
             threading.Thread(target=self._wait_for_task, args=(task,), daemon=True).start()
-            threading.Thread(target=self._snapshot_loop, args=(task,), daemon=True).start()
+            self._start_snapshot_stream(task)
 
             if not self._running:
                 self._start_timer_loop()
@@ -233,6 +233,7 @@ class Recorder:
             task.stop_requested = True
             task.process.terminate()
             task.is_recording = False
+            self._stop_snapshot_stream(task)
             self._notify_ui()
     
     def pause_recording(self, task_id: str):
@@ -274,7 +275,8 @@ class Recorder:
             task.final_duration = task.get_elapsed_time()
         task.is_recording = False
         task.finished_at = datetime.now()
-        
+        self._stop_snapshot_stream(task)
+
         success = returncode == 0 or returncode == 255
         output_file = Path(task.output_path)
         has_usable_file = output_file.is_file() and output_file.stat().st_size > 1024
@@ -301,21 +303,27 @@ class Recorder:
 
         self._notify_ui()
 
-    def _snapshot_loop(self, task: RecordingTask):
-        """Раз в ~5с достаёт один кадр из записываемого потока и кладёт его
-        на саму задачу — централизованно, одна петля на запись, а не по
-        одной на каждого, кто её отображает (панель записей + окно-монитор
-        независимо друг от друга дублировали бы одни и те же ffmpeg-вызовы)."""
-        # Небольшая случайная задержка перед первым кадром — чтобы при
-        # старте сразу нескольких записей снимки не били по CPU одним залпом.
-        time.sleep(random.uniform(0.2, 1.5))
-        while task.is_recording:
-            jpeg_bytes = grab_snapshot(task.stream_url, task.headers)
-            if jpeg_bytes:
-                task.last_snapshot = jpeg_bytes
-                task.snapshot_seq += 1
-                self._notify_ui()
-            time.sleep(SNAPSHOT_INTERVAL + random.uniform(0, 1.5))
+    def _start_snapshot_stream(self, task: RecordingTask):
+        """Непрерывный поток кадров (~4 fps) на саму задачу — централизованно,
+        один ffmpeg-процесс на запись, а не по одному на каждого, кто её
+        отображает (панель записей + окно-монитор независимо друг от друга
+        дублировали бы одни и те же вызовы)."""
+        def on_frame(jpeg_bytes: bytes):
+            task.last_snapshot = jpeg_bytes
+            task.snapshot_seq += 1
+            # _notify_ui() здесь не дёргаем: при нескольких записях это было
+            # бы широковещательное уведомление всем подписчикам на каждый
+            # кадр каждой задачи. Панель записей и монитор сами опрашивают
+            # snapshot_seq с нужной им частотой.
+
+        task.snapshot_stream = LiveThumbnailStream(
+            task.stream_url, task.headers, fps=SNAPSHOT_FPS, on_frame=on_frame)
+        task.snapshot_stream.start()
+
+    def _stop_snapshot_stream(self, task: RecordingTask):
+        if task.snapshot_stream is not None:
+            task.snapshot_stream.stop()
+            task.snapshot_stream = None
 
     def _start_timer_loop(self):
         self._running = True
@@ -342,5 +350,6 @@ class Recorder:
                     task.stop_requested = True
                     task.process.terminate()
                     task.is_recording = False
+                    self._stop_snapshot_stream(task)
             self.tasks.clear()
         self._notify_ui()

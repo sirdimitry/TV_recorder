@@ -45,9 +45,22 @@ class RecordingPanel(ctk.CTkFrame):
 
         self._setup_ui()
         self.refresh()
+        self._poll_snapshots()
 
     def _schedule_refresh(self):
         self.after(0, self._update_timers_only)
+
+    def _poll_snapshots(self):
+        """Картинки опрашиваем отдельно от текста/таймеров и заметно чаще
+        (снимки в Recorder идут непрерывным потоком на ~4 fps — сверять раз
+        в секунду означало бы показывать в разы меньше кадров, чем реально
+        ловится)."""
+        tasks = {t.task_id: t for t in self.recorder.get_all_tasks()}
+        for tid, widgets in self.task_widgets.items():
+            task = tasks.get(tid)
+            if task:
+                self._apply_snapshot_if_changed(task, widgets)
+        self.after(250, self._poll_snapshots)
 
     def _open_monitor(self):
         from gui.recording_monitor import RecordingMonitorWindow
