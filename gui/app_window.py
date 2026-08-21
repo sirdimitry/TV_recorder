@@ -127,6 +127,7 @@ class AppWindow:
 
         self._apply_ttk_theme()
         self._setup_ui()
+        self.scheduler.set_status_callback(self.schedule_panel.update_run_status)
 
         threading.Thread(target=self._initialize_app, daemon=True).start()
 

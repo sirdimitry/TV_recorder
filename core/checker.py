@@ -100,21 +100,30 @@ class StreamChecker:
         except Exception as e:
             return StreamStatus.RED, str(e)[:100]
     
-    def _check_hls_segments(self, m3u8_url: str) -> Tuple[StreamStatus, str]:
+    def _check_hls_segments(self, m3u8_url: str, _depth: int = 0) -> Tuple[StreamStatus, str]:
         """Проверяет доступность сегментов HLS"""
         try:
             resp = requests.get(m3u8_url, timeout=self.timeout,
                                headers={'User-Agent': 'Mozilla/5.0'})
-            lines = resp.text.strip().split('\n')
+            lines = [l.strip() for l in resp.text.strip().split('\n')]
             segments = [l for l in lines if l.endswith('.ts') or l.endswith('.m4s')]
-            
+
             if not segments:
+                # Мастер-плейлист: перечисляет варианты битрейта (.m3u8), а не
+                # сами сегменты. Это нормальная и очень частая структура HLS,
+                # а не "пустой" поток — спускаемся на один уровень к первому
+                # варианту и проверяем сегменты уже там.
+                variants = [l for l in lines if l and not l.startswith('#') and l.endswith('.m3u8')]
+                if variants and _depth == 0:
+                    base = m3u8_url.rsplit('/', 1)[0]
+                    variant_url = variants[0] if variants[0].startswith('http') else f"{base}/{variants[0]}"
+                    return self._check_hls_segments(variant_url, _depth=1)
                 return StreamStatus.YELLOW, "Плейлист пустой"
-            
+
             # Проверяем первый сегмент
             base = m3u8_url.rsplit('/', 1)[0]
             seg_url = f"{base}/{segments[0]}" if not segments[0].startswith('http') else segments[0]
-            
+
             seg_resp = requests.head(seg_url, timeout=self.timeout)
             if seg_resp.status_code == 200:
                 return StreamStatus.GREEN, "Поток стабилен"

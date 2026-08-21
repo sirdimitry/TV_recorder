@@ -1,7 +1,7 @@
 # gui/schedule_panel.py
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 from datetime import datetime
 
 import customtkinter as ctk
@@ -59,6 +59,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.storage = Storage()
         self.on_schedule_changed = on_schedule_changed
         self._channel_names: List[str] = []
+        self.run_status: Dict[int, str] = {}
 
         self._setup_ui()
         self._set_current_time()
@@ -158,18 +159,20 @@ class SchedulePanel(ctk.CTkFrame):
         table_frame = ctk.CTkFrame(self, fg_color='transparent')
         table_frame.pack(fill='both', expand=True, padx=10, pady=(0, 8))
 
-        columns = ('channel', 'time', 'days', 'active')
+        columns = ('channel', 'time', 'days', 'active', 'status')
         self.tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=8)
 
         self.tree.heading('channel', text='Канал')
         self.tree.heading('time', text='Время')
         self.tree.heading('days', text='Дни')
         self.tree.heading('active', text='Активно')
+        self.tree.heading('status', text='Статус')
 
         self.tree.column('channel', width=140)
         self.tree.column('time', width=110)
         self.tree.column('days', width=140)
         self.tree.column('active', width=70, anchor='center')
+        self.tree.column('status', width=110, anchor='center')
 
         scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -212,8 +215,43 @@ class SchedulePanel(ctk.CTkFrame):
                 item.get('channel_name', ''),
                 f"{item.get('start_time', '')} — {item.get('end_time', '')}",
                 days_str,
-                active_str
+                active_str,
+                self._format_status(self.run_status.get(i))
             ))
+
+    @staticmethod
+    def _format_status(status: Optional[str]) -> str:
+        return {
+            'checking': '… проверка',
+            'recording': '● идёт',
+            'completed': '✓ готово',
+            'failed': '✕ ошибка',
+        }.get(status, '—')
+
+    def update_run_status(self, index: int, status: str):
+        """Вызывается планировщиком (в т.ч. из фонового потока APScheduler)
+        при смене статуса конкретной строки: 'checking' / 'recording' /
+        'completed' / 'failed'. Обновляет только одну ячейку, не всю таблицу."""
+        self.after(0, lambda: self._apply_run_status(index, status))
+
+    def _apply_run_status(self, index: int, status: str):
+        self.run_status[index] = status
+        item_id = str(index)
+        if self.tree.exists(item_id):
+            values = list(self.tree.item(item_id, 'values'))
+            if len(values) >= 5:
+                values[4] = self._format_status(status)
+                self.tree.item(item_id, values=values)
+
+    def _reindex_run_status_after_delete(self, deleted_index: int):
+        """Сдвигает сохранённые статусы после удаления строки по индексу."""
+        shifted: Dict[int, str] = {}
+        for idx, status in self.run_status.items():
+            if idx < deleted_index:
+                shifted[idx] = status
+            elif idx > deleted_index:
+                shifted[idx - 1] = status
+        self.run_status = shifted
 
     def _set_current_time(self):
         """Подставляет системные дату, время и сегодняшний день недели."""
@@ -297,6 +335,7 @@ class SchedulePanel(ctk.CTkFrame):
             'enabled': True
         }
 
+        self.run_status.pop(index, None)
         self.storage.update_schedule_item(index, item)
         self.refresh()
         self._clear_form()
@@ -312,6 +351,7 @@ class SchedulePanel(ctk.CTkFrame):
             return
 
         index = int(selected[0])
+        self._reindex_run_status_after_delete(index)
         self.storage.delete_schedule_item(index)
         self.refresh()
         self._clear_form()

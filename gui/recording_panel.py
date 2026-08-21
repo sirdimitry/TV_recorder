@@ -2,14 +2,17 @@
 import os
 import platform
 import subprocess
+import threading
 import unicodedata
 from pathlib import Path
 from tkinter import messagebox
 from typing import Dict, Optional
 
 import customtkinter as ctk
+from PIL import Image
 
 from core.recorder import Recorder, RecordingTask
+from core.storage import Storage
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
@@ -30,6 +33,7 @@ class RecordingPanel(ctk.CTkFrame):
         super().__init__(parent, fg_color='transparent')
         self.colors = Config.COLORS
         self.recorder = recorder
+        self.storage = Storage()
 
         self.recorder.set_ui_callback(self._schedule_refresh)
 
@@ -143,6 +147,44 @@ class RecordingPanel(ctk.CTkFrame):
                               hover_color=c['bg_active'], command=command)
 
     ROW_HEIGHT = 48
+    LOGO_SIZE = 30
+
+    def _load_task_logo(self, channel_name: str, logo_lbl: ctk.CTkLabel):
+        from utils.logo_cache import LogoCache
+
+        def worker():
+            channels = {c['name']: c for c in self.storage.get_channels()}
+            channel = channels.get(channel_name)
+            logo_url = channel.get('logo_url', '') if channel else ''
+
+            image = None
+            if logo_url:
+                cache = LogoCache()
+                logo_path = cache.get_logo_path(channel_name, logo_url)
+                if logo_path:
+                    try:
+                        pil_img = Image.open(logo_path).convert('RGBA')
+                        pil_img.thumbnail((self.LOGO_SIZE, self.LOGO_SIZE), Image.LANCZOS)
+                        canvas = Image.new('RGBA', (self.LOGO_SIZE, self.LOGO_SIZE), (0, 0, 0, 0))
+                        offset = ((self.LOGO_SIZE - pil_img.width) // 2, (self.LOGO_SIZE - pil_img.height) // 2)
+                        canvas.paste(pil_img, offset, pil_img)
+                        image = ctk.CTkImage(light_image=canvas, dark_image=canvas,
+                                              size=(self.LOGO_SIZE, self.LOGO_SIZE))
+                    except Exception as e:
+                        logger.debug(f"RecordingPanel: ошибка отображения логотипа {channel_name}: {e}")
+
+            def apply():
+                if not logo_lbl.winfo_exists():
+                    return
+                if image is not None:
+                    logo_lbl.configure(image=image)
+                    logo_lbl._logo_ref = image
+                else:
+                    logo_lbl.configure(image=get_icon('tv', self.colors['text_muted'], 16))
+
+            self.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _add_task_row(self, task: RecordingTask):
         c = self.colors
@@ -154,12 +196,17 @@ class RecordingPanel(ctk.CTkFrame):
         accent_bar = ctk.CTkFrame(row, fg_color=c['red'], width=4, corner_radius=2)
         accent_bar.pack(side='left', fill='y', padx=(0, 8), pady=6)
 
-        status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 12))
-        status_icon.pack(side='left', padx=(2, 6), pady=8)
+        logo_lbl = ctk.CTkLabel(row, text="", width=self.LOGO_SIZE, height=self.LOGO_SIZE,
+                                 corner_radius=6, fg_color=c['bg_tertiary'])
+        logo_lbl.pack(side='left', padx=(2, 8), pady=6)
+        self._load_task_logo(task.channel_name, logo_lbl)
 
         source_icon = 'bolt' if task.source == 'manual' else 'calendar'
-        source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 12))
-        source_lbl.pack(side='left', padx=(0, 4), pady=8)
+        source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 10))
+        source_lbl.place(in_=logo_lbl, relx=1.0, rely=1.0, x=-1, y=-1, anchor='se')
+
+        status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 12))
+        status_icon.pack(side='left', padx=(0, 6), pady=8)
 
         name_lbl = ctk.CTkLabel(row, text=task.channel_name, font=ctk.CTkFont(size=12, weight='bold'),
                                  text_color=c['text_primary'])

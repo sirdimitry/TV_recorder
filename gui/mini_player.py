@@ -58,13 +58,20 @@ class MiniPlayer(tk.Toplevel):
             headers = f"User-Agent: {ua}\r\n{extra_headers}"
             
             cmd = [
-                'ffplay', 
-                '-autoexit', 
+                'ffplay',
+                '-autoexit',
                 '-window_title', f"TV Recorder: {self.channel_name}",
                 '-loglevel', 'error',
                 '-headers', headers,
-                '-probesize', '10000000',
-                '-analyzeduration', '10000000',
+                # Таймаут подключения, чтобы намертво зависший источник
+                # (например нерабочий CDN) не держал окно предпросмотра
+                # открытым бесконечно, а быстро сообщал об ошибке.
+                '-rw_timeout', '10000000',
+                # Небольшие probesize/analyzeduration — предпросмотру live-ТВ
+                # не нужно ждать 10 МБ/10 секунд данных, чтобы определить
+                # формат; это и было причиной долгого старта.
+                '-probesize', '500000',
+                '-analyzeduration', '1000000',
                 '-err_detect', 'ignore_err',
                 '-infbuf',
                 '-framedrop',

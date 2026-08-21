@@ -1,6 +1,7 @@
 # core/scheduler.py
 import threading
 from datetime import datetime, timedelta
+from typing import Callable, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -29,6 +30,19 @@ class RecordingScheduler:
         self.storage = Storage()
         self.notifier = Notifier()
         self._running = False
+        self._status_callback: Optional[Callable[[int, str], None]] = None
+
+    def set_status_callback(self, callback: Callable[[int, str], None]):
+        """Регистрирует callback(index, status), вызываемый при смене статуса
+        конкретной строки расписания: 'checking' / 'recording' / 'completed' / 'failed'."""
+        self._status_callback = callback
+
+    def _notify_status(self, index: int, status: str):
+        if self._status_callback:
+            try:
+                self._status_callback(index, status)
+            except Exception as e:
+                logger.error(f"Scheduler: ошибка status callback: {e}")
 
     def start(self):
         """Запускает планировщик."""
@@ -87,21 +101,23 @@ class RecordingScheduler:
         self.scheduler.add_job(
             self._pre_record_check,
             trigger=trigger,
-            args=[channel, duration, item],
+            args=[channel, duration, item, index],
             id=f"recording_{index}",
             replace_existing=True,
         )
         logger.info(f"Задача добавлена: {channel['name']} в {start_time} ({day_of_week})")
 
-    def _pre_record_check(self, channel: dict, duration: int, schedule_item: dict):
+    def _pre_record_check(self, channel: dict, duration: int, schedule_item: dict, index: int):
         """Проверка перед записью, вызываемая планировщиком."""
         channel_name = channel.get('name', 'Unknown')
         logger.info(f"Предварительная проверка: {channel_name}")
+        self._notify_status(index, 'checking')
         status, message = self.checker.check(channel)
 
         if status == StreamStatus.RED:
             logger.error(f"Запись отменена: {channel_name} — {message}")
             self.notifier.send("❌ Запись отменена", f"{channel_name}\n{message}")
+            self._notify_status(index, 'failed')
             return
 
         if status == StreamStatus.YELLOW:
@@ -109,26 +125,32 @@ class RecordingScheduler:
             self.notifier.send("⚠️ Запись начата с предупреждением", f"{channel_name}\n{message}")
 
         output_path = self.recorder.build_output_path(channel_name)
+        self._notify_status(index, 'recording')
         task_id = self.recorder.start_recording(
             channel_name=channel_name,
             stream_url=channel.get('url', ''),
             output_path=str(output_path),
             source='schedule',
-            on_complete=self._on_recording_complete,
+            on_complete=lambda success, name, path, idx=index: self._on_recording_complete(success, name, path, idx),
         )
         if not task_id:
             self._on_recording_error(channel_name, 'Не удалось запустить запись')
+            self._notify_status(index, 'failed')
             return
 
         timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
         timer.daemon = True
         timer.start()
 
-    def _on_recording_complete(self, success: bool, channel_name: str, file_path: str):
+    def _on_recording_complete(self, success: bool, channel_name: str, file_path: str, index: Optional[int] = None):
         if success:
             self.notifier.send("✅ Запись завершена", f"{channel_name}\n{file_path}")
+            if index is not None:
+                self._notify_status(index, 'completed')
         else:
             self._on_recording_error(channel_name, 'ffmpeg завершился с ошибкой')
+            if index is not None:
+                self._notify_status(index, 'failed')
 
     def _on_recording_error(self, channel_name: str, error: str):
         self.notifier.send("❌ Ошибка записи", f"{channel_name}\n{error}")
