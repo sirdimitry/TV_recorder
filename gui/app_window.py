@@ -5,13 +5,14 @@ from typing import Dict
 import time
 import threading
 import json
+from datetime import datetime, timedelta
 from queue import Empty, Queue
 
 import customtkinter as ctk
 
 from gui.channel_list import ChannelList
 from gui.link_list import LinkList
-from gui.schedule_panel import SchedulePanel
+from gui.schedule_panel import SchedulePanel, TimeEntry
 from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
 from core.link_resolver import resolve_link, guess_type
@@ -563,7 +564,7 @@ class AppWindow:
 
     def _add_link_dialog(self):
         c = self.colors
-        dialog = self._create_dialog("Добавить ссылку", "480x300")
+        dialog = self._create_dialog("Добавить ссылку", "480x430")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -601,6 +602,41 @@ class AppWindow:
         hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
         hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
+        # --- Запись сразу по расписанию: дата (всегда сегодня) + окно
+        # времени, авторасчёт которого — из фактической длительности
+        # ролика, как только ссылка разберётся. Для эфира (без известной
+        # длительности) — запасной вариант +60 минут от старта.
+        schedule_var = tk.BooleanVar(value=True)
+        schedule_check = ctk.CTkCheckBox(body, text="Сразу запланировать запись", variable=schedule_var,
+                                          fg_color=c['accent'], hover_color=c['accent_hover'],
+                                          text_color=c['text_primary'], border_color=c['border'],
+                                          command=lambda: toggle_schedule_fields())
+        schedule_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 4))
+
+        today = datetime.now()
+        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        today_weekday = today.weekday()
+        ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
+                     text_color=c['text_secondary']).grid(row=5, column=0, columnspan=2, sticky='w', pady=2)
+
+        time_frame = ctk.CTkFrame(body, fg_color='transparent')
+        time_frame.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
+        ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
+        start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+                                 fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
+        start_entry.pack(side='left', padx=6)
+        ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
+        end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+                               fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
+        end_entry.pack(side='left', padx=6)
+        start_entry.set_time(today.strftime('%H:%M'))
+        end_entry.set_time(today.strftime('%H:%M'))
+
+        def toggle_schedule_fields():
+            state = 'normal' if schedule_var.get() else 'disabled'
+            start_entry.configure(state=state)
+            end_entry.configure(state=state)
+
         # Название вводили руками — не перетирать его автоопределением,
         # даже если оно ещё выполняется в фоне и придёт позже.
         name_touched = {'value': False}
@@ -628,7 +664,7 @@ class AppWindow:
 
             detect_generation['id'] += 1
             my_generation = detect_generation['id']
-            hint.configure(text="Определяем название и тип…")
+            hint.configure(text="Определяем название, тип и длительность…")
 
             def resolve_async():
                 info = resolve_link(url)
@@ -642,7 +678,20 @@ class AppWindow:
                         return
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
-                    hint.configure(text=f"Определено: {'прямой эфир' if info.is_live else 'запись'}")
+
+                    # Окно записи — от текущего момента (начала) и до конца
+                    # ролика по его фактической длительности; для эфира без
+                    # известной длительности — запасной час.
+                    start_now = datetime.now()
+                    start_entry.set_time(start_now.strftime('%H:%M'))
+                    if info.duration:
+                        end_dt = start_now + timedelta(seconds=info.duration)
+                        minutes = int(info.duration // 60)
+                        hint.configure(text=f"Определено: запись, длительность ~{minutes} мин")
+                    else:
+                        end_dt = start_now + timedelta(minutes=60)
+                        hint.configure(text="Определено: прямой эфир (длительность неизвестна — окно +60 мин, поправьте при необходимости)")
+                    end_entry.set_time(end_dt.strftime('%H:%M'))
 
                 self.root.after(0, apply)
 
@@ -660,9 +709,26 @@ class AppWindow:
             if link_type == 'Авто':
                 link_type = guess_type(url)
 
+            do_schedule = schedule_var.get()
+            start = start_entry.get().strip()
+            end = end_entry.get().strip()
+            if do_schedule:
+                if not self._valid_time_range(start, end, dialog):
+                    return
+
             def finish(display_name: str):
                 link = {'name': display_name, 'url': url, 'type': link_type}
                 self.storage.save_link(link)
+                if do_schedule:
+                    self.storage.add_schedule_item({
+                        'channel_name': display_name,
+                        'source_type': 'link',
+                        'start_time': start,
+                        'end_time': end,
+                        'days': [today_weekday],
+                        'enabled': True,
+                    })
+                    self.root.after(0, self.scheduler.reload_schedules)
                 self.root.after(0, self._refresh_data)
 
             if name:
@@ -681,7 +747,23 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=4, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=7, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+
+    @staticmethod
+    def _valid_time_range(start: str, end: str, parent) -> bool:
+        try:
+            datetime.strptime(start, '%H:%M')
+            datetime.strptime(end, '%H:%M')
+        except ValueError:
+            messagebox.showwarning("Внимание", "Введите время в формате ЧЧ:ММ, например 09:30", parent=parent)
+            return False
+        if start == end:
+            messagebox.showwarning(
+                "Внимание",
+                "Измените время окончания: одинаковое время означало бы запись на 24 часа.",
+                parent=parent)
+            return False
+        return True
 
     def _edit_link_dialog(self, name: str, link: Dict):
         c = self.colors

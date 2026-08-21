@@ -34,6 +34,7 @@ class LinkInfo:
     title: str = ''
     thumbnail: str = ''
     is_live: bool = False
+    duration: Optional[float] = None  # секунды; None для эфира или если источник её не сообщает
     video_url: Optional[str] = None
     audio_url: Optional[str] = None  # None, если поток уже единый (video_url содержит и звук)
     headers: Optional[dict] = None  # заголовки (в первую очередь User-Agent), нужные именно ДЛЯ ЭТОЙ ссылки
@@ -67,6 +68,7 @@ def resolve_link(url: str, timeout: int = 15) -> LinkInfo:
     title = info.get('title') or url
     thumbnail = info.get('thumbnail') or ''
     is_live = bool(info.get('is_live'))
+    duration = info.get('duration') if not is_live else None
 
     requested = info.get('requested_formats')
     if requested and len(requested) >= 2:
@@ -87,7 +89,7 @@ def resolve_link(url: str, timeout: int = 15) -> LinkInfo:
     # любым другим значением CDN отвечает HTTP 400, даже если сама ссылка
     # верна. Поэтому дальше используем именно эти заголовки, а не свой
     # дефолтный User-Agent.
-    return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=is_live,
+    return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=is_live, duration=duration,
                      video_url=video_url, audio_url=audio_url, headers=headers)
 
 
