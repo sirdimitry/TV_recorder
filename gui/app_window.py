@@ -316,6 +316,7 @@ class AppWindow:
 
         self.channel_list = ChannelList(
             tab_channels,
+            recorder=self.recorder,
             on_select=self._on_channel_select,
             on_edit=self._edit_channel_dialog,
             on_record=self._record_channel_now,
@@ -325,6 +326,7 @@ class AppWindow:
 
         self.link_list = LinkList(
             tab_links,
+            recorder=self.recorder,
             on_select=self._on_channel_select,
             on_edit=self._edit_link_dialog,
             on_record=self._record_link_now,
@@ -415,6 +417,7 @@ class AppWindow:
             task_id = self.recorder.start_recording(
                 name, info.video_url, output, source="manual",
                 on_complete=self._on_record_complete, audio_url=info.audio_url,
+                extra_headers=info.headers,
             )
             if task_id:
                 logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
@@ -567,7 +570,8 @@ class AppWindow:
 
         ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
             row=0, column=0, padx=(0, 12), pady=8, sticky='w')
-        fields['url'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+        url_var = tk.StringVar()
+        fields['url'] = ctk.CTkEntry(body, textvariable=url_var, height=32, corner_radius=Config.RADIUS_SM,
                                       placeholder_text="https://www.youtube.com/watch?v=…",
                                       fg_color=c['bg_primary'], border_color=c['border'],
                                       text_color=c['text_primary'])
@@ -576,8 +580,9 @@ class AppWindow:
 
         ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
             row=1, column=0, padx=(0, 12), pady=8, sticky='w')
-        fields['name'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
-                                       placeholder_text="Как показывать в списке",
+        name_var = tk.StringVar()
+        fields['name'] = ctk.CTkEntry(body, textvariable=name_var, height=32, corner_radius=Config.RADIUS_SM,
+                                       placeholder_text="Определится по ссылке автоматически",
                                        fg_color=c['bg_primary'], border_color=c['border'],
                                        text_color=c['text_primary'])
         fields['name'].grid(row=1, column=1, pady=8, sticky='ew')
@@ -591,14 +596,61 @@ class AppWindow:
                           button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
-        hint = ctk.CTkLabel(body, text="Название можно оставить пустым — заполним по названию страницы,\n"
-                                        "как только получится её открыть.",
-                             font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
+        hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
         hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
+        # Название вводили руками — не перетирать его автоопределением,
+        # даже если оно ещё выполняется в фоне и придёт позже.
+        name_touched = {'value': False}
+        fields['name'].bind('<Key>', lambda e: name_touched.__setitem__('value', True))
+
+        detect_generation = {'id': 0}
+        debounce = {'after_id': None}
+
+        def on_url_change(*_):
+            if debounce['after_id']:
+                dialog.after_cancel(debounce['after_id'])
+            # Не дёргаем yt-dlp на каждое нажатие при ручном наборе ссылки —
+            # ждём короткую паузу после последнего изменения поля.
+            debounce['after_id'] = dialog.after(600, start_detection)
+
+        def start_detection():
+            url = url_var.get().strip()
+            if not url:
+                hint.configure(text="")
+                return
+            # Тип — сразу и без сети, просто по домену.
+            guessed = guess_type(url)
+            if guessed != 'other':
+                type_var.set(guessed)
+
+            detect_generation['id'] += 1
+            my_generation = detect_generation['id']
+            hint.configure(text="Определяем название и тип…")
+
+            def resolve_async():
+                info = resolve_link(url)
+
+                def apply():
+                    # Пока резолвили — ссылку могли уже поменять на другую.
+                    if my_generation != detect_generation['id']:
+                        return
+                    if not info.ok:
+                        hint.configure(text=f"Не удалось определить автоматически: {info.error}")
+                        return
+                    if not name_touched['value'] and info.title:
+                        name_var.set(info.title)
+                    hint.configure(text=f"Определено: {'прямой эфир' if info.is_live else 'запись'}")
+
+                self.root.after(0, apply)
+
+            threading.Thread(target=resolve_async, daemon=True).start()
+
+        url_var.trace_add('write', on_url_change)
+
         def save():
-            url = fields['url'].get().strip()
-            name = fields['name'].get().strip()
+            url = url_var.get().strip()
+            name = name_var.get().strip()
             if not url:
                 messagebox.showwarning("Внимание", "Вставьте ссылку", parent=dialog)
                 return
@@ -615,8 +667,8 @@ class AppWindow:
                 finish(name)
                 dialog.destroy()
             else:
-                # Название не задано — пробуем узнать заголовок страницы
-                # через yt-dlp, не блокируя интерфейс диалогом ожидания.
+                # Название не задано и автоопределение ещё не подоспело —
+                # пробуем сами, не блокируя интерфейс диалогом ожидания.
                 dialog.destroy()
 
                 def resolve_name():

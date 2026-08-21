@@ -83,11 +83,21 @@ class Recorder:
         self._lock = threading.Lock()
         self._timer_thread: Optional[threading.Thread] = None
         self._running = False
-        self._ui_callback: Optional[Callable] = None  # Callback для UI
-    
+        self._ui_callbacks: list = []  # несколько подписчиков (панель записей, списки каналов/ссылок)
+
     def set_ui_callback(self, callback: Callable):
-        """Устанавливает callback для обновления UI (вызывается из AppWindow)"""
-        self._ui_callback = callback
+        """Регистрирует callback для обновления UI (вызывается из любого потока).
+        Можно вызывать несколько раз — панель записей и списки каналов/ссылок
+        подписываются каждый на своё обновление."""
+        self._ui_callbacks.append(callback)
+
+    def find_active_task_id(self, channel_name: str) -> Optional[str]:
+        """ID текущей активной (незавершённой) записи для этого имени, если есть."""
+        with self._lock:
+            for task in self.tasks.values():
+                if task.channel_name == channel_name and task.is_recording:
+                    return task.task_id
+        return None
 
     @classmethod
     def build_output_path(cls, channel_name: str, recorded_at: datetime | None = None) -> Path:
@@ -96,29 +106,39 @@ class Recorder:
         latin_name = channel_name.translate(cls.TRANSLITERATION)
         safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', latin_name).strip('_') or 'channel'
         return Config.get_recordings_dir() / f"{safe_name}_{timestamp}.mp4"
-    
+
     def _notify_ui(self):
-        """Безопасный вызов UI callback из любого потока"""
-        if self._ui_callback:
+        """Безопасный вызов всех UI callback'ов из любого потока"""
+        for callback in self._ui_callbacks:
             try:
-                self._ui_callback()
+                callback()
             except Exception as e:
                 logger.error(f"Recorder: Ошибка UI callback: {e}")
     
     def start_recording(self, channel_name: str, stream_url: str,
                        output_path: str, source: str = "manual",
                        on_complete: Optional[Callable] = None,
-                       audio_url: Optional[str] = None) -> str:
+                       audio_url: Optional[str] = None,
+                       extra_headers: Optional[dict] = None) -> str:
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         task_id = f"{channel_name}_{int(time.time())}"
 
-        headers_info = self.CHANNEL_HEADERS.get(channel_name, {})
-        ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
-        ref = headers_info.get("ref", "https://www.google.com")
-        headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
+        if extra_headers:
+            # Ссылки, разобранные через yt-dlp (core/link_resolver.py),
+            # приходят со своими заголовками — некоторые CDN (например VK:
+            # vkvd*.okcdn.ru) подписывают URL под конкретный User-Agent и
+            # отвечают HTTP 400 на любой другой, даже если сама ссылка верна.
+            ua = extra_headers.get('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
+            ref = extra_headers.get('Referer', '')
+            headers = ''.join(f"{k}: {v}\r\n" for k, v in extra_headers.items())
+        else:
+            headers_info = self.CHANNEL_HEADERS.get(channel_name, {})
+            ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+            ref = headers_info.get("ref", "https://www.google.com")
+            headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
 
         if audio_url:
             # Видео и звук — уже отдельные закодированные дорожки (типично

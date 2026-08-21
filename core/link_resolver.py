@@ -36,6 +36,7 @@ class LinkInfo:
     is_live: bool = False
     video_url: Optional[str] = None
     audio_url: Optional[str] = None  # None, если поток уже единый (video_url содержит и звук)
+    headers: Optional[dict] = None  # заголовки (в первую очередь User-Agent), нужные именно ДЛЯ ЭТОЙ ссылки
     error: str = ''
 
 
@@ -71,16 +72,23 @@ def resolve_link(url: str, timeout: int = 15) -> LinkInfo:
     if requested and len(requested) >= 2:
         video_url = requested[0].get('url')
         audio_url = requested[1].get('url')
+        headers = requested[0].get('http_headers') or info.get('http_headers')
     else:
-        video_url = info.get('url')
+        video_url = (requested[0].get('url') if requested else None) or info.get('url')
         audio_url = None
+        headers = (requested[0].get('http_headers') if requested else None) or info.get('http_headers')
 
     if not video_url:
         return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
                          error="Не удалось получить прямую ссылку на поток")
 
+    # Некоторые источники (например VK: vkvd*.okcdn.ru) выдают подписанные
+    # ссылки, привязанные к User-Agent, с которым их запросил yt-dlp — с
+    # любым другим значением CDN отвечает HTTP 400, даже если сама ссылка
+    # верна. Поэтому дальше используем именно эти заголовки, а не свой
+    # дефолтный User-Agent.
     return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=is_live,
-                     video_url=video_url, audio_url=audio_url)
+                     video_url=video_url, audio_url=audio_url, headers=headers)
 
 
 def guess_type(url: str) -> str:

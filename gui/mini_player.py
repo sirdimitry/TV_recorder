@@ -73,7 +73,13 @@ class MiniPlayer(tk.Toplevel):
                     return
                 stream_url = info.video_url
                 audio_url = info.audio_url
-                headers = "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)\r\n"
+                # Некоторые CDN (например VK) подписывают ссылку под тот
+                # самый User-Agent, которым её запросил yt-dlp, и отвечают
+                # HTTP 400 на любой другой.
+                if info.headers:
+                    headers = ''.join(f"{k}: {v}\r\n" for k, v in info.headers.items())
+                else:
+                    headers = "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)\r\n"
             else:
                 ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
                 extra_headers = ""

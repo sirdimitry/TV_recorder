@@ -119,6 +119,7 @@ class RecordingScheduler:
         logger.info(f"Предварительная проверка: {name} ({source_type})")
         self._notify_status(index, 'checking')
 
+        extra_headers = None
         if source_type == 'link':
             info = resolve_link(target.get('url', ''))
             if not info.ok:
@@ -126,7 +127,7 @@ class RecordingScheduler:
                 self.notifier.send("❌ Запись отменена", f"{name}\n{info.error}")
                 self._notify_status(index, 'failed')
                 return
-            video_url, audio_url = info.video_url, info.audio_url
+            video_url, audio_url, extra_headers = info.video_url, info.audio_url, info.headers
         else:
             status, message = self.checker.check(target)
             if status == StreamStatus.RED:
@@ -148,6 +149,7 @@ class RecordingScheduler:
             source='schedule',
             on_complete=lambda success, n, path, idx=index: self._on_recording_complete(success, n, path, idx),
             audio_url=audio_url,
+            extra_headers=extra_headers,
         )
         if not task_id:
             self._on_recording_error(name, 'Не удалось запустить запись')

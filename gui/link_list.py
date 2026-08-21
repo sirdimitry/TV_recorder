@@ -25,12 +25,13 @@ class LinkList(ctk.CTkFrame):
     LOGO_SIZE = 38
     ROW_HEIGHT = 60
 
-    def __init__(self, parent, on_select: Optional[Callable] = None,
+    def __init__(self, parent, recorder=None, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
                  on_delete: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.root = parent.winfo_toplevel()
         self.colors = Config.COLORS
+        self.recorder = recorder
         self.on_select = on_select
         self.on_edit = on_edit
         self.on_record = on_record
@@ -38,6 +39,9 @@ class LinkList(ctk.CTkFrame):
         self.link_widgets: Dict[str, dict] = {}
 
         self._setup_ui()
+
+        if self.recorder:
+            self.recorder.set_ui_callback(self._on_recorder_update)
 
     def _setup_ui(self):
         c = self.colors
@@ -64,6 +68,8 @@ class LinkList(ctk.CTkFrame):
 
         for link in links:
             self._add_link_row(link)
+
+        self._refresh_record_buttons()
 
     def _add_link_row(self, link: Dict):
         c = self.colors
@@ -129,7 +135,7 @@ class LinkList(ctk.CTkFrame):
 
         self.link_widgets[name] = {
             'row': row, 'thumb_label': thumb_label, 'live_dot': live_dot,
-            'status_badge': status_badge, 'link': link,
+            'status_badge': status_badge, 'btn_record': btn_record, 'link': link,
         }
 
         for widget in (row, info_frame, label_name, badge_row):
@@ -192,10 +198,30 @@ class LinkList(ctk.CTkFrame):
         if self.on_delete: self.on_delete(name)
 
     def _on_record(self, name: str, link: Dict):
+        if self.recorder:
+            task_id = self.recorder.find_active_task_id(name)
+            if task_id:
+                self.recorder.stop_recording(task_id)
+                return
         if self.on_record:
             self.on_record(name, link)
         else:
             logger.info(f"Запрос записи ссылки: {name}")
+
+    def _on_recorder_update(self):
+        self.after(0, self._refresh_record_buttons)
+
+    def _refresh_record_buttons(self):
+        if not self.recorder:
+            return
+        c = self.colors
+        active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording}
+        for name, widgets in self.link_widgets.items():
+            btn = widgets['btn_record']
+            if name in active_names:
+                btn.configure(image=get_icon('stop', c['red'], 18), fg_color=c['bg_active'])
+            else:
+                btn.configure(image=get_icon('record', c['red'], 18), fg_color='transparent')
 
     def _open_preview(self, link: Dict):
         from gui.mini_player import MiniPlayer

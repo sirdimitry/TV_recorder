@@ -261,6 +261,21 @@ class RecordingPanel(ctk.CTkFrame):
             'btn_del': btn_del,
         }
 
+        self._reveal_new_row(row)
+
+    def _reveal_new_row(self, row: ctk.CTkFrame):
+        """Прокручивает список к только что появившейся строке и на секунду
+        подсвечивает её — чтобы было заметно, что запись правда началась."""
+        try:
+            self.list_frame._parent_canvas.update_idletasks()
+            self.list_frame._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+        c = self.colors
+        row.configure(fg_color=c['accent'])
+        self.after(700, lambda: row.winfo_exists() and row.configure(fg_color=c['bg_secondary']))
+
     def _toggle_pause(self, task: RecordingTask):
         self.recorder.pause_recording(task.task_id)
 
