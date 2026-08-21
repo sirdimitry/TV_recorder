@@ -77,37 +77,6 @@ class SplashScreen(ctk.CTkToplevel):
         self.destroy()
 
 
-def bind_macos_shortcuts(widget):
-    widget.bind('<Command-a>', lambda e: widget.select_range(0, 'end'))
-
-    def do_copy(e):
-        try:
-            text = widget.selection_get()
-            widget.clipboard_clear()
-            widget.clipboard_append(text)
-        except tk.TclError: pass
-
-    widget.bind('<Command-c>', do_copy)
-
-    def do_cut(e):
-        try:
-            text = widget.selection_get()
-            widget.clipboard_clear()
-            widget.clipboard_append(text)
-            widget.delete("sel.first", "sel.last")
-        except tk.TclError: pass
-
-    widget.bind('<Command-x>', do_cut)
-
-    def do_paste(e):
-        try:
-            text = widget.clipboard_get()
-            widget.insert("insert", text)
-        except tk.TclError: pass
-
-    widget.bind('<Command-v>', do_paste)
-
-
 class AppWindow:
     def __init__(self):
         self.root = ctk.CTk()
@@ -455,7 +424,6 @@ class AppWindow:
                                             fg_color=c['bg_primary'], border_color=c['border'],
                                             text_color=c['text_primary'])
                 fields[key].grid(row=i, column=1, pady=8, sticky='ew')
-                bind_macos_shortcuts(fields[key])
             elif t == 'option':
                 var = tk.StringVar(value=val)
                 fields[key] = var
@@ -514,7 +482,6 @@ class AppWindow:
                                             text_color=c['text_primary'])
                 fields[key].insert(0, val)
                 fields[key].grid(row=i, column=1, pady=8, sticky='ew')
-                bind_macos_shortcuts(fields[key])
 
         def save():
             updated = {
@@ -554,7 +521,6 @@ class AppWindow:
                                       fg_color=c['bg_primary'], border_color=c['border'],
                                       text_color=c['text_primary'])
         fields['url'].grid(row=0, column=1, pady=8, sticky='ew')
-        bind_macos_shortcuts(fields['url'])
 
         ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
             row=1, column=0, padx=(0, 12), pady=8, sticky='w')
@@ -563,7 +529,6 @@ class AppWindow:
                                        fg_color=c['bg_primary'], border_color=c['border'],
                                        text_color=c['text_primary'])
         fields['name'].grid(row=1, column=1, pady=8, sticky='ew')
-        bind_macos_shortcuts(fields['name'])
 
         ctk.CTkLabel(body, text="Тип:", text_color=c['text_secondary']).grid(
             row=2, column=0, padx=(0, 12), pady=8, sticky='w')
@@ -627,7 +592,6 @@ class AppWindow:
                                        text_color=c['text_primary'])
         fields['name'].insert(0, link.get('name', ''))
         fields['name'].grid(row=0, column=1, pady=8, sticky='ew')
-        bind_macos_shortcuts(fields['name'])
 
         ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
             row=1, column=0, padx=(0, 12), pady=8, sticky='w')
@@ -636,7 +600,6 @@ class AppWindow:
                                       text_color=c['text_primary'])
         fields['url'].insert(0, link.get('url', ''))
         fields['url'].grid(row=1, column=1, pady=8, sticky='ew')
-        bind_macos_shortcuts(fields['url'])
 
         ctk.CTkLabel(body, text="Тип:", text_color=c['text_secondary']).grid(
             row=2, column=0, padx=(0, 12), pady=8, sticky='w')
