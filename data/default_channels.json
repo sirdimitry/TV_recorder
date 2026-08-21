@@ -1,22 +1,170 @@
 [
-  {"name": "Первый канал", "url": "https://edge01.1tv.ru/1tv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/1tv.png", "alt_urls": []},
-  {"name": "Россия 1", "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/russia/russia1-hd/index.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/russia1.png", "alt_urls": []},
-  {"name": "Матч ТВ", "url": "https://matchtv.akamaized.net/matchtv/matchtv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/matchtv.png", "alt_urls": []},
-  {"name": "НТВ", "url": "https://ntvhd.akamaized.net/ntv/ntv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/ntv.png", "alt_urls": []},
-  {"name": "Пятый канал", "url": "https://5tv.akamaized.net/5tv/5tv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/5kanal.png", "alt_urls": []},
-  {"name": "Россия К", "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/kultura/kultura-hd/index.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/kultura.png", "alt_urls": []},
-  {"name": "Россия 24", "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/russia24/russia24-hd/index.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/russia24.png", "alt_urls": []},
-  {"name": "Карусель", "url": "https://karusel.akamaized.net/karusel/karusel.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/karusel.png", "alt_urls": []},
-  {"name": "ОТР", "url": "https://otr.akamaized.net/otr/otr.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/otr.png", "alt_urls": []},
-  {"name": "ТВ Центр", "url": "https://tvc.akamaized.net/tvc/tvc.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/tvc.png", "alt_urls": []},
-  {"name": "РЕН ТВ", "url": "https://ren-tv.akamaized.net/ren-tv/ren-tv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/rentv.png", "alt_urls": []},
-  {"name": "СТС", "url": "https://ctc.akamaized.net/ctc/ctc.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/sts.png", "alt_urls": []},
-  {"name": "Домашний", "url": "https://domashniy.akamaized.net/domashniy/domashniy.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/domashniy.png", "alt_urls": []},
-  {"name": "ТВ-3", "url": "https://tv3.akamaized.net/tv3/tv3.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/tv3.png", "alt_urls": []},
-  {"name": "Пятница!", "url": "https://pyatnitsa.akamaized.net/pyatnitsa/pyatnitsa.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/pyatnica.png", "alt_urls": []},
-  {"name": "Звезда", "url": "https://zvezda.akamaized.net/zvezda/zvezda.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/zvezda.png", "alt_urls": []},
-  {"name": "Мир", "url": "https://mir.akamaized.net/mir/mir.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/mir.png", "alt_urls": []},
-  {"name": "ТНТ", "url": "https://tnt.akamaized.net/tnt/tnt.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/tnt.png", "alt_urls": []},
-  {"name": "Муз-ТВ", "url": "https://muztv.akamaized.net/muztv/muztv.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/muztv.png", "alt_urls": []},
-  {"name": "Спас", "url": "https://spas.akamaized.net/spas/spas.m3u8", "type": "iptv", "vpn_required": null, "logo_url": "https://raw.githubusercontent.com/smolnp/IPTVru/main/logos/spas.png", "alt_urls": []}
+  {
+    "name": "Первый канал",
+    "url": "https://edge1.1internet.tv/dash-live2/streams/1tv-dvr/1tvdash.mpd",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/pervy.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Россия 1",
+    "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia1-hd/index.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/rossia1.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Матч ТВ",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_MATCHTV/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/match-tv.png",
+    "alt_urls": []
+  },
+  {
+    "name": "НТВ",
+    "url": "https://cdn.ntv.ru/ntv0/playlist.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/ntv.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Пятый канал",
+    "url": "http://zabava-htlive.cdn.ngenix.net/hls/CH_5TV/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/5kanal-ru.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Россия К",
+    "url": "http://vgtrkregion-reg.cdnvideo.ru/vgtrk/4/kultura-hd/index.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/kultura.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Россия 24",
+    "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-hd/720p.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/rossia-24.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Карусель",
+    "url": "http://zabava-htlive.cdn.ngenix.net/hls/CH_KARUSEL/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/karusel.png",
+    "alt_urls": []
+  },
+  {
+    "name": "ОТР",
+    "url": "https://rt-nw-klgr-htlive.cdn.ngenix.net/hls/CH_R01_OTR_KLNG_FILIAL/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/otr.png",
+    "alt_urls": []
+  },
+  {
+    "name": "ТВ Центр",
+    "url": "http://tvc-hls.cdnvideo.ru/tvc-res/smil:vd9221_2.smil/playlist.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/tvcentr.png",
+    "alt_urls": []
+  },
+  {
+    "name": "РЕН ТВ",
+    "url": "http://zabava-htlive.cdn.ngenix.net/hls/CH_RENTV/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Ren_tv_logo.svg/200px-Ren_tv_logo.svg.png",
+    "alt_urls": []
+  },
+  {
+    "name": "СТС",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_STS/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/sts.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Домашний",
+    "url": "http://31.131.141.195:8000/play/a001/index.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/domashny.png",
+    "alt_urls": []
+  },
+  {
+    "name": "ТВ-3",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_TV3/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/tv3-ru.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Пятница!",
+    "url": "http://zabava-htlive.cdn.ngenix.net/hls/CH_PYATNIZZA/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/piatnica.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Звезда",
+    "url": "http://tvchannelstream1.tvzvezda.ru/cdn/tvzvezda/playlist_hdhigh.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/zvezda.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Мир",
+    "url": "http://hls.mirtv.cdnvideo.ru/mirtv-parampublish/mirtv_2500/playlist.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/mir.png",
+    "alt_urls": []
+  },
+  {
+    "name": "ТНТ",
+    "url": "http://31.131.141.195:8000/play/2090/index.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/tnt.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Муз-ТВ",
+    "url": "http://185.71.81.6:8080/20/index.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/muztv.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Спас",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_SPAS/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "https://iptvx.one/picons/spas.png",
+    "alt_urls": []
+  },
+  {
+    "name": "Известия",
+    "url": "http://hls-igi.cdnvideo.ru/igi/igi_sq/playlist.m3u8",
+    "logo_url": "https://iptvx.one/picons/izvestia.png",
+    "type": "iptv",
+    "vpn_required": null,
+    "alt_urls": []
+  }
 ]

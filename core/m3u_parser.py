@@ -20,18 +20,22 @@ class M3UParser:
             "url": "http://hls-igi.cdnvideo.ru/igi/igi_sq/playlist.m3u8",
             "logo": "https://iptvx.one/picons/izvestia.png"
         },
-        # Логотипы исправлены на рабочие PNG с Wikimedia
+        # Логотипы: старые Wikimedia thumb-ссылки перестали отдаваться (HTTP 400),
+        # заменены на действующие picons из того же плейлиста IPTVru.
         "Матч ТВ": {
-            "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Match_TV_logo.svg/200px-Match_TV_logo.svg.png"
-        },
-        "РЕН ТВ": {
-            "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Ren_tv_logo.svg/200px-Ren_tv_logo.svg.png"
+            "logo": "https://iptvx.one/picons/match-tv.png"
         },
         "ТВ-3": {
-            "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/TV3_logo.svg/200px-TV3_logo.svg.png"
+            "logo": "https://iptvx.one/picons/tv3-ru.png"
         },
         "Муз-ТВ": {
-            "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/MuzTV_logo.svg/200px-MuzTV_logo.svg.png"
+            "logo": "https://iptvx.one/picons/muztv.png"
+        },
+        # РЕН ТВ: ни старая Wikimedia-ссылка, ни собственный tvg-logo плейлиста
+        # (iptvx.one/picons/18.png) сейчас не отдают файл — рабочей замены нет,
+        # оставлено как было.
+        "РЕН ТВ": {
+            "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Ren_tv_logo.svg/200px-Ren_tv_logo.svg.png"
         }
     }
     
@@ -125,13 +129,15 @@ class M3UParser:
         return []
     
     def _fetch_playlist(self, url: str) -> Optional[str]:
-        try:
-            logger.info(f"M3UParser: Загрузка плейлиста...")
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            if resp.status_code == 200 and '#EXTINF' in resp.text:
-                return resp.text
-        except Exception as e:
-            logger.warning(f"M3UParser: Ошибка загрузки: {e}")
+        for attempt in range(1, 3):
+            try:
+                logger.info(f"M3UParser: Загрузка плейлиста (попытка {attempt})...")
+                resp = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
+                if resp.status_code == 200 and '#EXTINF' in resp.text:
+                    return resp.text
+                logger.warning(f"M3UParser: Неожиданный ответ (HTTP {resp.status_code})")
+            except Exception as e:
+                logger.warning(f"M3UParser: Ошибка загрузки (попытка {attempt}): {e}")
         return None
     
     def _normalize_name(self, name: str) -> str:
@@ -139,18 +145,30 @@ class M3UParser:
         name = re.sub(r'\s*(hd|fhd|uhd|4k|\+1|\+2)\s*', '', name)
         name = re.sub(r'\s+', ' ', name).strip()
         return name
-    
+
+    @staticmethod
+    def _loose_key(name: str) -> str:
+        """Strips spaces/hyphens/"!" for fuzzy matching. The source occasionally
+        tweaks punctuation in channel names (e.g. "Матч ТВ" -> "Матч!",
+        "ТВ-3" -> "ТВ3", "Муз-ТВ" -> "Муз ТВ"); comparing on this loose key
+        keeps such drift from breaking channel identification."""
+        return re.sub(r'[\s\-!]+', '', name)
+
     def _identify_federal(self, channels: List[Dict]) -> List[Dict]:
         result = []
         found_standards: Set[str] = set()
-        
+
         for ch in channels:
             raw_name = ch['name']
             normalized = self._normalize_name(raw_name)
-            
+            loose = self._loose_key(normalized)
+
             matched_standard = None
             for standard_name, synonyms in self.CHANNEL_SYNONYMS.items():
-                if normalized in synonyms or any(syn in normalized for syn in synonyms):
+                loose_synonyms = {self._loose_key(syn) for syn in synonyms}
+                if loose in loose_synonyms or any(
+                    syn in loose or loose in syn for syn in loose_synonyms
+                ):
                     matched_standard = standard_name
                     break
             

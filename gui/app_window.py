@@ -164,18 +164,28 @@ class AppWindow:
             logger.error(f"Ошибка инициализации: {e}", exc_info=True)
 
     def _sync_channels(self):
+        """Синхронизирует список каналов с живым плейлистом.
+
+        Живой плейлист — источник истины и может обновлять уже сохранённые
+        каналы (URL потока/логотипа мог поменяться). Локальный
+        default_channels.json — это статичный аварийный резерв на случай,
+        когда сеть недоступна; он используется только чтобы добавить каналы,
+        которых ещё нет, и никогда не перезаписывает уже сохранённые —
+        иначе временный сетевой сбой затирал бы рабочие ссылки устаревшими.
+        """
         from core.m3u_parser import M3UParser
 
         parser = M3UParser()
         online_channels = parser.fetch_and_parse()
+        is_live = bool(online_channels)
 
-        if not online_channels:
+        if not is_live:
             self.splash._log("⚠️ Не удалось загрузить онлайн-плейлист.")
             defaults_path = Config.BASE_DIR / "data" / "default_channels.json"
             if defaults_path.exists():
                 with open(defaults_path, 'r', encoding='utf-8') as f:
                     online_channels = json.load(f)
-                self.splash._log("📂 Используем локальную базу каналов")
+                self.splash._log("📂 Используем локальную базу каналов (только для новых каналов)")
             else:
                 return
 
@@ -189,7 +199,7 @@ class AppWindow:
             if ch['name'] not in current_map:
                 self.storage.save_channel(ch)
                 added += 1
-            else:
+            elif is_live:
                 existing = current_map[ch['name']]
                 if existing.get('url') != ch['url'] or existing.get('logo_url') != ch['logo_url']:
                     self.storage.save_channel(ch)
