@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 import os
 import subprocess
 import platform
+import unicodedata
 from typing import Optional, Dict
 from core.recorder import Recorder, RecordingTask
 from utils.config import Config
@@ -99,16 +100,29 @@ class RecordingPanel(ttk.Frame):
                 continue
             
             widgets['timer'].config(text=task.format_elapsed_time())
+            widgets['period'].config(text=task.format_recording_period())
             
             if task.is_paused:
                 widgets['status'].config(text="⏸", foreground='#fbbf24')
+                widgets['result'].config(text="Paused", foreground='#fbbf24')
             elif task.is_recording:
                 widgets['status'].config(text="●", foreground='#ff4444')
-            else:
+                widgets['result'].config(text="Recording", foreground=self.colors['text_secondary'])
+            elif task.success is True:
                 widgets['status'].config(text="✓", foreground='#a6e3a1')
+                widgets['result'].config(text="Completed", foreground='#a6e3a1')
+            elif task.success is False:
+                widgets['status'].config(text="✕", foreground=self.colors['red'])
+                widgets['result'].config(text="Failed", foreground=self.colors['red'])
+            else:
+                widgets['status'].config(text="…", foreground=self.colors['yellow'])
+                widgets['result'].config(text="Finalizing", foreground=self.colors['yellow'])
             
             pause_text = "▶" if task.is_paused else "⏸"
             widgets['btn_pause'].config(text=pause_text)
+            button_state = 'normal' if task.is_recording else 'disabled'
+            widgets['btn_pause'].config(state=button_state)
+            widgets['btn_stop'].config(state=button_state)
             
             # Кнопка открытия файла для завершенных
             if not task.is_recording and 'btn_open' not in widgets:
@@ -148,6 +162,14 @@ class RecordingPanel(ttk.Frame):
                              foreground=self.colors['accent'],
                              width=8)
         timer_lbl.pack(side='left', padx=(0, 8))
+
+        period_lbl = ttk.Label(row, text=task.format_recording_period(),
+                               font=('Inter', 9), foreground=self.colors['text_secondary'])
+        period_lbl.pack(side='left', padx=(0, 5))
+
+        result_lbl = ttk.Label(row, text="Recording", font=('Inter', 9),
+                               foreground=self.colors['text_secondary'])
+        result_lbl.pack(side='left')
         
         btn_pause = ttk.Button(row, text="⏸", width=2,
                               command=lambda t=task: self._toggle_pause(t))
@@ -165,6 +187,8 @@ class RecordingPanel(ttk.Frame):
             'row': row,
             'status': status_lbl,
             'timer': timer_lbl,
+            'period': period_lbl,
+            'result': result_lbl,
             'btn_pause': btn_pause,
             'btn_stop': btn_stop,
             'btn_del': btn_del
@@ -178,16 +202,38 @@ class RecordingPanel(ttk.Frame):
     
     def _open_file(self, task: RecordingTask):
         try:
+            file_path = self._find_recording_file(task.output_path)
+            if not file_path:
+                messagebox.showerror(
+                    "File not found",
+                    "The recording file is not available. This recording may have failed."
+                )
+                logger.error(f"RecordingPanel: file not found: {task.output_path}")
+                return
             if platform.system() == 'Darwin':
                 # -R открывает Finder и выделяет файл, не запуская проигрывание.
-                subprocess.Popen(['open', '-R', task.output_path])
+                subprocess.Popen(['open', '-R', str(file_path)])
             elif platform.system() == 'Windows':
-                subprocess.Popen(['explorer', '/select,', os.path.normpath(task.output_path)])
+                subprocess.Popen(['explorer', '/select,', os.path.normpath(str(file_path))])
             else:
-                subprocess.Popen(['xdg-open', os.path.dirname(task.output_path)])
-            logger.info(f"RecordingPanel: Файл выделен в папке: {task.output_path}")
+                subprocess.Popen(['xdg-open', os.path.dirname(str(file_path))])
+            logger.info(f"RecordingPanel: file revealed: {file_path}")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть папку с файлом:\n{e}")
+
+    @staticmethod
+    def _find_recording_file(output_path: str):
+        """Handles macOS Unicode filename normalisation when revealing old files."""
+        path = Path(output_path)
+        if path.is_file():
+            return path
+        if not path.parent.is_dir():
+            return None
+        target_name = unicodedata.normalize('NFC', path.name)
+        for candidate in path.parent.iterdir():
+            if unicodedata.normalize('NFC', candidate.name) == target_name and candidate.is_file():
+                return candidate
+        return None
     
     def _remove_task(self, task: RecordingTask):
         self.recorder.remove_task(task.task_id)

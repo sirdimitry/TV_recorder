@@ -108,8 +108,7 @@ class RecordingScheduler:
             logger.warning(f"Запись с предупреждением: {channel_name} — {message}")
             self.notifier.send("⚠️ Запись начата с предупреждением", f"{channel_name}\n{message}")
 
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        output_path = Config.RECORDINGS_DIR / f"{channel_name}_{timestamp}.mp4"
+        output_path = self.recorder.build_output_path(channel_name)
         task_id = self.recorder.start_recording(
             channel_name=channel_name,
             stream_url=channel.get('url', ''),

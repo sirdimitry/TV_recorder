@@ -2,7 +2,9 @@
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+import re
 from typing import Optional, Callable, Dict
 from utils.config import Config
 from utils.logger import logger
@@ -23,6 +25,10 @@ class RecordingTask:
         self.pause_time = 0
         self.total_paused_duration = 0
         self.final_duration = 0
+        self.started_at: Optional[datetime] = None
+        self.finished_at: Optional[datetime] = None
+        self.success: Optional[bool] = None
+        self.error_message = ""
         self.on_complete: Optional[Callable] = None
     
     def get_elapsed_time(self) -> int:
@@ -41,8 +47,28 @@ class RecordingTask:
         s = seconds % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def format_recording_period(self) -> str:
+        """Returns the actual recording time range for the interface."""
+        started_at = self.started_at or datetime.fromtimestamp(self.start_time)
+        ended_at = self.finished_at
+        start_label = started_at.strftime('%H:%M')
+        end_label = ended_at.strftime('%H:%M') if ended_at else 'now'
+        return f"{start_label} – {end_label}"
+
 
 class Recorder:
+    TRANSLITERATION = str.maketrans({
+        'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E',
+        'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M',
+        'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
+        'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Sch',
+        'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya',
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    })
     CHANNEL_HEADERS = {
         "Первый канал": {"ua": "Mozilla/5.0", "ref": "https://www.1tv.ru"},
         "Россия 1": {"ua": "Mozilla/5.0", "ref": "https://smotrim.ru"},
@@ -61,6 +87,14 @@ class Recorder:
     def set_ui_callback(self, callback: Callable):
         """Устанавливает callback для обновления UI (вызывается из AppWindow)"""
         self._ui_callback = callback
+
+    @classmethod
+    def build_output_path(cls, channel_name: str, recorded_at: datetime | None = None) -> Path:
+        """Builds a portable filename so macOS and Windows handle it identically."""
+        timestamp = (recorded_at or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S')
+        latin_name = channel_name.translate(cls.TRANSLITERATION)
+        safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', latin_name).strip('_') or 'channel'
+        return Config.get_recordings_dir() / f"{safe_name}_{timestamp}.mp4"
     
     def _notify_ui(self):
         """Безопасный вызов UI callback из любого потока"""
@@ -104,6 +138,7 @@ class Recorder:
             task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             task.is_recording = True
             task.start_time = time.time()
+            task.started_at = datetime.now()
             
             with self._lock:
                 self.tasks[task_id] = task
@@ -170,15 +205,23 @@ class Recorder:
         stdout, stderr = task.process.communicate()
         returncode = task.process.returncode
         
-        task.is_recording = False
         if task.final_duration == 0:
             task.final_duration = task.get_elapsed_time()
+        task.is_recording = False
+        task.finished_at = datetime.now()
         
         success = returncode == 0 or returncode == 255
+        output_file = Path(task.output_path)
+        has_usable_file = output_file.is_file() and output_file.stat().st_size > 1024
+        success = success and has_usable_file
+        task.success = success
         if success:
             logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
         else:
             err_msg = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
+            if not has_usable_file:
+                err_msg = "Recording finished without creating a usable video file. " + err_msg
+            task.error_message = err_msg
             logger.error(f"Recorder: Ошибка записи '{task.channel_name}' (code {returncode}): {err_msg}")
         
         if task.on_complete:

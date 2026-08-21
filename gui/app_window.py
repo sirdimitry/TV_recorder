@@ -1,6 +1,6 @@
 # gui/app_window.py
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, filedialog, messagebox
 from typing import Dict
 import time
 import threading
@@ -240,6 +240,7 @@ class AppWindow:
         # === МЕНЮ БАР ===
         menubar = tk.Menu(self.root)
         app_menu = tk.Menu(menubar, tearoff=0)
+        app_menu.add_command(label="Settings…", command=self._show_settings)
         app_menu.add_command(label="О программе", command=self._show_about)
         app_menu.add_separator()
         app_menu.add_command(label="Выход", command=self._on_close)
@@ -307,8 +308,7 @@ class AppWindow:
     
     def _record_channel_now(self, name: str, channel: Dict):
         """Мгновенная запись выбранного канала по кнопке ⏺ у канала"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = f"{Config.RECORDINGS_DIR}/{name}_{timestamp}.mp4"
+        output = str(self.recorder.build_output_path(name))
         
         task_id = self.recorder.start_recording(
             name, channel['url'], output, source="manual",
@@ -412,10 +412,37 @@ class AppWindow:
                 
         ttk.Button(dialog, text="Сохранить", command=save, style='TButton').grid(row=len(labels), column=0, columnspan=2, pady=20)
     
+    def _show_settings(self):
+        dialog = self._create_dialog("Settings", "600x190")
+        directory = tk.StringVar(value=str(Config.get_recordings_dir()))
+
+        ttk.Label(dialog, text="Recording folder:", style='Dialog.TLabel').grid(
+            row=0, column=0, padx=15, pady=(25, 10), sticky='w'
+        )
+        entry = ttk.Entry(dialog, textvariable=directory, width=52, state='readonly', style='Dialog.TEntry')
+        entry.grid(row=0, column=1, padx=10, pady=(25, 10), sticky='ew')
+
+        def choose_folder():
+            selected = filedialog.askdirectory(parent=dialog, initialdir=directory.get())
+            if selected:
+                directory.set(selected)
+
+        def save():
+            try:
+                Config.set_recordings_dir(directory.get())
+                logger.info(f"Recording folder changed to: {Config.get_recordings_dir()}")
+                dialog.destroy()
+            except OSError as error:
+                messagebox.showerror("Settings", f"Could not use this folder:\n{error}", parent=dialog)
+
+        ttk.Button(dialog, text="Choose…", command=choose_folder).grid(row=1, column=1, padx=10, pady=5, sticky='w')
+        ttk.Button(dialog, text="Save", command=save).grid(row=2, column=1, padx=10, pady=15, sticky='e')
+        dialog.columnconfigure(1, weight=1)
+
     def _show_about(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("О программе")
-        dialog.geometry("400x300")
+        dialog.geometry("500x360")
         dialog.transient(self.root)
         dialog.resizable(False, False)
         
@@ -424,16 +451,16 @@ class AppWindow:
         
         content = f"""TV Recorder v{Config.APP_VERSION}
 
-Приложение для записи и просмотра 
-федеральных телеканалов России.
+Desktop application for previewing and recording TV streams.
 
-Источники данных:
-• Плейлисты и логотипы предоставлены 
-  проектом IPTVru 
-  (github.com/smolnp/IPTVru)
-  Лицензия: MIT
+Credits and data sources:
+• IPTVru (github.com/smolnp/IPTVru)
+  provides the playlist currently used to discover channels.
+• FFmpeg provides stream recording and preview capabilities.
+• Some channel logo URLs come from the playlist and Wikimedia Commons.
 
-Built for macOS"""
+TV Recorder is not affiliated with channels or source providers.
+Built for macOS."""
         
         label = ttk.Label(dialog, text=content, font=('Inter', 10), 
                          background=c['bg_primary'], foreground=c['text_primary'],

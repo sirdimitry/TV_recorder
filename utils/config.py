@@ -1,4 +1,5 @@
 # utils/config.py
+import json
 from pathlib import Path
 
 
@@ -13,6 +14,7 @@ class Config:
     DATA_DIR = BASE_DIR / "data"
     CHANNELS_FILE = DATA_DIR / "channels.json"
     SCHEDULE_FILE = DATA_DIR / "schedule.json"
+    SETTINGS_FILE = DATA_DIR / "settings.json"
     LOG_FILE = BASE_DIR / "logs" / "tv_recorder.log"
     RECORDINGS_DIR = BASE_DIR / "recordings"
     
@@ -37,4 +39,26 @@ class Config:
         """Создает необходимые директории при первом запуске"""
         cls.DATA_DIR.mkdir(exist_ok=True)
         cls.LOG_FILE.parent.mkdir(exist_ok=True)
-        cls.RECORDINGS_DIR.mkdir(exist_ok=True)
+        cls.get_recordings_dir().mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def get_recordings_dir(cls) -> Path:
+        """Returns the user-selected recordings directory or the project default."""
+        try:
+            settings = json.loads(cls.SETTINGS_FILE.read_text(encoding='utf-8'))
+            selected = settings.get('recordings_dir')
+            if selected:
+                return Path(selected).expanduser()
+        except (OSError, json.JSONDecodeError):
+            pass
+        return cls.RECORDINGS_DIR
+
+    @classmethod
+    def set_recordings_dir(cls, directory: str | Path):
+        path = Path(directory).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        cls.DATA_DIR.mkdir(exist_ok=True)
+        cls.SETTINGS_FILE.write_text(
+            json.dumps({'recordings_dir': str(path)}, ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )

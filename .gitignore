@@ -26,6 +26,7 @@ wheels/
 # Данные приложения
 data/channels.json
 data/schedule.json
+data/settings.json
 logs/
 recordings/
 data/logos/
