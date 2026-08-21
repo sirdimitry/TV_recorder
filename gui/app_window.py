@@ -223,6 +223,25 @@ class AppWindow:
         app_menu.add_separator()
         app_menu.add_command(label="Выход", command=self._on_close)
         menubar.add_cascade(label="TV Recorder", menu=app_menu)
+
+        # Меню Edit: без него на macOS `root.config(menu=...)` полностью
+        # заменяет системное меню приложения, а вместе с ним — и скрытую
+        # в нём стандартную маршрутизацию Cmd+C/V/X/A в текстовые поля.
+        # Физическое нажатие Cmd+V без этого меню в принципе не доходит
+        # до виджета (хотя обычный ввод текста продолжает работать).
+        def edit_action(virtual_event):
+            widget = self.root.focus_get()
+            if widget is not None:
+                widget.event_generate(virtual_event)
+
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        edit_menu.add_command(label="Cut", accelerator="Cmd+X", command=lambda: edit_action('<<Cut>>'))
+        edit_menu.add_command(label="Copy", accelerator="Cmd+C", command=lambda: edit_action('<<Copy>>'))
+        edit_menu.add_command(label="Paste", accelerator="Cmd+V", command=lambda: edit_action('<<Paste>>'))
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Select All", accelerator="Cmd+A", command=lambda: edit_action('<<SelectAll>>'))
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+
         self.root.config(menu=menubar)
 
         # === ТУЛБАР ===
