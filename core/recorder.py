@@ -1,4 +1,5 @@
 # core/recorder.py
+import random
 import subprocess
 import threading
 import time
@@ -6,9 +7,12 @@ from datetime import datetime
 from pathlib import Path
 import re
 from typing import Optional, Callable, Dict
+from core.snapshot import grab_snapshot
 from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
+
+SNAPSHOT_INTERVAL = 5  # секунд между кадрами на одну запись
 
 
 class RecordingTask:
@@ -34,6 +38,8 @@ class RecordingTask:
         self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
         self.ended_early = False  # True, если ffmpeg сам дошёл до конца потока раньше, чем мы попросили его остановиться
         self.headers: Optional[dict] = None  # заголовки, с которыми реально шла запись — для live-превью того же потока
+        self.last_snapshot: Optional[bytes] = None  # JPEG-байты последнего пойманного кадра
+        self.snapshot_seq = 0  # растёт при каждом новом кадре — по нему потребители понимают, что картинку пора перерисовать
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -93,6 +99,12 @@ class Recorder:
         Можно вызывать несколько раз — панель записей и списки каналов/ссылок
         подписываются каждый на своё обновление."""
         self._ui_callbacks.append(callback)
+
+    def remove_ui_callback(self, callback: Callable):
+        """Снимает подписку — важно для окон, которые можно закрыть и открыть
+        заново (иначе список подписчиков растёт с каждым открытием)."""
+        if callback in self._ui_callbacks:
+            self._ui_callbacks.remove(callback)
 
     def find_active_task_id(self, channel_name: str) -> Optional[str]:
         """ID текущей активной (незавершённой) записи для этого имени, если есть."""
@@ -197,7 +209,8 @@ class Recorder:
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
             threading.Thread(target=self._wait_for_task, args=(task,), daemon=True).start()
-            
+            threading.Thread(target=self._snapshot_loop, args=(task,), daemon=True).start()
+
             if not self._running:
                 self._start_timer_loop()
             
@@ -287,7 +300,23 @@ class Recorder:
             task.on_complete(success, task.channel_name, task.output_path, task.ended_early)
 
         self._notify_ui()
-    
+
+    def _snapshot_loop(self, task: RecordingTask):
+        """Раз в ~5с достаёт один кадр из записываемого потока и кладёт его
+        на саму задачу — централизованно, одна петля на запись, а не по
+        одной на каждого, кто её отображает (панель записей + окно-монитор
+        независимо друг от друга дублировали бы одни и те же ffmpeg-вызовы)."""
+        # Небольшая случайная задержка перед первым кадром — чтобы при
+        # старте сразу нескольких записей снимки не били по CPU одним залпом.
+        time.sleep(random.uniform(0.2, 1.5))
+        while task.is_recording:
+            jpeg_bytes = grab_snapshot(task.stream_url, task.headers)
+            if jpeg_bytes:
+                task.last_snapshot = jpeg_bytes
+                task.snapshot_seq += 1
+                self._notify_ui()
+            time.sleep(SNAPSHOT_INTERVAL + random.uniform(0, 1.5))
+
     def _start_timer_loop(self):
         self._running = True
         

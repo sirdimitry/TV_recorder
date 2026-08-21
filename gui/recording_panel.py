@@ -11,17 +11,13 @@ from typing import Dict, Optional
 import customtkinter as ctk
 from PIL import Image
 
-import random
-
 from core.link_resolver import resolve_link
 from core.recorder import Recorder, RecordingTask
-from core.snapshot import grab_snapshot
+from core.snapshot import to_ctk_image
 from core.storage import Storage
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
-
-SNAPSHOT_INTERVAL_MS = 5000
 
 STATE_ACCENT = {
     'recording': 'red',
@@ -53,6 +49,10 @@ class RecordingPanel(ctk.CTkFrame):
     def _schedule_refresh(self):
         self.after(0, self._update_timers_only)
 
+    def _open_monitor(self):
+        from gui.recording_monitor import RecordingMonitorWindow
+        RecordingMonitorWindow.show(self.winfo_toplevel(), self.recorder)
+
     def _setup_ui(self):
         c = self.colors
         header_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -64,6 +64,10 @@ class RecordingPanel(ctk.CTkFrame):
         self.count_label = ctk.CTkLabel(header_frame, text="(0)", font=ctk.CTkFont(size=11),
                                          text_color=c['text_muted'])
         self.count_label.pack(side='left', padx=4)
+
+        ctk.CTkButton(header_frame, text="", image=get_icon('grid', c['text_primary'], 15),
+                      width=28, height=28, corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'],
+                      hover_color=c['bg_hover'], command=self._open_monitor).pack(side='right')
 
         self.list_frame = ctk.CTkScrollableFrame(self, fg_color='transparent')
         self.list_frame.pack(fill='both', expand=True, padx=6, pady=(0, 6))
@@ -120,6 +124,7 @@ class RecordingPanel(ctk.CTkFrame):
 
             widgets['timer'].configure(text=task.format_elapsed_time())
             widgets['period'].configure(text=task.format_recording_period())
+            self._apply_snapshot_if_changed(task, widgets)
 
             state = self._task_state(task)
             accent = self.colors[STATE_ACCENT[state]]
@@ -217,47 +222,20 @@ class RecordingPanel(ctk.CTkFrame):
         cropped = resized.crop((left, top, left + w, top + h))
         return ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, h))
 
-    def _start_snapshot_loop(self, task: RecordingTask, logo_lbl: ctk.CTkLabel):
-        """Раз в ~5с достаёт один кадр из записываемого потока и показывает
-        его вместо статичного логотипа — лёгкая замена живому видео: один
-        JPEG стоит копейки по CPU, в отличие от постоянного декодера."""
-        def tick():
-            if not logo_lbl.winfo_exists() or task.task_id not in self.task_widgets:
-                return
-            if not task.is_recording:
-                return  # запись остановилась — оставляем последний пойманный кадр
-
-            def worker():
-                jpeg_bytes = grab_snapshot(task.stream_url, task.headers)
-                if not jpeg_bytes:
-                    schedule_next()
-                    return
-                try:
-                    import io
-                    image = self._make_thumb_image(Image.open(io.BytesIO(jpeg_bytes)))
-                except Exception as e:
-                    logger.debug(f"RecordingPanel: ошибка снимка {task.channel_name}: {e}")
-                    schedule_next()
-                    return
-
-                def apply():
-                    if logo_lbl.winfo_exists():
-                        logo_lbl.configure(image=image)
-                        logo_lbl._logo_ref = image
-                    schedule_next()
-
-                self.after(0, apply)
-
-            threading.Thread(target=worker, daemon=True).start()
-
-        def schedule_next():
-            if logo_lbl.winfo_exists() and task.task_id in self.task_widgets and task.is_recording:
-                jitter = random.randint(0, 1500)
-                self.after(SNAPSHOT_INTERVAL_MS + jitter, tick)
-
-        # Небольшая случайная задержка перед первым кадром — чтобы при
-        # старте сразу нескольких записей ffmpeg-снимки не бились в CPU одним залпом.
-        self.after(random.randint(200, 1500), tick)
+    def _apply_snapshot_if_changed(self, task: RecordingTask, widgets: dict):
+        """Кадры для задачи берёт Recorder централизованно (одна петля на
+        запись, не на каждого отображающего её потребителя) — здесь только
+        перерисовываем картинку, когда номер кадра реально изменился."""
+        if not task.last_snapshot or task.snapshot_seq == widgets.get('snapshot_seq', 0):
+            return
+        try:
+            image = to_ctk_image(task.last_snapshot, self.THUMB_SIZE)
+        except Exception as e:
+            logger.debug(f"RecordingPanel: ошибка снимка {task.channel_name}: {e}")
+            return
+        widgets['logo_lbl'].configure(image=image)
+        widgets['logo_lbl']._logo_ref = image
+        widgets['snapshot_seq'] = task.snapshot_seq
 
     def _add_task_row(self, task: RecordingTask):
         c = self.colors
@@ -273,8 +251,6 @@ class RecordingPanel(ctk.CTkFrame):
                                  corner_radius=6, fg_color=c['bg_tertiary'])
         logo_lbl.pack(side='left', padx=(2, 8), pady=6)
         self._load_task_logo(task.channel_name, logo_lbl)
-        if task.is_recording:
-            self._start_snapshot_loop(task, logo_lbl)
 
         source_icon = 'bolt' if task.source == 'manual' else 'calendar'
         source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 13))
@@ -313,6 +289,8 @@ class RecordingPanel(ctk.CTkFrame):
 
         self.task_widgets[task.task_id] = {
             'row': row,
+            'logo_lbl': logo_lbl,
+            'snapshot_seq': 0,
             'accent_bar': accent_bar,
             'status_icon': status_icon,
             'timer': timer_lbl,

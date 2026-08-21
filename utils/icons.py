@@ -89,6 +89,16 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
         d.ellipse([cx-px*0.04, px*0.75-px*0.04, cx+px*0.04, px*0.75+px*0.04], fill=color)
         d.line([px*0.16, px*0.16, px*0.84, px*0.84], fill=color, width=stroke)
 
+    elif name == 'grid':
+        gap = px * 0.08
+        cell = (px * 0.84 - gap) / 2
+        r = px * 0.05
+        for row in range(2):
+            for col in range(2):
+                x0 = px * 0.08 + col * (cell + gap)
+                y0 = px * 0.08 + row * (cell + gap)
+                d.rounded_rectangle([x0, y0, x0 + cell, y0 + cell], radius=r, fill=color)
+
     elif name == 'bolt':
         d.polygon([(px*0.56, px*0.12), (px*0.24, px*0.56), (px*0.46, px*0.56),
                     (px*0.40, px*0.88), (px*0.78, px*0.40), (px*0.54, px*0.40)], fill=color)
