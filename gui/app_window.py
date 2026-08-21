@@ -10,9 +10,11 @@ from queue import Empty, Queue
 import customtkinter as ctk
 
 from gui.channel_list import ChannelList
+from gui.link_list import LinkList
 from gui.schedule_panel import SchedulePanel
 from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
+from core.link_resolver import resolve_link, guess_type
 from core.storage import Storage
 from core.scheduler import RecordingScheduler
 from core.recorder import Recorder
@@ -264,28 +266,54 @@ class AppWindow:
         ctk.CTkLabel(title_frame, text="TV Recorder", font=ctk.CTkFont(size=18, weight='bold'),
                      text_color=c['text_primary']).pack(side='left')
 
-        ctk.CTkButton(toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 14),
-                      compound='left', width=140, height=32, corner_radius=Config.RADIUS_SM,
-                      fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
-                      command=self._check_all_channels).pack(side='right', padx=(6, 0))
-        ctk.CTkButton(toolbar, text="Добавить канал", image=get_icon('plus', c['accent_text'], 14),
-                      compound='left', width=150, height=32, corner_radius=Config.RADIUS_SM,
-                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text'],
-                      command=self._add_channel_dialog).pack(side='right', padx=(6, 0))
+        self.btn_toolbar_check = ctk.CTkButton(
+            toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 14),
+            compound='left', width=140, height=32, corner_radius=Config.RADIUS_SM,
+            fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
+            command=self._toolbar_check_all)
+        self.btn_toolbar_check.pack(side='right', padx=(6, 0))
+
+        self.btn_toolbar_add = ctk.CTkButton(
+            toolbar, text="Добавить канал", image=get_icon('plus', c['accent_text'], 14),
+            compound='left', width=150, height=32, corner_radius=Config.RADIUS_SM,
+            fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text'],
+            command=self._toolbar_add)
+        self.btn_toolbar_add.pack(side='right', padx=(6, 0))
 
         # === ОСНОВНАЯ ОБЛАСТЬ: 2 КОЛОНКИ ===
         paned = ttk.PanedWindow(self.root, orient='horizontal')
         paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
 
         left_frame = ctk.CTkFrame(paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
+        self.left_tabview = ctk.CTkTabview(
+            left_frame, fg_color='transparent', corner_radius=Config.RADIUS,
+            segmented_button_fg_color=c['bg_tertiary'], segmented_button_selected_color=c['accent'],
+            segmented_button_selected_hover_color=c['accent_hover'], segmented_button_unselected_color=c['bg_tertiary'],
+            segmented_button_unselected_hover_color=c['bg_hover'], text_color=c['text_primary'],
+            command=self._on_left_tab_changed)
+        self.left_tabview.pack(fill='both', expand=True, padx=4, pady=(4, 0))
+
+        tab_channels = self.left_tabview.add("Каналы")
+        tab_links = self.left_tabview.add("Мои ссылки")
+
         self.channel_list = ChannelList(
-            left_frame,
+            tab_channels,
             on_select=self._on_channel_select,
             on_edit=self._edit_channel_dialog,
             on_record=self._record_channel_now,
             on_delete=self._delete_channel,
         )
         self.channel_list.pack(fill='both', expand=True)
+
+        self.link_list = LinkList(
+            tab_links,
+            on_select=self._on_channel_select,
+            on_edit=self._edit_link_dialog,
+            on_record=self._record_link_now,
+            on_delete=self._delete_link,
+        )
+        self.link_list.pack(fill='both', expand=True)
+
         paned.add(left_frame, weight=1)
 
         right_frame = ttk.Frame(paned)
@@ -306,12 +334,29 @@ class AppWindow:
         self.status_bar.pack(fill='x', side='bottom')
 
     def _refresh_data(self):
-        channels = self.storage.get_channels()
-        self.channel_list.load_channels(channels)
+        self.channel_list.load_channels(self.storage.get_channels())
+        self.link_list.load_links(self.storage.get_links())
         self.schedule_panel.refresh()
 
     def _check_all_channels(self):
         self.channel_list.check_all()
+
+    def _toolbar_check_all(self):
+        if self.left_tabview.get() == "Мои ссылки":
+            self.link_list.load_links(self.storage.get_links())
+        else:
+            self.channel_list.check_all()
+
+    def _toolbar_add(self):
+        if self.left_tabview.get() == "Мои ссылки":
+            self._add_link_dialog()
+        else:
+            self._add_channel_dialog()
+
+    def _on_left_tab_changed(self):
+        is_links = self.left_tabview.get() == "Мои ссылки"
+        self.btn_toolbar_add.configure(text="Добавить ссылку" if is_links else "Добавить канал")
+        self.btn_toolbar_check.configure(text="Обновить статус" if is_links else "Проверить все")
 
     def _on_channel_select(self, name: str):
         logger.info(f"Выбран канал: {name}")
@@ -337,6 +382,27 @@ class AppWindow:
 
         threading.Thread(target=start, daemon=True).start()
 
+    def _record_link_now(self, name: str, link: Dict):
+        """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
+        через yt-dlp (страница -> прямой поток), потом как обычно."""
+        output = str(self.recorder.build_output_path(name))
+
+        def start():
+            info = resolve_link(link.get('url', ''))
+            if not info.ok:
+                logger.error(f"Не удалось разобрать ссылку '{name}': {info.error}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Ошибка", f"Не удалось получить поток «{name}»:\n{info.error}"))
+                return
+            task_id = self.recorder.start_recording(
+                name, info.video_url, output, source="manual",
+                on_complete=self._on_record_complete, audio_url=info.audio_url,
+            )
+            if task_id:
+                logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
+
+        threading.Thread(target=start, daemon=True).start()
+
     def _on_record_complete(self, success: bool, channel_name: str, output_path: str):
         if success:
             logger.info(f"Запись завершена: {channel_name} → {output_path}")
@@ -347,6 +413,12 @@ class AppWindow:
         if messagebox.askyesno("Удалить канал", f"Удалить канал «{name}» из списка?\nЭто не затронет уже сделанные записи.",
                                 parent=self.root):
             self.storage.delete_channel(name)
+            self._refresh_data()
+
+    def _delete_link(self, name: str):
+        if messagebox.askyesno("Удалить ссылку", f"Удалить «{name}» из списка?\nЭто не затронет уже сделанные записи.",
+                                parent=self.root):
+            self.storage.delete_link(name)
             self._refresh_data()
 
     def _create_dialog(self, title: str, geo: str) -> ctk.CTkToplevel:
@@ -463,6 +535,135 @@ class AppWindow:
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
                       ).grid(row=len(labels), column=0, columnspan=2, pady=(16, 0), sticky='ew')
+
+    LINK_TYPE_OPTIONS = ['Авто', 'youtube', 'vk', 'rutube', 'twitch', '1tv', 'other']
+
+    def _add_link_dialog(self):
+        c = self.colors
+        dialog = self._create_dialog("Добавить ссылку", "480x300")
+        fields = {}
+
+        body = ctk.CTkFrame(dialog, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=20, pady=20)
+        body.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
+            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
+        fields['url'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                      placeholder_text="https://www.youtube.com/watch?v=…",
+                                      fg_color=c['bg_primary'], border_color=c['border'],
+                                      text_color=c['text_primary'])
+        fields['url'].grid(row=0, column=1, pady=8, sticky='ew')
+        bind_macos_shortcuts(fields['url'])
+
+        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
+            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
+        fields['name'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                       placeholder_text="Как показывать в списке",
+                                       fg_color=c['bg_primary'], border_color=c['border'],
+                                       text_color=c['text_primary'])
+        fields['name'].grid(row=1, column=1, pady=8, sticky='ew')
+        bind_macos_shortcuts(fields['name'])
+
+        ctk.CTkLabel(body, text="Тип:", text_color=c['text_secondary']).grid(
+            row=2, column=0, padx=(0, 12), pady=8, sticky='w')
+        type_var = tk.StringVar(value='Авто')
+        ctk.CTkOptionMenu(body, values=self.LINK_TYPE_OPTIONS, variable=type_var, height=32,
+                          corner_radius=Config.RADIUS_SM, fg_color=c['bg_primary'],
+                          button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
+                          text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
+
+        hint = ctk.CTkLabel(body, text="Название можно оставить пустым — заполним по названию страницы,\n"
+                                        "как только получится её открыть.",
+                             font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
+        hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+
+        def save():
+            url = fields['url'].get().strip()
+            name = fields['name'].get().strip()
+            if not url:
+                messagebox.showwarning("Внимание", "Вставьте ссылку", parent=dialog)
+                return
+            link_type = type_var.get()
+            if link_type == 'Авто':
+                link_type = guess_type(url)
+
+            def finish(display_name: str):
+                link = {'name': display_name, 'url': url, 'type': link_type}
+                self.storage.save_link(link)
+                self.root.after(0, self._refresh_data)
+
+            if name:
+                finish(name)
+                dialog.destroy()
+            else:
+                # Название не задано — пробуем узнать заголовок страницы
+                # через yt-dlp, не блокируя интерфейс диалогом ожидания.
+                dialog.destroy()
+
+                def resolve_name():
+                    info = resolve_link(url)
+                    finish(info.title if info.ok and info.title else url)
+
+                threading.Thread(target=resolve_name, daemon=True).start()
+
+        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
+                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
+                      ).grid(row=4, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+
+    def _edit_link_dialog(self, name: str, link: Dict):
+        c = self.colors
+        dialog = self._create_dialog(f"Редактировать: {name}", "480x260")
+        fields = {}
+
+        body = ctk.CTkFrame(dialog, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=20, pady=20)
+        body.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
+            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
+        fields['name'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                       fg_color=c['bg_primary'], border_color=c['border'],
+                                       text_color=c['text_primary'])
+        fields['name'].insert(0, link.get('name', ''))
+        fields['name'].grid(row=0, column=1, pady=8, sticky='ew')
+        bind_macos_shortcuts(fields['name'])
+
+        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
+            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
+        fields['url'] = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                      fg_color=c['bg_primary'], border_color=c['border'],
+                                      text_color=c['text_primary'])
+        fields['url'].insert(0, link.get('url', ''))
+        fields['url'].grid(row=1, column=1, pady=8, sticky='ew')
+        bind_macos_shortcuts(fields['url'])
+
+        ctk.CTkLabel(body, text="Тип:", text_color=c['text_secondary']).grid(
+            row=2, column=0, padx=(0, 12), pady=8, sticky='w')
+        type_var = tk.StringVar(value=link.get('type', 'other'))
+        ctk.CTkOptionMenu(body, values=self.LINK_TYPE_OPTIONS[1:], variable=type_var, height=32,
+                          corner_radius=Config.RADIUS_SM, fg_color=c['bg_primary'],
+                          button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
+                          text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
+
+        def save():
+            updated = {
+                'name': fields['name'].get().strip(),
+                'url': fields['url'].get().strip(),
+                'type': type_var.get(),
+            }
+            if updated['name'] and updated['url']:
+                if updated['name'] != name:
+                    self.storage.delete_link(name)
+                self.storage.save_link(updated)
+                self._refresh_data()
+                dialog.destroy()
+            else:
+                messagebox.showwarning("Внимание", "Заполните название и ссылку", parent=dialog)
+
+        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
+                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
+                      ).grid(row=3, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _show_settings(self):
         c = self.colors

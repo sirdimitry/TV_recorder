@@ -51,7 +51,7 @@ class TimeEntry(ctk.CTkEntry):
 class SchedulePanel(ctk.CTkFrame):
     """Панель управления расписанием записей"""
 
-    ACTIVE_COLUMN = '#4'
+    ACTIVE_COLUMN = '#5'
 
     def __init__(self, parent, on_schedule_changed: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
@@ -59,6 +59,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.storage = Storage()
         self.on_schedule_changed = on_schedule_changed
         self._channel_names: List[str] = []
+        self._link_names: List[str] = []
         self.run_status: Dict[int, str] = {}
 
         self._setup_ui()
@@ -78,10 +79,26 @@ class SchedulePanel(ctk.CTkFrame):
         ctk.CTkLabel(form_frame, text="Новая запись", font=ctk.CTkFont(size=11, weight='bold'),
                      text_color=c['text_secondary']).pack(anchor='w', padx=12, pady=(10, 4))
 
-        # Канал
+        # Источник: канал из списка IPTV или своя ссылка
+        source_frame = ctk.CTkFrame(form_frame, fg_color='transparent')
+        source_frame.pack(fill='x', padx=12, pady=(4, 0))
+        ctk.CTkLabel(source_frame, text="Источник:", text_color=c['text_secondary'], width=50, anchor='w').pack(side='left')
+
+        self.source_type_var = tk.StringVar(value='channel')
+        self.source_segmented = ctk.CTkSegmentedButton(
+            source_frame, values=['Канал', 'Ссылка'],
+            command=self._on_source_type_changed,
+            fg_color=c['bg_secondary'], selected_color=c['accent'], selected_hover_color=c['accent_hover'],
+            unselected_color=c['bg_secondary'], unselected_hover_color=c['bg_hover'],
+            text_color=c['text_primary'], text_color_disabled=c['text_muted'], height=28)
+        self.source_segmented.set('Канал')
+        self.source_segmented.pack(side='left', padx=6, fill='x', expand=True)
+
+        # Канал / ссылка
         channel_frame = ctk.CTkFrame(form_frame, fg_color='transparent')
         channel_frame.pack(fill='x', padx=12, pady=4)
-        ctk.CTkLabel(channel_frame, text="Канал:", text_color=c['text_secondary'], width=50, anchor='w').pack(side='left')
+        self.channel_label = ctk.CTkLabel(channel_frame, text="Канал:", text_color=c['text_secondary'], width=50, anchor='w')
+        self.channel_label.pack(side='left')
 
         self.channel_var = tk.StringVar(value='')
         self.channel_combo = ctk.CTkOptionMenu(channel_frame, values=[''], variable=self.channel_var,
@@ -159,20 +176,22 @@ class SchedulePanel(ctk.CTkFrame):
         table_frame = ctk.CTkFrame(self, fg_color='transparent')
         table_frame.pack(fill='both', expand=True, padx=10, pady=(0, 8))
 
-        columns = ('channel', 'time', 'days', 'active', 'status')
+        columns = ('channel', 'source', 'time', 'days', 'active', 'status')
         self.tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=8)
 
-        self.tree.heading('channel', text='Канал')
+        self.tree.heading('channel', text='Канал / ссылка')
+        self.tree.heading('source', text='Тип')
         self.tree.heading('time', text='Время')
         self.tree.heading('days', text='Дни')
         self.tree.heading('active', text='Активно')
         self.tree.heading('status', text='Статус')
 
         self.tree.column('channel', width=140)
+        self.tree.column('source', width=70, anchor='center')
         self.tree.column('time', width=110)
-        self.tree.column('days', width=140)
+        self.tree.column('days', width=120)
         self.tree.column('active', width=70, anchor='center')
-        self.tree.column('status', width=110, anchor='center')
+        self.tree.column('status', width=100, anchor='center')
 
         scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -183,13 +202,22 @@ class SchedulePanel(ctk.CTkFrame):
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         self.tree.bind('<Button-1>', self._on_tree_click, add='+')
 
+    def _on_source_type_changed(self, label: str):
+        self.source_type_var.set('link' if label == 'Ссылка' else 'channel')
+        self.channel_label.configure(text="Ссылка:" if label == 'Ссылка' else "Канал:")
+        self._refresh_source_dropdown()
+
+    def _refresh_source_dropdown(self):
+        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        self.channel_combo.configure(values=names or [''])
+        if self.channel_var.get() not in names:
+            self.channel_var.set(names[0] if names else '')
+
     def refresh(self):
-        """Обновляет таблицу и список каналов"""
-        channels = self.storage.get_channels()
-        self._channel_names = [ch['name'] for ch in channels]
-        self.channel_combo.configure(values=self._channel_names or [''])
-        if self.channel_var.get() not in self._channel_names:
-            self.channel_var.set(self._channel_names[0] if self._channel_names else '')
+        """Обновляет таблицу и списки источников"""
+        self._channel_names = [ch['name'] for ch in self.storage.get_channels()]
+        self._link_names = [l['name'] for l in self.storage.get_links()]
+        self._refresh_source_dropdown()
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -210,9 +238,11 @@ class SchedulePanel(ctk.CTkFrame):
 
             days_str = ', '.join([day_names_short[d] for d in safe_days])
             active_str = "✓" if item.get('enabled', True) else "—"
+            source_str = "Ссылка" if item.get('source_type', 'channel') == 'link' else "Канал"
 
             self.tree.insert('', 'end', iid=i, values=(
                 item.get('channel_name', ''),
+                source_str,
                 f"{item.get('start_time', '')} — {item.get('end_time', '')}",
                 days_str,
                 active_str,
@@ -239,8 +269,8 @@ class SchedulePanel(ctk.CTkFrame):
         item_id = str(index)
         if self.tree.exists(item_id):
             values = list(self.tree.item(item_id, 'values'))
-            if len(values) >= 5:
-                values[4] = self._format_status(status)
+            if len(values) >= 6:
+                values[5] = self._format_status(status)
                 self.tree.item(item_id, values=values)
 
     def _reindex_run_status_after_delete(self, deleted_index: int):
@@ -267,19 +297,20 @@ class SchedulePanel(ctk.CTkFrame):
             var.set(idx == today_idx)
 
     def _scroll_channel_selection(self, event, direction=None):
-        """Меняет канал колёсиком мыши или жестом двумя пальцами."""
-        if not self._channel_names:
+        """Меняет канал/ссылку колёсиком мыши или жестом двумя пальцами."""
+        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        if not names:
             return 'break'
         if direction is None:
             direction = -1 if event.delta > 0 else 1
         current = self.channel_var.get()
         try:
-            idx = self._channel_names.index(current)
+            idx = names.index(current)
         except ValueError:
-            idx = 0 if direction > 0 else len(self._channel_names) - 1
+            idx = 0 if direction > 0 else len(names) - 1
         else:
-            idx = max(0, min(len(self._channel_names) - 1, idx + direction))
-        self.channel_var.set(self._channel_names[idx])
+            idx = max(0, min(len(names) - 1, idx + direction))
+        self.channel_var.set(names[idx])
         return 'break'
 
     def _add_schedule(self):
@@ -297,6 +328,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         item = {
             'channel_name': channel_name,
+            'source_type': self.source_type_var.get(),
             'start_time': start,
             'end_time': end,
             'days': days,
@@ -329,6 +361,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         item = {
             'channel_name': channel_name,
+            'source_type': self.source_type_var.get(),
             'start_time': start,
             'end_time': end,
             'days': days,
@@ -390,6 +423,12 @@ class SchedulePanel(ctk.CTkFrame):
 
         item = schedule[index]
 
+        source_type = item.get('source_type', 'channel')
+        self.source_segmented.set('Ссылка' if source_type == 'link' else 'Канал')
+        self.source_type_var.set(source_type)
+        self.channel_label.configure(text="Ссылка:" if source_type == 'link' else "Канал:")
+        self._refresh_source_dropdown()
+
         self.channel_var.set(item.get('channel_name', ''))
         self.start_time.set_time(item.get('start_time', ''))
         self.end_time.set_time(item.get('end_time', ''))
@@ -429,7 +468,8 @@ class SchedulePanel(ctk.CTkFrame):
         return True
 
     def _clear_form(self):
-        self.channel_var.set(self._channel_names[0] if self._channel_names else '')
+        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        self.channel_var.set(names[0] if names else '')
         self.start_time.set_time('')
         self.end_time.set_time('')
         for var in self.day_vars.values():

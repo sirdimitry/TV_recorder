@@ -13,6 +13,7 @@ class Config:
     # Пути к данным
     DATA_DIR = BASE_DIR / "data"
     CHANNELS_FILE = DATA_DIR / "channels.json"
+    LINKS_FILE = DATA_DIR / "links.json"
     SCHEDULE_FILE = DATA_DIR / "schedule.json"
     SETTINGS_FILE = DATA_DIR / "settings.json"
     LOG_FILE = BASE_DIR / "logs" / "tv_recorder.log"

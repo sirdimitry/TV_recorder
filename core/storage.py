@@ -13,12 +13,15 @@ class Storage:
     def __init__(self):
         Config.init_dirs()
         self.channels_file = Config.CHANNELS_FILE
+        self.links_file = Config.LINKS_FILE
         self.schedule_file = Config.SCHEDULE_FILE
         self.default_channels_file = Config.BASE_DIR / "data" / "default_channels.json"
-        
+
         # Создаем файлы если не существуют
         if not self.channels_file.exists():
             self._save_json(self.channels_file, [])
+        if not self.links_file.exists():
+            self._save_json(self.links_file, [])
         if not self.schedule_file.exists():
             self._save_json(self.schedule_file, [])
             
@@ -72,7 +75,30 @@ class Storage:
         channels = [ch for ch in channels if ch.get('name') != name]
         self._save_json(self.channels_file, channels)
         logger.info(f"Канал удален: {name}")
-    
+
+    # === Вручную добавленные ссылки (YouTube/VK/RuTube/Twitch и т.п.) ===
+    def get_links(self) -> List[Dict]:
+        return self._load_json(self.links_file)
+
+    def save_link(self, link: Dict):
+        links = self.get_links()
+        found = False
+        for i, l in enumerate(links):
+            if l.get('name') == link.get('name'):
+                links[i] = link
+                found = True
+                break
+        if not found:
+            links.append(link)
+        self._save_json(self.links_file, links)
+        logger.info(f"Ссылка сохранена: {link.get('name')}")
+
+    def delete_link(self, name: str):
+        links = self.get_links()
+        links = [l for l in links if l.get('name') != name]
+        self._save_json(self.links_file, links)
+        logger.info(f"Ссылка удалена: {name}")
+
     # === Расписание ===
     def get_schedule(self) -> List[Dict]:
         return self._load_json(self.schedule_file)

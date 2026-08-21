@@ -11,6 +11,7 @@ from typing import Dict, Optional
 import customtkinter as ctk
 from PIL import Image
 
+from core.link_resolver import resolve_link
 from core.recorder import Recorder, RecordingTask
 from core.storage import Storage
 from utils.config import Config
@@ -156,6 +157,17 @@ class RecordingPanel(ctk.CTkFrame):
             channels = {c['name']: c for c in self.storage.get_channels()}
             channel = channels.get(channel_name)
             logo_url = channel.get('logo_url', '') if channel else ''
+
+            if not logo_url:
+                # Не нашли среди IPTV-каналов — это могла быть запись по
+                # вручную добавленной ссылке; там для превью используем
+                # уже разобранный через yt-dlp thumbnail, если он есть.
+                links = {l['name']: l for l in self.storage.get_links()}
+                link = links.get(channel_name)
+                if link:
+                    info = resolve_link(link.get('url', ''))
+                    if info.ok:
+                        logo_url = info.thumbnail
 
             image = None
             if logo_url:

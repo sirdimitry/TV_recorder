@@ -1,6 +1,9 @@
 requests>=2.31.0
 apscheduler>=3.10.0
-yt-dlp>=2024.0
+# YouTube changes frequently break older yt-dlp releases (extraction errors
+# like "Sign in to confirm you're not a bot" or "Requested format is not
+# available") — if links stop resolving, `pip install --upgrade yt-dlp` first.
+yt-dlp>=2025.06.01
 plyer>=2.1.0
 pyinstaller>=6.0.0
 customtkinter>=6.0.0

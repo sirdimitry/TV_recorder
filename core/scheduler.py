@@ -7,6 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from core.checker import StreamChecker, StreamStatus
+from core.link_resolver import resolve_link
 from core.notifier import Notifier
 from core.recorder import Recorder
 from core.storage import Storage
@@ -69,20 +70,24 @@ class RecordingScheduler:
         """Загружает все активные записи из хранилища."""
         schedule_items = self.storage.get_schedule()
         channels = {channel['name']: channel for channel in self.storage.get_channels()}
+        links = {link['name']: link for link in self.storage.get_links()}
 
         for index, item in enumerate(schedule_items):
             if not item.get('enabled', True):
                 continue
 
-            channel_name = item.get('channel_name')
-            channel = channels.get(channel_name)
-            if not channel:
-                logger.warning(f"Канал '{channel_name}' не найден для расписания #{index}")
+            name = item.get('channel_name')
+            source_type = item.get('source_type', 'channel')
+            source_map = links if source_type == 'link' else channels
+            target = source_map.get(name)
+            if not target:
+                kind = 'Ссылка' if source_type == 'link' else 'Канал'
+                logger.warning(f"{kind} '{name}' не найден(а) для расписания #{index}")
                 continue
 
-            self._add_job(index, item, channel)
+            self._add_job(index, item, target)
 
-    def _add_job(self, index: int, item: dict, channel: dict):
+    def _add_job(self, index: int, item: dict, target: dict):
         """Добавляет задачу в планировщик."""
         days = item.get('days', [])
         start_time = item.get('start_time', '00:00')
@@ -101,40 +106,51 @@ class RecordingScheduler:
         self.scheduler.add_job(
             self._pre_record_check,
             trigger=trigger,
-            args=[channel, duration, item, index],
+            args=[target, duration, item, index],
             id=f"recording_{index}",
             replace_existing=True,
         )
-        logger.info(f"Задача добавлена: {channel['name']} в {start_time} ({day_of_week})")
+        logger.info(f"Задача добавлена: {target['name']} в {start_time} ({day_of_week})")
 
-    def _pre_record_check(self, channel: dict, duration: int, schedule_item: dict, index: int):
+    def _pre_record_check(self, target: dict, duration: int, schedule_item: dict, index: int):
         """Проверка перед записью, вызываемая планировщиком."""
-        channel_name = channel.get('name', 'Unknown')
-        logger.info(f"Предварительная проверка: {channel_name}")
+        name = target.get('name', 'Unknown')
+        source_type = schedule_item.get('source_type', 'channel')
+        logger.info(f"Предварительная проверка: {name} ({source_type})")
         self._notify_status(index, 'checking')
-        status, message = self.checker.check(channel)
 
-        if status == StreamStatus.RED:
-            logger.error(f"Запись отменена: {channel_name} — {message}")
-            self.notifier.send("❌ Запись отменена", f"{channel_name}\n{message}")
-            self._notify_status(index, 'failed')
-            return
+        if source_type == 'link':
+            info = resolve_link(target.get('url', ''))
+            if not info.ok:
+                logger.error(f"Запись отменена: {name} — {info.error}")
+                self.notifier.send("❌ Запись отменена", f"{name}\n{info.error}")
+                self._notify_status(index, 'failed')
+                return
+            video_url, audio_url = info.video_url, info.audio_url
+        else:
+            status, message = self.checker.check(target)
+            if status == StreamStatus.RED:
+                logger.error(f"Запись отменена: {name} — {message}")
+                self.notifier.send("❌ Запись отменена", f"{name}\n{message}")
+                self._notify_status(index, 'failed')
+                return
+            if status == StreamStatus.YELLOW:
+                logger.warning(f"Запись с предупреждением: {name} — {message}")
+                self.notifier.send("⚠️ Запись начата с предупреждением", f"{name}\n{message}")
+            video_url, audio_url = target.get('url', ''), None
 
-        if status == StreamStatus.YELLOW:
-            logger.warning(f"Запись с предупреждением: {channel_name} — {message}")
-            self.notifier.send("⚠️ Запись начата с предупреждением", f"{channel_name}\n{message}")
-
-        output_path = self.recorder.build_output_path(channel_name)
+        output_path = self.recorder.build_output_path(name)
         self._notify_status(index, 'recording')
         task_id = self.recorder.start_recording(
-            channel_name=channel_name,
-            stream_url=channel.get('url', ''),
+            channel_name=name,
+            stream_url=video_url,
             output_path=str(output_path),
             source='schedule',
-            on_complete=lambda success, name, path, idx=index: self._on_recording_complete(success, name, path, idx),
+            on_complete=lambda success, n, path, idx=index: self._on_recording_complete(success, n, path, idx),
+            audio_url=audio_url,
         )
         if not task_id:
-            self._on_recording_error(channel_name, 'Не удалось запустить запись')
+            self._on_recording_error(name, 'Не удалось запустить запись')
             self._notify_status(index, 'failed')
             return
 

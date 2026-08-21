@@ -105,39 +105,57 @@ class Recorder:
             except Exception as e:
                 logger.error(f"Recorder: Ошибка UI callback: {e}")
     
-    def start_recording(self, channel_name: str, stream_url: str, 
+    def start_recording(self, channel_name: str, stream_url: str,
                        output_path: str, source: str = "manual",
-                       on_complete: Optional[Callable] = None) -> str:
+                       on_complete: Optional[Callable] = None,
+                       audio_url: Optional[str] = None) -> str:
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         task_id = f"{channel_name}_{int(time.time())}"
-        
+
         headers_info = self.CHANNEL_HEADERS.get(channel_name, {})
         ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
         ref = headers_info.get("ref", "https://www.google.com")
         headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
 
-        # Если это HLS-мастер-плейлист с несколькими битрейтами, пишем
-        # вариант ближе к 720p/3-5 Мбит вместо того, что выберет сам ffmpeg
-        # (обычно самый тяжёлый) — без перекодирования, просто другой
-        # исходный вариант для copy-режима.
-        stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
+        if audio_url:
+            # Видео и звук — уже отдельные закодированные дорожки (типично
+            # для YouTube на 720p+): просто мультиплексируем их в один файл,
+            # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
+            cmd = [
+                'ffmpeg', '-y',
+                '-headers', headers, '-i', stream_url,
+                '-headers', headers, '-i', audio_url,
+                '-map', '0:v:0', '-map', '1:a:0',
+                '-c', 'copy',
+                '-err_detect', 'ignore_err',
+                '-fflags', '+genpts+discardcorrupt',
+                '-avoid_negative_ts', 'make_zero',
+                '-movflags', '+faststart',
+                str(output_file)
+            ]
+        else:
+            # Если это HLS-мастер-плейлист с несколькими битрейтами, пишем
+            # вариант ближе к 720p/3-5 Мбит вместо того, что выберет сам
+            # ffmpeg (обычно самый тяжёлый) — без перекодирования, просто
+            # другой исходный вариант для copy-режима.
+            stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
 
-        cmd = [
-            'ffmpeg', '-y',
-            '-headers', headers,
-            '-i', stream_url,
-            '-c', 'copy',
-            '-err_detect', 'ignore_err',
-            '-max_error_rate', '100',
-            '-fflags', '+genpts+discardcorrupt',
-            '-avoid_negative_ts', 'make_zero',
-            '-movflags', '+faststart',
-            str(output_file)
-        ]
-        
+            cmd = [
+                'ffmpeg', '-y',
+                '-headers', headers,
+                '-i', stream_url,
+                '-c', 'copy',
+                '-err_detect', 'ignore_err',
+                '-max_error_rate', '100',
+                '-fflags', '+genpts+discardcorrupt',
+                '-avoid_negative_ts', 'make_zero',
+                '-movflags', '+faststart',
+                str(output_file)
+            ]
+
         task = RecordingTask(task_id, channel_name, stream_url, str(output_file), source)
         task.on_complete = on_complete
         
