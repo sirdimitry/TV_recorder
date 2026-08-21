@@ -205,7 +205,9 @@ class ChannelList(ctk.CTkFrame):
                 btn.configure(image=get_icon('record', c['red'], 18), fg_color='transparent')
 
     def _open_preview(self, channel: Dict):
-        from gui.mini_player import MiniPlayer
+        from core.recorder import Recorder
+        from gui.preview_popup import PreviewPopup
+
         name = channel.get('name', 'Unknown')
         url = channel.get('url', '')
 
@@ -213,8 +215,18 @@ class ChannelList(ctk.CTkFrame):
             messagebox.showwarning("Внимание", f"У канала '{name}' нет URL потока")
             return
 
+        headers_info = Recorder.CHANNEL_HEADERS.get(name, {})
+        headers = None
+        if headers_info:
+            headers = {}
+            if headers_info.get('ua'):
+                headers['User-Agent'] = headers_info['ua']
+            if headers_info.get('ref'):
+                headers['Referer'] = headers_info['ref']
+                headers['Origin'] = headers_info['ref']
+
         logger.info(f"Открыт предпросмотр: {name}")
-        MiniPlayer(self.root, name, url)
+        PreviewPopup.show(self.root, name, url, headers)
 
     def _check_single(self, name: str, status_dot: ctk.CTkLabel, channel: Dict):
         status_dot.configure(image=get_icon('record', self.colors['yellow'], 10))

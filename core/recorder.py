@@ -33,6 +33,7 @@ class RecordingTask:
         self.on_complete: Optional[Callable] = None
         self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
         self.ended_early = False  # True, если ffmpeg сам дошёл до конца потока раньше, чем мы попросили его остановиться
+        self.headers: Optional[dict] = None  # заголовки, с которыми реально шла запись — для live-превью того же потока
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -136,11 +137,13 @@ class Recorder:
             ua = extra_headers.get('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
             ref = extra_headers.get('Referer', '')
             headers = ''.join(f"{k}: {v}\r\n" for k, v in extra_headers.items())
+            headers_dict = dict(extra_headers)
         else:
             headers_info = self.CHANNEL_HEADERS.get(channel_name, {})
             ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
             ref = headers_info.get("ref", "https://www.google.com")
             headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
+            headers_dict = {"User-Agent": ua, "Referer": ref, "Origin": ref}
 
         if audio_url:
             # Видео и звук — уже отдельные закодированные дорожки (типично
@@ -180,6 +183,7 @@ class Recorder:
 
         task = RecordingTask(task_id, channel_name, stream_url, str(output_file), source)
         task.on_complete = on_complete
+        task.headers = headers_dict
         
         try:
             task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

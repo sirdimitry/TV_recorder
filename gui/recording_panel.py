@@ -11,12 +11,17 @@ from typing import Dict, Optional
 import customtkinter as ctk
 from PIL import Image
 
+import random
+
 from core.link_resolver import resolve_link
 from core.recorder import Recorder, RecordingTask
+from core.snapshot import grab_snapshot
 from core.storage import Storage
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
+
+SNAPSHOT_INTERVAL_MS = 5000
 
 STATE_ACCENT = {
     'recording': 'red',
@@ -149,7 +154,7 @@ class RecordingPanel(ctk.CTkFrame):
                               hover_color=c['bg_active'], command=command)
 
     ROW_HEIGHT = 56
-    LOGO_SIZE = 40
+    THUMB_SIZE = (58, 40)  # шире квадрата — снимок 16:9 обрезается меньше
 
     def _load_task_logo(self, channel_name: str, logo_lbl: ctk.CTkLabel):
         from utils.logo_cache import LogoCache
@@ -176,13 +181,7 @@ class RecordingPanel(ctk.CTkFrame):
                 logo_path = cache.get_logo_path(channel_name, logo_url)
                 if logo_path:
                     try:
-                        pil_img = Image.open(logo_path).convert('RGBA')
-                        pil_img.thumbnail((self.LOGO_SIZE, self.LOGO_SIZE), Image.LANCZOS)
-                        canvas = Image.new('RGBA', (self.LOGO_SIZE, self.LOGO_SIZE), (0, 0, 0, 0))
-                        offset = ((self.LOGO_SIZE - pil_img.width) // 2, (self.LOGO_SIZE - pil_img.height) // 2)
-                        canvas.paste(pil_img, offset, pil_img)
-                        image = ctk.CTkImage(light_image=canvas, dark_image=canvas,
-                                              size=(self.LOGO_SIZE, self.LOGO_SIZE))
+                        image = self._make_thumb_image(Image.open(logo_path))
                     except Exception as e:
                         logger.debug(f"RecordingPanel: ошибка отображения логотипа {channel_name}: {e}")
 
@@ -199,6 +198,67 @@ class RecordingPanel(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _make_thumb_image(self, pil_img: Image.Image) -> "ctk.CTkImage":
+        """Вписывает картинку в область THUMB_SIZE с обрезкой по центру
+        (а не сжатием) — так живой кадр 16:9 меньше искажается."""
+        w, h = self.THUMB_SIZE
+        pil_img = pil_img.convert('RGBA')
+        src_ratio = pil_img.width / pil_img.height
+        dst_ratio = w / h
+        if src_ratio > dst_ratio:
+            new_height = h
+            new_width = max(w, int(h * src_ratio))
+        else:
+            new_width = w
+            new_height = max(h, int(w / src_ratio))
+        resized = pil_img.resize((new_width, new_height), Image.LANCZOS)
+        left = (new_width - w) // 2
+        top = (new_height - h) // 2
+        cropped = resized.crop((left, top, left + w, top + h))
+        return ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, h))
+
+    def _start_snapshot_loop(self, task: RecordingTask, logo_lbl: ctk.CTkLabel):
+        """Раз в ~5с достаёт один кадр из записываемого потока и показывает
+        его вместо статичного логотипа — лёгкая замена живому видео: один
+        JPEG стоит копейки по CPU, в отличие от постоянного декодера."""
+        def tick():
+            if not logo_lbl.winfo_exists() or task.task_id not in self.task_widgets:
+                return
+            if not task.is_recording:
+                return  # запись остановилась — оставляем последний пойманный кадр
+
+            def worker():
+                jpeg_bytes = grab_snapshot(task.stream_url, task.headers)
+                if not jpeg_bytes:
+                    schedule_next()
+                    return
+                try:
+                    import io
+                    image = self._make_thumb_image(Image.open(io.BytesIO(jpeg_bytes)))
+                except Exception as e:
+                    logger.debug(f"RecordingPanel: ошибка снимка {task.channel_name}: {e}")
+                    schedule_next()
+                    return
+
+                def apply():
+                    if logo_lbl.winfo_exists():
+                        logo_lbl.configure(image=image)
+                        logo_lbl._logo_ref = image
+                    schedule_next()
+
+                self.after(0, apply)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def schedule_next():
+            if logo_lbl.winfo_exists() and task.task_id in self.task_widgets and task.is_recording:
+                jitter = random.randint(0, 1500)
+                self.after(SNAPSHOT_INTERVAL_MS + jitter, tick)
+
+        # Небольшая случайная задержка перед первым кадром — чтобы при
+        # старте сразу нескольких записей ffmpeg-снимки не бились в CPU одним залпом.
+        self.after(random.randint(200, 1500), tick)
+
     def _add_task_row(self, task: RecordingTask):
         c = self.colors
         row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
@@ -209,10 +269,12 @@ class RecordingPanel(ctk.CTkFrame):
         accent_bar = ctk.CTkFrame(row, fg_color=c['red'], width=4, corner_radius=2)
         accent_bar.pack(side='left', fill='y', padx=(0, 8), pady=6)
 
-        logo_lbl = ctk.CTkLabel(row, text="", width=self.LOGO_SIZE, height=self.LOGO_SIZE,
+        logo_lbl = ctk.CTkLabel(row, text="", width=self.THUMB_SIZE[0], height=self.THUMB_SIZE[1],
                                  corner_radius=6, fg_color=c['bg_tertiary'])
         logo_lbl.pack(side='left', padx=(2, 8), pady=6)
         self._load_task_logo(task.channel_name, logo_lbl)
+        if task.is_recording:
+            self._start_snapshot_loop(task, logo_lbl)
 
         source_icon = 'bolt' if task.source == 'manual' else 'calendar'
         source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 13))
