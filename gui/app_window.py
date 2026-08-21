@@ -285,15 +285,15 @@ class AppWindow:
                      text_color=c['text_primary']).pack(side='left')
 
         self.btn_toolbar_check = ctk.CTkButton(
-            toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 14),
-            compound='left', width=140, height=32, corner_radius=Config.RADIUS_SM,
+            toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 16),
+            compound='left', width=140, height=34, corner_radius=Config.RADIUS_SM,
             fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
             command=self._toolbar_check_all)
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
 
         self.btn_toolbar_add = ctk.CTkButton(
-            toolbar, text="Добавить канал", image=get_icon('plus', c['accent_text'], 14),
-            compound='left', width=150, height=32, corner_radius=Config.RADIUS_SM,
+            toolbar, text="Добавить канал", image=get_icon('plus', c['accent_text'], 16),
+            compound='left', width=150, height=34, corner_radius=Config.RADIUS_SM,
             fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text'],
             command=self._toolbar_add)
         self.btn_toolbar_add.pack(side='right', padx=(6, 0))
@@ -336,19 +336,19 @@ class AppWindow:
 
         paned.add(left_frame, weight=1)
 
-        right_frame = ttk.Frame(paned)
+        right_paned = ttk.PanedWindow(paned, orient='vertical')
 
-        schedule_container = ctk.CTkFrame(right_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
-        schedule_container.pack(fill='both', expand=True, pady=(0, 8))
+        schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
         self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed)
         self.schedule_panel.pack(fill='both', expand=True)
+        right_paned.add(schedule_container, weight=1)
 
-        recordings_container = ctk.CTkFrame(right_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
-        recordings_container.pack(fill='both', expand=True)
+        recordings_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
         self.recording_panel = RecordingPanel(recordings_container, self.recorder)
         self.recording_panel.pack(fill='both', expand=True)
+        right_paned.add(recordings_container, weight=1)
 
-        paned.add(right_frame, weight=1)
+        paned.add(right_paned, weight=1)
 
         self.status_bar = StatusBar(self.root)
         self.status_bar.pack(fill='x', side='bottom')
@@ -424,8 +424,10 @@ class AppWindow:
 
         threading.Thread(target=start, daemon=True).start()
 
-    def _on_record_complete(self, success: bool, channel_name: str, output_path: str):
-        if success:
+    def _on_record_complete(self, success: bool, channel_name: str, output_path: str, ended_early: bool = False):
+        if success and ended_early:
+            logger.warning(f"Запись завершена раньше срока (источник закончился сам): {channel_name} → {output_path}")
+        elif success:
             logger.info(f"Запись завершена: {channel_name} → {output_path}")
         else:
             logger.error(f"Ошибка записи: {channel_name}")

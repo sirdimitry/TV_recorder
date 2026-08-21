@@ -23,6 +23,7 @@ STATE_ACCENT = {
     'paused': 'yellow',
     'finalizing': 'yellow',
     'completed': 'green',
+    'ended_early': 'yellow',
     'failed': 'red',
 }
 
@@ -92,7 +93,7 @@ class RecordingPanel(ctk.CTkFrame):
         if task.is_recording:
             return 'recording'
         if task.success is True:
-            return 'completed'
+            return 'ended_early' if task.ended_early else 'completed'
         if task.success is False:
             return 'failed'
         return 'finalizing'
@@ -120,18 +121,18 @@ class RecordingPanel(ctk.CTkFrame):
             widgets['accent_bar'].configure(fg_color=accent)
 
             state_text = {
-                'paused': 'Paused', 'recording': 'Recording',
-                'completed': 'Completed', 'failed': 'Failed', 'finalizing': 'Finalizing',
+                'paused': 'Paused', 'recording': 'Recording', 'completed': 'Completed',
+                'ended_early': 'Ended early', 'failed': 'Failed', 'finalizing': 'Finalizing',
             }[state]
             widgets['result'].configure(text=state_text,
                                          text_color=self.colors['text_secondary'] if state == 'recording' else accent)
 
             widgets['status_icon'].configure(image=get_icon(
                 {'paused': 'pause', 'recording': 'record', 'completed': 'record',
-                 'failed': 'close', 'finalizing': 'record'}[state], accent, 12))
+                 'ended_early': 'signal_off', 'failed': 'close', 'finalizing': 'record'}[state], accent, 16))
 
             pause_icon = 'play' if task.is_paused else 'pause'
-            widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 12))
+            widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
             button_state = 'normal' if task.is_recording else 'disabled'
             widgets['btn_pause'].configure(state=button_state)
             widgets['btn_stop'].configure(state=button_state)
@@ -143,12 +144,12 @@ class RecordingPanel(ctk.CTkFrame):
 
     def _icon_button(self, parent, icon_name, command, color=None):
         c = self.colors
-        return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color or c['text_secondary'], 14),
-                              width=30, height=30, corner_radius=Config.RADIUS_SM, fg_color='transparent',
+        return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color or c['text_secondary'], 18),
+                              width=34, height=34, corner_radius=Config.RADIUS_SM, fg_color='transparent',
                               hover_color=c['bg_active'], command=command)
 
-    ROW_HEIGHT = 48
-    LOGO_SIZE = 30
+    ROW_HEIGHT = 56
+    LOGO_SIZE = 40
 
     def _load_task_logo(self, channel_name: str, logo_lbl: ctk.CTkLabel):
         from utils.logo_cache import LogoCache
@@ -214,10 +215,10 @@ class RecordingPanel(ctk.CTkFrame):
         self._load_task_logo(task.channel_name, logo_lbl)
 
         source_icon = 'bolt' if task.source == 'manual' else 'calendar'
-        source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 10))
+        source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 13))
         source_lbl.place(in_=logo_lbl, relx=1.0, rely=1.0, x=-1, y=-1, anchor='se')
 
-        status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 12))
+        status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 16))
         status_icon.pack(side='left', padx=(0, 6), pady=8)
 
         name_lbl = ctk.CTkLabel(row, text=task.channel_name, font=ctk.CTkFont(size=12, weight='bold'),

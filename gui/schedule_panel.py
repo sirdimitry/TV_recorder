@@ -255,6 +255,7 @@ class SchedulePanel(ctk.CTkFrame):
             'checking': '… проверка',
             'recording': '● идёт',
             'completed': '✓ готово',
+            'ended_early': '⚠ раньше',
             'failed': '✕ ошибка',
         }.get(status, '—')
 

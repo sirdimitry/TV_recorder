@@ -147,7 +147,7 @@ class RecordingScheduler:
             stream_url=video_url,
             output_path=str(output_path),
             source='schedule',
-            on_complete=lambda success, n, path, idx=index: self._on_recording_complete(success, n, path, idx),
+            on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
             audio_url=audio_url,
             extra_headers=extra_headers,
         )
@@ -160,8 +160,14 @@ class RecordingScheduler:
         timer.daemon = True
         timer.start()
 
-    def _on_recording_complete(self, success: bool, channel_name: str, file_path: str, index: Optional[int] = None):
-        if success:
+    def _on_recording_complete(self, success: bool, channel_name: str, file_path: str,
+                                ended_early: bool = False, index: Optional[int] = None):
+        if success and ended_early:
+            self.notifier.send("⚠️ Запись завершена раньше срока",
+                                f"{channel_name}\nЭфир или файл закончились раньше, чем длилось окно записи.\n{file_path}")
+            if index is not None:
+                self._notify_status(index, 'ended_early')
+        elif success:
             self.notifier.send("✅ Запись завершена", f"{channel_name}\n{file_path}")
             if index is not None:
                 self._notify_status(index, 'completed')

@@ -31,6 +31,8 @@ class RecordingTask:
         self.success: Optional[bool] = None
         self.error_message = ""
         self.on_complete: Optional[Callable] = None
+        self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
+        self.ended_early = False  # True, если ffmpeg сам дошёл до конца потока раньше, чем мы попросили его остановиться
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -211,6 +213,7 @@ class Recorder:
         if task and task.process:
             logger.info(f"Recorder: Остановка записи '{task.channel_name}' (task: {task_id})")
             task.final_duration = task.get_elapsed_time()
+            task.stop_requested = True
             task.process.terminate()
             task.is_recording = False
             self._notify_ui()
@@ -260,18 +263,25 @@ class Recorder:
         has_usable_file = output_file.is_file() and output_file.stat().st_size > 1024
         success = success and has_usable_file
         task.success = success
+        # Если ffmpeg сам дошёл до конца потока (и мы его об этом не просили) —
+        # значит источник закончился раньше, чем длилось окно записи: эфир
+        # прервался или закончился сам записываемый файл/ролик.
+        task.ended_early = success and not task.stop_requested
         if success:
-            logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
+            if task.ended_early:
+                logger.warning(f"Recorder: '{task.channel_name}' — источник закончился раньше окна записи")
+            else:
+                logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
         else:
             err_msg = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
             if not has_usable_file:
                 err_msg = "Recording finished without creating a usable video file. " + err_msg
             task.error_message = err_msg
             logger.error(f"Recorder: Ошибка записи '{task.channel_name}' (code {returncode}): {err_msg}")
-        
+
         if task.on_complete:
-            task.on_complete(success, task.channel_name, task.output_path)
-        
+            task.on_complete(success, task.channel_name, task.output_path, task.ended_early)
+
         self._notify_ui()
     
     def _start_timer_loop(self):
@@ -296,6 +306,7 @@ class Recorder:
             for task in self.tasks.values():
                 if task.process and task.is_recording:
                     task.final_duration = task.get_elapsed_time()
+                    task.stop_requested = True
                     task.process.terminate()
                     task.is_recording = False
             self.tasks.clear()

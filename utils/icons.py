@@ -81,6 +81,14 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
             d.arc(bbox, start=225, end=315, fill=color, width=stroke)
         d.ellipse([cx-px*0.04, px*0.75-px*0.04, cx+px*0.04, px*0.75+px*0.04], fill=color)
 
+    elif name == 'signal_off':
+        cx = px*0.5
+        for i, r in enumerate((0.30, 0.20, 0.10)):
+            bbox = [cx - px*r, px*0.75 - px*r, cx + px*r, px*0.75 + px*r]
+            d.arc(bbox, start=225, end=315, fill=color, width=stroke)
+        d.ellipse([cx-px*0.04, px*0.75-px*0.04, cx+px*0.04, px*0.75+px*0.04], fill=color)
+        d.line([px*0.16, px*0.16, px*0.84, px*0.84], fill=color, width=stroke)
+
     elif name == 'bolt':
         d.polygon([(px*0.56, px*0.12), (px*0.24, px*0.56), (px*0.46, px*0.56),
                     (px*0.40, px*0.88), (px*0.78, px*0.40), (px*0.54, px*0.40)], fill=color)
