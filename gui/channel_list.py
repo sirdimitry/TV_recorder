@@ -26,7 +26,7 @@ class ChannelList(ctk.CTkFrame):
 
     def __init__(self, parent, recorder=None, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
-                 on_delete: Optional[Callable] = None):
+                 on_delete: Optional[Callable] = None, on_preview: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.root = parent.winfo_toplevel()
         self.colors = Config.COLORS
@@ -35,6 +35,7 @@ class ChannelList(ctk.CTkFrame):
         self.on_edit = on_edit
         self.on_record = on_record
         self.on_delete = on_delete
+        self.on_preview = on_preview
         self.checker = StreamChecker()
         self.channel_widgets: Dict[str, dict] = {}
 
@@ -206,7 +207,6 @@ class ChannelList(ctk.CTkFrame):
 
     def _open_preview(self, channel: Dict):
         from core.recorder import Recorder
-        from gui.preview_popup import PreviewPopup
 
         name = channel.get('name', 'Unknown')
         url = channel.get('url', '')
@@ -226,7 +226,8 @@ class ChannelList(ctk.CTkFrame):
                 headers['Origin'] = headers_info['ref']
 
         logger.info(f"Открыт предпросмотр: {name}")
-        PreviewPopup.show(self.root, name, url, headers)
+        if self.on_preview:
+            self.on_preview(name, url, headers)
 
     def _check_single(self, name: str, status_dot: ctk.CTkLabel, channel: Dict):
         status_dot.configure(image=get_icon('record', self.colors['yellow'], 10))

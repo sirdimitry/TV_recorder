@@ -1,7 +1,7 @@
 # gui/app_window.py
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from typing import Dict
+from typing import Dict, Optional
 import time
 import threading
 import json
@@ -12,6 +12,7 @@ import customtkinter as ctk
 
 from gui.channel_list import ChannelList
 from gui.link_list import LinkList
+from gui.preview_panel import PreviewPanel
 from gui.schedule_panel import SchedulePanel, TimeEntry
 from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
@@ -304,6 +305,10 @@ class AppWindow:
         paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
 
         left_frame = ctk.CTkFrame(paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
+
+        self.preview_panel = PreviewPanel(left_frame)
+        self.preview_panel.pack(fill='x', padx=4, pady=(4, 0))
+
         self.left_tabview = ctk.CTkTabview(
             left_frame, fg_color='transparent', corner_radius=Config.RADIUS,
             segmented_button_fg_color=c['bg_tertiary'], segmented_button_selected_color=c['accent'],
@@ -322,6 +327,7 @@ class AppWindow:
             on_edit=self._edit_channel_dialog,
             on_record=self._record_channel_now,
             on_delete=self._delete_channel,
+            on_preview=self._show_channel_preview,
         )
         self.channel_list.pack(fill='both', expand=True)
 
@@ -381,6 +387,9 @@ class AppWindow:
 
     def _on_channel_select(self, name: str):
         logger.info(f"Выбран канал: {name}")
+
+    def _show_channel_preview(self, name: str, url: str, headers: Optional[Dict] = None):
+        self.preview_panel.show(name, url, headers)
 
     def _on_schedule_changed(self):
         self.scheduler.reload_schedules()
@@ -913,6 +922,7 @@ Built for macOS."""
 
     def _on_close(self):
         self._network_monitor_running = False
+        self.preview_panel.stop()
         self.scheduler.stop()
         self.recorder.stop_all()
         self.root.destroy()
