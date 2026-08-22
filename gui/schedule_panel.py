@@ -53,17 +53,20 @@ class SchedulePanel(ctk.CTkFrame):
 
     ACTIVE_COLUMN = '#5'
 
-    def __init__(self, parent, on_schedule_changed: Optional[Callable] = None):
+    def __init__(self, parent, on_schedule_changed: Optional[Callable] = None,
+                 on_record_now: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.colors = Config.COLORS
         self.storage = Storage()
         self.on_schedule_changed = on_schedule_changed
+        self.on_record_now = on_record_now
         self._channel_names: List[str] = []
         self._link_names: List[str] = []
+        self._browser_names: List[str] = []
         self.run_status: Dict[int, str] = {}
 
         self._setup_ui()
-        self._set_current_time()
+        self._apply_time_defaults()
         self.refresh()
 
     def _setup_ui(self):
@@ -86,7 +89,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.source_type_var = tk.StringVar(value='channel')
         self.source_segmented = ctk.CTkSegmentedButton(
-            source_frame, values=['Канал', 'Ссылка'],
+            source_frame, values=['Канал', 'Ссылка', 'Браузер'],
             command=self._on_source_type_changed,
             fg_color=c['bg_secondary'], selected_color=c['accent'], selected_hover_color=c['accent_hover'],
             unselected_color=c['bg_secondary'], unselected_hover_color=c['bg_hover'],
@@ -129,17 +132,18 @@ class SchedulePanel(ctk.CTkFrame):
         self.date_label = ctk.CTkLabel(time_frame, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'])
         self.date_label.pack(side='left', padx=(12, 0))
 
-        # Дни недели
-        days_frame = ctk.CTkFrame(form_frame, fg_color='transparent')
-        days_frame.pack(fill='x', padx=12, pady=6)
-        ctk.CTkLabel(days_frame, text="Дни:", text_color=c['text_secondary'], width=50, anchor='w').pack(side='left')
+        # Дни недели — только для каналов (у ссылки/браузера нет еженедельного
+        # эфира, это разовая запись по хронометражу; скрывается в _on_source_type_changed)
+        self.days_frame = ctk.CTkFrame(form_frame, fg_color='transparent')
+        self.days_frame.pack(fill='x', padx=12, pady=6)
+        ctk.CTkLabel(self.days_frame, text="Дни:", text_color=c['text_secondary'], width=50, anchor='w').pack(side='left')
 
         self.day_vars = {}
         day_names = [('Пн', 0), ('Вт', 1), ('Ср', 2), ('Чт', 3), ('Пт', 4), ('Сб', 5), ('Вс', 6)]
         for name, idx in day_names:
             var = tk.BooleanVar()
             self.day_vars[idx] = var
-            ctk.CTkCheckBox(days_frame, text=name, variable=var, width=20, checkbox_width=18, checkbox_height=18,
+            ctk.CTkCheckBox(self.days_frame, text=name, variable=var, width=20, checkbox_width=18, checkbox_height=18,
                              font=ctk.CTkFont(size=11), fg_color=c['accent'], hover_color=c['accent_hover'],
                              text_color=c['text_primary'], border_color=c['border']).pack(side='left', padx=3)
 
@@ -166,6 +170,15 @@ class SchedulePanel(ctk.CTkFrame):
                                               text_color=c['text_primary'], state='disabled',
                                               command=self._delete_from_form)
         self.btn_delete_form.pack(side='left', padx=4)
+
+        # Записать выбранную строку прямо сейчас, не дожидаясь её времени в
+        # расписании.
+        self.btn_record_now = ctk.CTkButton(btn_frame, text="Сейчас", image=get_icon('record', c['red'], 12),
+                                             compound='left', height=30, corner_radius=Config.RADIUS_SM,
+                                             fg_color=c['bg_secondary'], hover_color=c['bg_hover'],
+                                             text_color=c['text_primary'], state='disabled',
+                                             command=self._record_selected_now)
+        self.btn_record_now.pack(side='left', padx=4)
 
         self.btn_clear_form = ctk.CTkButton(btn_frame, text="Очистить", height=30, corner_radius=Config.RADIUS_SM,
                                              fg_color='transparent', hover_color=c['bg_hover'],
@@ -202,13 +215,25 @@ class SchedulePanel(ctk.CTkFrame):
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         self.tree.bind('<Button-1>', self._on_tree_click, add='+')
 
+    LABEL_TO_TYPE = {'Канал': 'channel', 'Ссылка': 'link', 'Браузер': 'browser'}
+    TYPE_TO_LABEL = {'channel': 'Канал', 'link': 'Ссылка', 'browser': 'Браузер'}
+
+    def _names_for(self, source_type: str) -> List[str]:
+        if source_type == 'link':
+            return self._link_names
+        if source_type == 'browser':
+            return self._browser_names
+        return self._channel_names
+
     def _on_source_type_changed(self, label: str):
-        self.source_type_var.set('link' if label == 'Ссылка' else 'channel')
-        self.channel_label.configure(text="Ссылка:" if label == 'Ссылка' else "Канал:")
+        source_type = self.LABEL_TO_TYPE.get(label, 'channel')
+        self.source_type_var.set(source_type)
+        self.channel_label.configure(text="Канал:" if source_type == 'channel' else "Ссылка:")
         self._refresh_source_dropdown()
+        self._apply_time_defaults()
 
     def _refresh_source_dropdown(self):
-        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        names = self._names_for(self.source_type_var.get())
         self.channel_combo.configure(values=names or [''])
         if self.channel_var.get() not in names:
             self.channel_var.set(names[0] if names else '')
@@ -217,6 +242,7 @@ class SchedulePanel(ctk.CTkFrame):
         """Обновляет таблицу и списки источников"""
         self._channel_names = [ch['name'] for ch in self.storage.get_channels()]
         self._link_names = [l['name'] for l in self.storage.get_links()]
+        self._browser_names = [l['name'] for l in self.storage.get_browser_links()]
         self._refresh_source_dropdown()
 
         for item in self.tree.get_children():
@@ -238,7 +264,7 @@ class SchedulePanel(ctk.CTkFrame):
 
             days_str = ', '.join([day_names_short[d] for d in safe_days])
             active_str = "✓" if item.get('enabled', True) else "—"
-            source_str = "Ссылка" if item.get('source_type', 'channel') == 'link' else "Канал"
+            source_str = self.TYPE_TO_LABEL.get(item.get('source_type', 'channel'), 'Канал')
 
             self.tree.insert('', 'end', iid=i, values=(
                 item.get('channel_name', ''),
@@ -284,22 +310,35 @@ class SchedulePanel(ctk.CTkFrame):
                 shifted[idx - 1] = status
         self.run_status = shifted
 
-    def _set_current_time(self):
-        """Подставляет системные дату, время и сегодняшний день недели."""
+    def _apply_time_defaults(self):
+        """Каналу — текущее время и день недели (это эфир, идёт сейчас).
+        Ссылке/браузеру — нет: это не эфир по расписанию, а разовая запись
+        с чётким хронометражем, привязывать её к времени на компьютере
+        только сбивает с толку. Время начала — 00:00, конец пользователь
+        вводит сам исходя из длительности записи. День недели скрыт —
+        internally берётся сегодняшний, раз запись разовая."""
         now = datetime.now()
-        self.start_time.set_time(now.strftime("%H:%M"))
-        self.end_time.set_time(now.strftime("%H:%M"))
-
         day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-        self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
 
-        today_idx = now.weekday()
-        for idx, var in self.day_vars.items():
-            var.set(idx == today_idx)
+        if self.source_type_var.get() == 'channel':
+            self.days_frame.pack(fill='x', padx=12, pady=6)
+            self.start_time.set_time(now.strftime("%H:%M"))
+            self.end_time.set_time(now.strftime("%H:%M"))
+            self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
+            today_idx = now.weekday()
+            for idx, var in self.day_vars.items():
+                var.set(idx == today_idx)
+        else:
+            self.days_frame.pack_forget()
+            self.start_time.set_time("00:00")
+            self.end_time.set_time("")
+            self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
+            for var in self.day_vars.values():
+                var.set(False)
 
     def _scroll_channel_selection(self, event, direction=None):
         """Меняет канал/ссылку колёсиком мыши или жестом двумя пальцами."""
-        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        names = self._names_for(self.source_type_var.get())
         if not names:
             return 'break'
         if direction is None:
@@ -314,6 +353,14 @@ class SchedulePanel(ctk.CTkFrame):
         self.channel_var.set(names[idx])
         return 'break'
 
+    def _days_for_save(self) -> List[int]:
+        """Для канала — что отмечено галочками. Для ссылки/браузера дни
+        скрыты (разовая запись, не еженедельный эфир) — подставляем
+        сегодняшний, как и в диалогах добавления ссылки."""
+        if self.source_type_var.get() != 'channel':
+            return [datetime.now().weekday()]
+        return [idx for idx, var in self.day_vars.items() if var.get()]
+
     def _add_schedule(self):
         channel_name = self.channel_var.get()
         start = self.start_time.get().strip()
@@ -322,7 +369,7 @@ class SchedulePanel(ctk.CTkFrame):
         if not self._valid_form(channel_name, start, end):
             return
 
-        days = [idx for idx, var in self.day_vars.items() if var.get()]
+        days = self._days_for_save()
         if not days:
             messagebox.showwarning("Внимание", "Выберите хотя бы один день")
             return
@@ -358,7 +405,7 @@ class SchedulePanel(ctk.CTkFrame):
         if not self._valid_form(channel_name, start, end):
             return
 
-        days = [idx for idx, var in self.day_vars.items() if var.get()]
+        days = self._days_for_save()
 
         item = {
             'channel_name': channel_name,
@@ -425,10 +472,14 @@ class SchedulePanel(ctk.CTkFrame):
         item = schedule[index]
 
         source_type = item.get('source_type', 'channel')
-        self.source_segmented.set('Ссылка' if source_type == 'link' else 'Канал')
+        self.source_segmented.set(self.TYPE_TO_LABEL.get(source_type, 'Канал'))
         self.source_type_var.set(source_type)
-        self.channel_label.configure(text="Ссылка:" if source_type == 'link' else "Канал:")
+        self.channel_label.configure(text="Канал:" if source_type == 'channel' else "Ссылка:")
         self._refresh_source_dropdown()
+        if source_type == 'channel':
+            self.days_frame.pack(fill='x', padx=12, pady=6)
+        else:
+            self.days_frame.pack_forget()
 
         self.channel_var.set(item.get('channel_name', ''))
         self.start_time.set_time(item.get('start_time', ''))
@@ -444,6 +495,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.btn_add.configure(state='disabled')
         self.btn_update.configure(state='normal')
         self.btn_delete_form.configure(state='normal')
+        self.btn_record_now.configure(state='normal' if self.on_record_now else 'disabled')
 
     @staticmethod
     def _is_valid_time(value: str) -> bool:
@@ -469,17 +521,40 @@ class SchedulePanel(ctk.CTkFrame):
         return True
 
     def _clear_form(self):
-        names = self._link_names if self.source_type_var.get() == 'link' else self._channel_names
+        names = self._names_for(self.source_type_var.get())
         self.channel_var.set(names[0] if names else '')
-        self.start_time.set_time('')
-        self.end_time.set_time('')
-        for var in self.day_vars.values():
-            var.set(False)
 
         self._clear_form_buttons()
-        self._set_current_time()
+        self._apply_time_defaults()
 
     def _clear_form_buttons(self):
         self.btn_add.configure(state='normal')
         self.btn_update.configure(state='disabled')
         self.btn_delete_form.configure(state='disabled')
+        self.btn_record_now.configure(state='disabled')
+
+    def _record_selected_now(self):
+        selected = self.tree.selection()
+        if not selected or not self.on_record_now:
+            return
+        index = int(selected[0])
+        schedule = self.storage.get_schedule()
+        if index >= len(schedule):
+            return
+        item = schedule[index]
+        source_type = item.get('source_type', 'channel')
+        name = item.get('channel_name', '')
+
+        if source_type == 'link':
+            target = next((l for l in self.storage.get_links() if l.get('name') == name), None)
+        elif source_type == 'browser':
+            target = next((l for l in self.storage.get_browser_links() if l.get('name') == name), None)
+        else:
+            target = next((ch for ch in self.storage.get_channels() if ch.get('name') == name), None)
+
+        if not target:
+            messagebox.showwarning("Внимание", f"«{name}» не найден(а) — возможно, был(а) удалён(а)")
+            return
+
+        self.on_record_now(source_type, name, target)
+        logger.info(f"Запись выбранной строки расписания сейчас: {name} ({source_type})")

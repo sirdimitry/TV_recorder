@@ -14,6 +14,7 @@ class Storage:
         Config.init_dirs()
         self.channels_file = Config.CHANNELS_FILE
         self.links_file = Config.LINKS_FILE
+        self.browser_links_file = Config.BROWSER_LINKS_FILE
         self.schedule_file = Config.SCHEDULE_FILE
         self.default_channels_file = Config.BASE_DIR / "data" / "default_channels.json"
 
@@ -22,6 +23,8 @@ class Storage:
             self._save_json(self.channels_file, [])
         if not self.links_file.exists():
             self._save_json(self.links_file, [])
+        if not self.browser_links_file.exists():
+            self._save_json(self.browser_links_file, [])
         if not self.schedule_file.exists():
             self._save_json(self.schedule_file, [])
             
@@ -98,6 +101,30 @@ class Storage:
         links = [l for l in links if l.get('name') != name]
         self._save_json(self.links_file, links)
         logger.info(f"Ссылка удалена: {name}")
+
+    # === Ссылки в режиме браузера (захват экрана — для сайтов, чью прямую
+    # ссылку на поток получить не удалось, см. core/link_resolver.py) ===
+    def get_browser_links(self) -> List[Dict]:
+        return self._load_json(self.browser_links_file)
+
+    def save_browser_link(self, link: Dict):
+        links = self.get_browser_links()
+        found = False
+        for i, l in enumerate(links):
+            if l.get('name') == link.get('name'):
+                links[i] = link
+                found = True
+                break
+        if not found:
+            links.append(link)
+        self._save_json(self.browser_links_file, links)
+        logger.info(f"Ссылка (браузер) сохранена: {link.get('name')}")
+
+    def delete_browser_link(self, name: str):
+        links = self.get_browser_links()
+        links = [l for l in links if l.get('name') != name]
+        self._save_json(self.browser_links_file, links)
+        logger.info(f"Ссылка (браузер) удалена: {name}")
 
     # === Расписание ===
     def get_schedule(self) -> List[Dict]:

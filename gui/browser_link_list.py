@@ -1,26 +1,26 @@
-# gui/link_list.py
-import threading
-from tkinter import messagebox
+# gui/browser_link_list.py
+import subprocess
+import sys
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
-from PIL import Image
 
-from core.link_resolver import resolve_link
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
 
-TYPE_LABELS = {
-    'youtube': 'YOUTUBE', 'vk': 'VK', 'rutube': 'RUTUBE',
-    'twitch': 'TWITCH', '1tv': '1TV', 'other': 'ССЫЛКА',
-}
 
+class BrowserLinkList(ctk.CTkFrame):
+    """Список ссылок в режиме браузера — сайты, чью прямую ссылку на поток
+    получить не удалось (core/link_resolver.py). Запись здесь не -c copy
+    потока, а захват экрана поверх окна встроенного браузера
+    (core/screen_capture.py, gui/browser_capture.py): пользователь сам
+    открывает плеер на странице и включает fullscreen.
 
-class LinkList(ctk.CTkFrame):
-    """Список вручную добавленных ссылок (YouTube/VK/RuTube/Twitch/страницы
-    с эфиром или готовой записью) — карточки с превью, статусом live/VOD
-    и теми же действиями, что и у обычных каналов."""
+    Отдельная вкладка от "Мои ссылки" — намеренно: у обычных ссылок есть
+    прямой поток и понятный live/VOD статус, здесь его в принципе нет,
+    смешение только путает."""
 
     LOGO_SIZE = 38
     ROW_HEIGHT = 60
@@ -45,12 +45,14 @@ class LinkList(ctk.CTkFrame):
 
     def _setup_ui(self):
         c = self.colors
-        header = ctk.CTkLabel(self, text="МОИ ССЫЛКИ", font=ctk.CTkFont(size=12, weight='bold'),
+        header = ctk.CTkLabel(self, text="БРАУЗЕР", font=ctk.CTkFont(size=12, weight='bold'),
                                text_color=c['text_secondary'])
         header.pack(fill='x', padx=14, pady=(12, 6), anchor='w')
 
-        hint = ctk.CTkLabel(self, text="Прямой эфир или готовая запись с YouTube, VK, RuTube, Twitch и т.п.",
-                             font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=280, justify='left')
+        hint = ctk.CTkLabel(
+            self, text="Для сайтов без прямой ссылки на поток: открывается окно-браузер, "
+                       "fullscreen в плеере включаете сами — пишется экран.",
+            font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=280, justify='left')
         hint.pack(fill='x', padx=14, pady=(0, 8), anchor='w')
 
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color='transparent')
@@ -74,7 +76,6 @@ class LinkList(ctk.CTkFrame):
     def _add_link_row(self, link: Dict):
         c = self.colors
         name = link.get('name', 'Unknown')
-        link_type = link.get('type', 'other')
 
         row = ctk.CTkFrame(self.scroll_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
                            height=self.ROW_HEIGHT)
@@ -93,9 +94,6 @@ class LinkList(ctk.CTkFrame):
         thumb_label.grid(row=0, column=0, padx=(10, 10), pady=8, sticky='ns')
         thumb_label.bind('<Button-1>', lambda e, l=link: self._open_preview(l))
 
-        live_dot = ctk.CTkLabel(row, text="", image=get_icon('record', c['text_muted'], 10))
-        live_dot.place(in_=thumb_label, relx=1.0, rely=1.0, x=-2, y=-2, anchor='se')
-
         info_frame = ctk.CTkFrame(row, fg_color='transparent')
         info_frame.grid(row=0, column=1, sticky='nsew', pady=8)
         row.columnconfigure(1, weight=1)
@@ -107,14 +105,10 @@ class LinkList(ctk.CTkFrame):
         badge_row = ctk.CTkFrame(info_frame, fg_color='transparent')
         badge_row.pack(anchor='w', pady=(3, 0))
 
-        badge = ctk.CTkLabel(badge_row, text=TYPE_LABELS.get(link_type, 'ССЫЛКА'),
+        badge = ctk.CTkLabel(badge_row, text="БРАУЗЕР",
                               font=ctk.CTkFont(size=9, weight='bold'), text_color=c['text_secondary'],
                               fg_color=c['bg_tertiary'], corner_radius=5, width=1, height=16)
         badge.pack(side='left', ipadx=4)
-
-        status_badge = ctk.CTkLabel(badge_row, text="", font=ctk.CTkFont(size=9, weight='bold'),
-                                     text_color=c['text_muted'], width=1, height=16)
-        status_badge.pack(side='left', padx=(6, 0))
 
         actions = ctk.CTkFrame(row, fg_color='transparent')
         actions.grid(row=0, column=2, padx=(4, 8), pady=8)
@@ -133,10 +127,7 @@ class LinkList(ctk.CTkFrame):
         btn_delete = icon_btn(actions, 'trash', c['text_secondary'], lambda n=name: self._on_delete(n))
         btn_delete.pack(side='left', padx=1)
 
-        self.link_widgets[name] = {
-            'row': row, 'thumb_label': thumb_label, 'live_dot': live_dot,
-            'status_badge': status_badge, 'btn_record': btn_record, 'link': link,
-        }
+        self.link_widgets[name] = {'row': row, 'btn_record': btn_record, 'link': link}
 
         for widget in (row, info_frame, label_name, badge_row):
             widget.bind('<Button-1>', lambda e, n=name: self._on_click(n))
@@ -144,49 +135,6 @@ class LinkList(ctk.CTkFrame):
             widget.bind('<Leave>', on_leave)
         row.bind('<Enter>', on_enter)
         row.bind('<Leave>', on_leave)
-
-        self._resolve_row(name, link, thumb_label, live_dot, status_badge)
-
-    def _resolve_row(self, name: str, link: Dict, thumb_label, live_dot, status_badge):
-        """Тянет превью и live/VOD статус через yt-dlp в фоне, не блокируя UI."""
-        def worker():
-            info = resolve_link(link.get('url', ''))
-            image = None
-            if info.ok and info.thumbnail:
-                try:
-                    from utils.logo_cache import LogoCache
-                    cache = LogoCache()
-                    thumb_path = cache.get_logo_path(name, info.thumbnail)
-                    if thumb_path:
-                        pil_img = Image.open(thumb_path).convert('RGBA')
-                        pil_img.thumbnail((self.LOGO_SIZE, self.LOGO_SIZE), Image.LANCZOS)
-                        canvas = Image.new('RGBA', (self.LOGO_SIZE, self.LOGO_SIZE), (0, 0, 0, 0))
-                        offset = ((self.LOGO_SIZE - pil_img.width) // 2, (self.LOGO_SIZE - pil_img.height) // 2)
-                        canvas.paste(pil_img, offset, pil_img)
-                        image = ctk.CTkImage(light_image=canvas, dark_image=canvas,
-                                              size=(self.LOGO_SIZE, self.LOGO_SIZE))
-                except Exception as e:
-                    logger.debug(f"LinkList: ошибка превью {name}: {e}")
-
-            def apply():
-                if name not in self.link_widgets:
-                    return
-                c = self.colors
-                if image is not None:
-                    thumb_label.configure(image=image)
-                    thumb_label._logo_ref = image
-                if info.ok:
-                    dot_color = c['red'] if info.is_live else c['green']
-                    live_dot.configure(image=get_icon('record', dot_color, 10))
-                    status_badge.configure(text="В ЭФИРЕ" if info.is_live else "ЗАПИСЬ",
-                                           text_color=c['red'] if info.is_live else c['text_secondary'])
-                else:
-                    live_dot.configure(image=get_icon('record', c['text_muted'], 10))
-                    status_badge.configure(text="НЕДОСТУПНО", text_color=c['text_muted'])
-
-            self.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _on_click(self, name: str):
         if self.on_select: self.on_select(name)
@@ -206,7 +154,7 @@ class LinkList(ctk.CTkFrame):
         if self.on_record:
             self.on_record(name, link)
         else:
-            logger.info(f"Запрос записи ссылки: {name}")
+            logger.info(f"Запрос записи (браузер): {name}")
 
     def _on_recorder_update(self):
         self.after(0, self._refresh_record_buttons)
@@ -224,13 +172,12 @@ class LinkList(ctk.CTkFrame):
                 btn.configure(image=get_icon('record', c['red'], 18), fg_color='transparent')
 
     def _open_preview(self, link: Dict):
+        """Открывает то же окно-браузер, что и при записи, но без захвата
+        экрана — чисто посмотреть."""
         name = link.get('name', 'Unknown')
         url = link.get('url', '')
-
         if not url:
-            messagebox.showwarning("Внимание", f"У «{name}» нет ссылки")
             return
-
-        from gui.mini_player import MiniPlayer
-        logger.info(f"Открыт полноэкранный предпросмотр: {name}")
-        MiniPlayer(self.root, name, url, fullscreen=True, resolve_via_ytdlp=True)
+        browser_script = Path(__file__).resolve().parent / 'browser_capture.py'
+        subprocess.Popen([sys.executable, str(browser_script), url, name])
+        logger.info(f"Открыто окно-браузер (просмотр без записи): {name}")

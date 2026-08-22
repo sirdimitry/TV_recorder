@@ -71,6 +71,7 @@ class RecordingScheduler:
         schedule_items = self.storage.get_schedule()
         channels = {channel['name']: channel for channel in self.storage.get_channels()}
         links = {link['name']: link for link in self.storage.get_links()}
+        browser_links = {link['name']: link for link in self.storage.get_browser_links()}
 
         for index, item in enumerate(schedule_items):
             if not item.get('enabled', True):
@@ -78,10 +79,15 @@ class RecordingScheduler:
 
             name = item.get('channel_name')
             source_type = item.get('source_type', 'channel')
-            source_map = links if source_type == 'link' else channels
+            if source_type == 'browser':
+                source_map = browser_links
+            elif source_type == 'link':
+                source_map = links
+            else:
+                source_map = channels
             target = source_map.get(name)
             if not target:
-                kind = 'Ссылка' if source_type == 'link' else 'Канал'
+                kind = {'link': 'Ссылка', 'browser': 'Ссылка (браузер)'}.get(source_type, 'Канал')
                 logger.warning(f"{kind} '{name}' не найден(а) для расписания #{index}")
                 continue
 
@@ -120,10 +126,10 @@ class RecordingScheduler:
         self._notify_status(index, 'checking')
 
         extra_headers = None
-        if source_type == 'link' and target.get('capture_mode') == 'browser':
-            # Ссылка сохранена в режиме браузера (link_resolver не смог
-            # получить прямую ссылку на поток при добавлении) — вместо
-            # обычной pre-record проверки сразу запускаем захват экрана.
+        if source_type == 'browser':
+            # Ссылка из вкладки "Браузер" (link_resolver не смог получить
+            # прямую ссылку на поток при добавлении) — вместо обычной
+            # pre-record проверки сразу запускаем захват экрана.
             output_path = self.recorder.build_output_path(name)
             self._notify_status(index, 'recording')
             task_id = self.recorder.start_browser_recording(

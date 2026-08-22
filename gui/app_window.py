@@ -10,6 +10,7 @@ from queue import Empty, Queue
 
 import customtkinter as ctk
 
+from gui.browser_link_list import BrowserLinkList
 from gui.channel_list import ChannelList
 from gui.link_list import LinkList
 from gui.preview_panel import PreviewPanel
@@ -319,6 +320,7 @@ class AppWindow:
 
         tab_channels = self.left_tabview.add("Каналы")
         tab_links = self.left_tabview.add("Мои ссылки")
+        tab_browser = self.left_tabview.add("Браузер")
 
         self.channel_list = ChannelList(
             tab_channels,
@@ -341,12 +343,23 @@ class AppWindow:
         )
         self.link_list.pack(fill='both', expand=True)
 
+        self.browser_link_list = BrowserLinkList(
+            tab_browser,
+            recorder=self.recorder,
+            on_select=self._on_channel_select,
+            on_edit=self._edit_browser_link_dialog,
+            on_record=self._record_browser_link_now,
+            on_delete=self._delete_browser_link,
+        )
+        self.browser_link_list.pack(fill='both', expand=True)
+
         paned.add(left_frame, weight=1)
 
         right_paned = ttk.PanedWindow(paned, orient='vertical')
 
         schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
-        self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed)
+        self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed,
+                                             on_record_now=self._record_from_schedule_item)
         self.schedule_panel.pack(fill='both', expand=True)
         right_paned.add(schedule_container, weight=1)
 
@@ -363,27 +376,35 @@ class AppWindow:
     def _refresh_data(self):
         self.channel_list.load_channels(self.storage.get_channels())
         self.link_list.load_links(self.storage.get_links())
+        self.browser_link_list.load_links(self.storage.get_browser_links())
         self.schedule_panel.refresh()
 
     def _check_all_channels(self):
         self.channel_list.check_all()
 
     def _toolbar_check_all(self):
-        if self.left_tabview.get() == "Мои ссылки":
+        tab = self.left_tabview.get()
+        if tab == "Мои ссылки":
             self.link_list.load_links(self.storage.get_links())
+        elif tab == "Браузер":
+            self.browser_link_list.load_links(self.storage.get_browser_links())
         else:
             self.channel_list.check_all()
 
     def _toolbar_add(self):
-        if self.left_tabview.get() == "Мои ссылки":
+        tab = self.left_tabview.get()
+        if tab == "Мои ссылки":
             self._add_link_dialog()
+        elif tab == "Браузер":
+            self._add_browser_link_dialog()
         else:
             self._add_channel_dialog()
 
     def _on_left_tab_changed(self):
-        is_links = self.left_tabview.get() == "Мои ссылки"
-        self.btn_toolbar_add.configure(text="Добавить ссылку" if is_links else "Добавить канал")
-        self.btn_toolbar_check.configure(text="Обновить статус" if is_links else "Проверить все")
+        tab = self.left_tabview.get()
+        label = {"Мои ссылки": "Добавить ссылку", "Браузер": "Добавить (браузер)"}.get(tab, "Добавить канал")
+        self.btn_toolbar_add.configure(text=label)
+        self.btn_toolbar_check.configure(text="Обновить статус" if tab == "Мои ссылки" else "Проверить все")
 
     def _on_channel_select(self, name: str):
         logger.info(f"Выбран канал: {name}")
@@ -414,25 +435,8 @@ class AppWindow:
 
     def _record_link_now(self, name: str, link: Dict):
         """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
-        через yt-dlp (страница -> прямой поток), потом как обычно. Для ссылок
-        в режиме браузера (link_resolver не смог получить прямой поток) —
-        вместо этого захват экрана поверх окна-браузера."""
+        через yt-dlp (страница -> прямой поток), потом как обычно."""
         output = str(self.recorder.build_output_path(name))
-
-        if link.get('capture_mode') == 'browser':
-            def start_browser():
-                task_id = self.recorder.start_browser_recording(
-                    name, link.get('url', ''), output, source="manual",
-                    on_complete=self._on_record_complete,
-                )
-                if task_id:
-                    logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")
-                else:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Ошибка", f"Не удалось начать запись экрана «{name}».\nПроверьте лог."))
-
-            threading.Thread(target=start_browser, daemon=True).start()
-            return
 
         def start():
             info = resolve_link(link.get('url', ''))
@@ -450,6 +454,35 @@ class AppWindow:
                 logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
 
         threading.Thread(target=start, daemon=True).start()
+
+    def _record_browser_link_now(self, name: str, link: Dict):
+        """Мгновенная запись ссылки из вкладки "Браузер": открывает окно-браузер
+        и параллельно пишет экран (core/screen_capture.py) — для сайтов, чью
+        прямую ссылку на поток получить не удалось."""
+        output = str(self.recorder.build_output_path(name))
+
+        def start():
+            task_id = self.recorder.start_browser_recording(
+                name, link.get('url', ''), output, source="manual",
+                on_complete=self._on_record_complete,
+            )
+            if task_id:
+                logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")
+            else:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Ошибка", f"Не удалось начать запись экрана «{name}».\nПроверьте лог."))
+
+        threading.Thread(target=start, daemon=True).start()
+
+    def _record_from_schedule_item(self, source_type: str, name: str, target: Dict):
+        """Кнопка "Сейчас" в планировщике — запись выбранной строки не по
+        времени, а сразу, вручную."""
+        if source_type == 'link':
+            self._record_link_now(name, target)
+        elif source_type == 'browser':
+            self._record_browser_link_now(name, target)
+        else:
+            self._record_channel_now(name, target)
 
     def _on_record_complete(self, success: bool, channel_name: str, output_path: str, ended_early: bool = False):
         if success and ended_early:
@@ -469,6 +502,12 @@ class AppWindow:
         if messagebox.askyesno("Удалить ссылку", f"Удалить «{name}» из списка?\nЭто не затронет уже сделанные записи.",
                                 parent=self.root):
             self.storage.delete_link(name)
+            self._refresh_data()
+
+    def _delete_browser_link(self, name: str):
+        if messagebox.askyesno("Удалить ссылку", f"Удалить «{name}» из списка?\nЭто не затронет уже сделанные записи.",
+                                parent=self.root):
+            self.storage.delete_browser_link(name)
             self._refresh_data()
 
     def _create_dialog(self, title: str, geo: str) -> ctk.CTkToplevel:
@@ -590,7 +629,7 @@ class AppWindow:
 
     def _add_link_dialog(self):
         c = self.colors
-        dialog = self._create_dialog("Добавить ссылку", "480x470")
+        dialog = self._create_dialog("Добавить ссылку", "480x430")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -625,19 +664,9 @@ class AppWindow:
                           button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
-        hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
+        hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'],
+                             justify='left', wraplength=430)
         hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
-
-        # Для сайтов без прямой ссылки на поток (см. core/link_resolver.py) —
-        # запасной способ: открываем страницу в окне-браузере и просто пишем
-        # экран, а fullscreen в плеере пользователь включает сам. Автоматически
-        # включается при неудаче автоопределения, но можно и вручную сразу.
-        browser_mode_var = tk.BooleanVar(value=False)
-        browser_mode_check = ctk.CTkCheckBox(
-            body, text="Режим браузера (захват экрана — для сайтов без прямой ссылки)",
-            variable=browser_mode_var, fg_color=c['accent'], hover_color=c['accent_hover'],
-            text_color=c['text_primary'], border_color=c['border'])
-        browser_mode_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
         # --- Запись сразу по расписанию: дата (всегда сегодня) + окно
         # времени, авторасчёт которого — из фактической длительности
@@ -648,16 +677,16 @@ class AppWindow:
                                           fg_color=c['accent'], hover_color=c['accent_hover'],
                                           text_color=c['text_primary'], border_color=c['border'],
                                           command=lambda: toggle_schedule_fields())
-        schedule_check.grid(row=5, column=0, columnspan=2, sticky='w', pady=(10, 4))
+        schedule_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 4))
 
         today = datetime.now()
         day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
         today_weekday = today.weekday()
         ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
-                     text_color=c['text_secondary']).grid(row=6, column=0, columnspan=2, sticky='w', pady=2)
+                     text_color=c['text_secondary']).grid(row=5, column=0, columnspan=2, sticky='w', pady=2)
 
         time_frame = ctk.CTkFrame(body, fg_color='transparent')
-        time_frame.grid(row=7, column=0, columnspan=2, sticky='w', pady=4)
+        time_frame.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
         start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
                                  fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
@@ -681,6 +710,10 @@ class AppWindow:
 
         detect_generation = {'id': 0}
         debounce = {'after_id': None}
+        # Итог последней проверки ссылки: None — ещё не проверяли/не
+        # дождались, True — есть прямой поток, False — нет (при сохранении
+        # такая ссылка уйдёт во вкладку "Браузер", а не "Мои ссылки").
+        resolve_state = {'ok': None}
 
         def on_url_change(*_):
             if debounce['after_id']:
@@ -711,15 +744,20 @@ class AppWindow:
                     if my_generation != detect_generation['id']:
                         return
                     if not info.ok:
-                        # Прямую ссылку получить не удалось — включаем режим
-                        # браузера сами, но название всё равно подставляем,
-                        # если запасной разбор HTML успел его найти.
-                        browser_mode_var.set(True)
+                        # Прямую ссылку получить не удалось — сохранится не
+                        # сюда, а во вкладку "Браузер" (там при записи
+                        # откроется окно с этой страницей). Название всё
+                        # равно подставляем, если запасной разбор HTML нашёл.
+                        resolve_state['ok'] = False
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
+                        start_now = datetime.now()
+                        start_entry.set_time(start_now.strftime('%H:%M'))
+                        end_entry.set_time((start_now + timedelta(minutes=60)).strftime('%H:%M'))
                         hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
-                                             f"Включён режим браузера — при записи откроется окно с страницей.")
+                                             f"Сохранится во вкладке «Браузер» — откроется окно с этой страницей.")
                         return
+                    resolve_state['ok'] = True
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
 
@@ -760,15 +798,19 @@ class AppWindow:
                 if not self._valid_time_range(start, end, dialog):
                     return
 
-            capture_mode = 'browser' if browser_mode_var.get() else 'stream'
-
-            def finish(display_name: str):
-                link = {'name': display_name, 'url': url, 'type': link_type, 'capture_mode': capture_mode}
-                self.storage.save_link(link)
+            def finish(display_name: str, resolved_ok: Optional[bool]):
+                if resolved_ok is False:
+                    # Прямой поток недоступен — сохраняем во вкладку "Браузер"
+                    # вместо "Мои ссылки" (там она бы никогда не заиграла).
+                    self.storage.save_browser_link({'name': display_name, 'url': url})
+                    source_type = 'browser'
+                else:
+                    self.storage.save_link({'name': display_name, 'url': url, 'type': link_type})
+                    source_type = 'link'
                 if do_schedule:
                     self.storage.add_schedule_item({
                         'channel_name': display_name,
-                        'source_type': 'link',
+                        'source_type': source_type,
                         'start_time': start,
                         'end_time': end,
                         'days': [today_weekday],
@@ -778,7 +820,7 @@ class AppWindow:
                 self.root.after(0, self._refresh_data)
 
             if name:
-                finish(name)
+                finish(name, resolve_state['ok'])
                 dialog.destroy()
             else:
                 # Название не задано и автоопределение ещё не подоспело —
@@ -787,13 +829,13 @@ class AppWindow:
 
                 def resolve_name():
                     info = resolve_link(url)
-                    finish(info.title if info.ok and info.title else url)
+                    finish(info.title if info.ok and info.title else url, info.ok)
 
                 threading.Thread(target=resolve_name, daemon=True).start()
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=8, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=7, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     @staticmethod
     def _valid_time_range(start: str, end: str, parent) -> bool:
@@ -813,7 +855,7 @@ class AppWindow:
 
     def _edit_link_dialog(self, name: str, link: Dict):
         c = self.colors
-        dialog = self._create_dialog(f"Редактировать: {name}", "480x300")
+        dialog = self._create_dialog(f"Редактировать: {name}", "480x260")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -846,18 +888,11 @@ class AppWindow:
                           button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
-        browser_mode_var = tk.BooleanVar(value=link.get('capture_mode') == 'browser')
-        ctk.CTkCheckBox(body, text="Режим браузера (захват экрана — для сайтов без прямой ссылки)",
-                         variable=browser_mode_var, fg_color=c['accent'], hover_color=c['accent_hover'],
-                         text_color=c['text_primary'], border_color=c['border']
-                         ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
-
         def save():
             updated = {
                 'name': fields['name'].get().strip(),
                 'url': fields['url'].get().strip(),
                 'type': type_var.get(),
-                'capture_mode': 'browser' if browser_mode_var.get() else 'stream',
             }
             if updated['name'] and updated['url']:
                 if updated['name'] != name:
@@ -870,7 +905,143 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=4, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=3, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+
+    def _add_browser_link_dialog(self):
+        """Ссылка для вкладки "Браузер": сайт, чью прямую ссылку на поток
+        получить не удалось — при записи откроется окно-браузер, fullscreen
+        в плеере включает сам пользователь, пишется экран."""
+        c = self.colors
+        dialog = self._create_dialog("Добавить (браузер)", "480x380")
+
+        body = ctk.CTkFrame(dialog, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=20, pady=20)
+        body.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
+            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
+        url_var = tk.StringVar()
+        url_entry = ctk.CTkEntry(body, textvariable=url_var, height=32, corner_radius=Config.RADIUS_SM,
+                                  placeholder_text="https://…", fg_color=c['bg_primary'],
+                                  border_color=c['border'], text_color=c['text_primary'])
+        url_entry.grid(row=0, column=1, pady=8, sticky='ew')
+        bind_cyrillic_layout_shortcuts(url_entry)
+
+        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
+            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
+        name_var = tk.StringVar()
+        name_entry = ctk.CTkEntry(body, textvariable=name_var, height=32, corner_radius=Config.RADIUS_SM,
+                                   placeholder_text="Например: ОТР — прямой эфир", fg_color=c['bg_primary'],
+                                   border_color=c['border'], text_color=c['text_primary'])
+        name_entry.grid(row=1, column=1, pady=8, sticky='ew')
+        bind_cyrillic_layout_shortcuts(name_entry)
+
+        ctk.CTkLabel(body, text="При записи откроется окно-браузер с этой страницей — fullscreen в плеере "
+                                 "включаете сами, экран запишется автоматически.",
+                     font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=430, justify='left'
+                     ).grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 8))
+
+        schedule_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(body, text="Сразу запланировать запись", variable=schedule_var,
+                         fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['text_primary'],
+                         border_color=c['border'], command=lambda: toggle_schedule_fields()
+                         ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(6, 4))
+
+        today = datetime.now()
+        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        today_weekday = today.weekday()
+        ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
+                     text_color=c['text_secondary']).grid(row=4, column=0, columnspan=2, sticky='w', pady=2)
+
+        time_frame = ctk.CTkFrame(body, fg_color='transparent')
+        time_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
+        ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
+        start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+                                 fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
+        start_entry.pack(side='left', padx=6)
+        ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
+        end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+                               fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
+        end_entry.pack(side='left', padx=6)
+        start_entry.set_time(today.strftime('%H:%M'))
+        end_entry.set_time((today + timedelta(minutes=60)).strftime('%H:%M'))
+
+        def toggle_schedule_fields():
+            state = 'normal' if schedule_var.get() else 'disabled'
+            start_entry.configure(state=state)
+            end_entry.configure(state=state)
+
+        def save():
+            url = url_var.get().strip()
+            name = name_var.get().strip() or url
+            if not url:
+                messagebox.showwarning("Внимание", "Вставьте ссылку", parent=dialog)
+                return
+
+            do_schedule = schedule_var.get()
+            start = start_entry.get().strip()
+            end = end_entry.get().strip()
+            if do_schedule and not self._valid_time_range(start, end, dialog):
+                return
+
+            self.storage.save_browser_link({'name': name, 'url': url})
+            if do_schedule:
+                self.storage.add_schedule_item({
+                    'channel_name': name,
+                    'source_type': 'browser',
+                    'start_time': start,
+                    'end_time': end,
+                    'days': [today_weekday],
+                    'enabled': True,
+                })
+                self.scheduler.reload_schedules()
+            self._refresh_data()
+            dialog.destroy()
+
+        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
+                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
+                      ).grid(row=6, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+
+    def _edit_browser_link_dialog(self, name: str, link: Dict):
+        c = self.colors
+        dialog = self._create_dialog(f"Редактировать: {name}", "480x220")
+
+        body = ctk.CTkFrame(dialog, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=20, pady=20)
+        body.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
+            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
+        name_entry = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                   fg_color=c['bg_primary'], border_color=c['border'],
+                                   text_color=c['text_primary'])
+        name_entry.insert(0, link.get('name', ''))
+        name_entry.grid(row=0, column=1, pady=8, sticky='ew')
+        bind_cyrillic_layout_shortcuts(name_entry)
+
+        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
+            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
+        url_entry = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
+                                  fg_color=c['bg_primary'], border_color=c['border'],
+                                  text_color=c['text_primary'])
+        url_entry.insert(0, link.get('url', ''))
+        url_entry.grid(row=1, column=1, pady=8, sticky='ew')
+        bind_cyrillic_layout_shortcuts(url_entry)
+
+        def save():
+            updated = {'name': name_entry.get().strip(), 'url': url_entry.get().strip()}
+            if updated['name'] and updated['url']:
+                if updated['name'] != name:
+                    self.storage.delete_browser_link(name)
+                self.storage.save_browser_link(updated)
+                self._refresh_data()
+                dialog.destroy()
+            else:
+                messagebox.showwarning("Внимание", "Заполните название и ссылку", parent=dialog)
+
+        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
+                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
+                      ).grid(row=2, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _show_settings(self):
         c = self.colors
