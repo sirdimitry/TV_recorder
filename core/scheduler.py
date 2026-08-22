@@ -120,6 +120,28 @@ class RecordingScheduler:
         self._notify_status(index, 'checking')
 
         extra_headers = None
+        if source_type == 'link' and target.get('capture_mode') == 'browser':
+            # Ссылка сохранена в режиме браузера (link_resolver не смог
+            # получить прямую ссылку на поток при добавлении) — вместо
+            # обычной pre-record проверки сразу запускаем захват экрана.
+            output_path = self.recorder.build_output_path(name)
+            self._notify_status(index, 'recording')
+            task_id = self.recorder.start_browser_recording(
+                channel_name=name,
+                url=target.get('url', ''),
+                output_path=str(output_path),
+                source='schedule',
+                on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
+            )
+            if not task_id:
+                self._on_recording_error(name, 'Не удалось начать запись экрана')
+                self._notify_status(index, 'failed')
+                return
+            timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
+            timer.daemon = True
+            timer.start()
+            return
+
         if source_type == 'link':
             info = resolve_link(target.get('url', ''))
             if not info.ok:

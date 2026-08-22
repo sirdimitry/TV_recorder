@@ -1,5 +1,6 @@
 # core/recorder.py
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -7,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
+from core.screen_capture import build_screen_capture_cmd, find_loopback_audio_index, find_screen_device_index
 from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
@@ -40,6 +42,8 @@ class RecordingTask:
         self.last_snapshot: Optional[bytes] = None  # JPEG-байты последнего пойманного кадра
         self.snapshot_seq = 0  # растёт при каждом новом кадре — по нему потребители понимают, что картинку пора перерисовать
         self.snapshot_stream: Optional[LiveThumbnailStream] = None
+        self.is_screen_capture = False  # запись через захват экрана (core/screen_capture.py), а не -c copy потока
+        self.browser_proc: Optional[subprocess.Popen] = None  # окно-браузер (gui/browser_capture.py) для screen_capture
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -222,11 +226,83 @@ class Recorder:
         except Exception as e:
             logger.error(f"Recorder: Ошибка запуска ffmpeg: {e}")
             return ""
-    
+
+    def start_browser_recording(self, channel_name: str, url: str, output_path: str,
+                                 source: str = "manual", on_complete: Optional[Callable] = None) -> str:
+        """Запись через захват экрана: открывает ссылку в отдельном окне-браузере
+        (пользователь сам включает fullscreen в плеере страницы) и параллельно
+        пишет экран через ffmpeg/avfoundation — для сайтов, чью прямую ссылку на
+        поток получить не удалось (core/link_resolver.py)."""
+        Config.init_dirs()
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        screen_index = find_screen_device_index()
+        if screen_index is None:
+            logger.error("Recorder: не найдено устройство 'Capture screen' для avfoundation")
+            return ""
+        audio_index = find_loopback_audio_index()
+        if audio_index is None:
+            logger.warning("Recorder: устройство BlackHole не найдено — запись экрана будет без звука "
+                            "(нужен виртуальный аудио-loopback и Multi-Output Device в Audio MIDI Setup)")
+
+        task_id = f"{channel_name}_{int(time.time())}"
+
+        browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
+        try:
+            browser_proc = subprocess.Popen([sys.executable, str(browser_script), url, channel_name])
+        except Exception as e:
+            logger.error(f"Recorder: не удалось открыть окно-браузер: {e}")
+            return ""
+
+        time.sleep(1.0)  # дать окну реально появиться на экране, прежде чем начать писать
+
+        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index)
+
+        task = RecordingTask(task_id, channel_name, url, str(output_file), source)
+        task.on_complete = on_complete
+        task.is_screen_capture = True
+        task.browser_proc = browser_proc
+
+        try:
+            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            task.is_recording = True
+            task.start_time = time.time()
+            task.started_at = datetime.now()
+
+            with self._lock:
+                self.tasks[task_id] = task
+
+            logger.info(f"Recorder: Начата запись экрана '{channel_name}' → {output_file} (source: {source})")
+
+            threading.Thread(target=self._wait_for_task, args=(task,), daemon=True).start()
+            threading.Thread(target=self._watch_browser_proc, args=(task,), daemon=True).start()
+
+            if not self._running:
+                self._start_timer_loop()
+
+            self._notify_ui()
+            return task_id
+
+        except Exception as e:
+            logger.error(f"Recorder: Ошибка запуска записи экрана: {e}")
+            browser_proc.terminate()
+            return ""
+
+    def _watch_browser_proc(self, task: RecordingTask):
+        """Если пользователь закрыл окно-браузер вручную, не нажимая Стоп —
+        останавливаем запись экрана вместе с ним, а не пишем пустой рабочий стол."""
+        if not task.browser_proc:
+            return
+        task.browser_proc.wait()
+        if task.is_recording:
+            logger.info(f"Recorder: окно-браузер '{task.channel_name}' закрыто — останавливаем запись экрана")
+            self.stop_recording(task.task_id)
+
     def stop_recording(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
-        
+
         if task and task.process:
             logger.info(f"Recorder: Остановка записи '{task.channel_name}' (task: {task_id})")
             task.final_duration = task.get_elapsed_time()
@@ -234,6 +310,8 @@ class Recorder:
             task.process.terminate()
             task.is_recording = False
             self._stop_snapshot_stream(task)
+            if task.browser_proc and task.browser_proc.poll() is None:
+                task.browser_proc.terminate()
             self._notify_ui()
     
     def pause_recording(self, task_id: str):
@@ -276,6 +354,8 @@ class Recorder:
         task.is_recording = False
         task.finished_at = datetime.now()
         self._stop_snapshot_stream(task)
+        if task.browser_proc and task.browser_proc.poll() is None:
+            task.browser_proc.terminate()
 
         success = returncode == 0 or returncode == 255
         output_file = Path(task.output_path)
@@ -351,5 +431,7 @@ class Recorder:
                     task.process.terminate()
                     task.is_recording = False
                     self._stop_snapshot_stream(task)
+                    if task.browser_proc and task.browser_proc.poll() is None:
+                        task.browser_proc.terminate()
             self.tasks.clear()
         self._notify_ui()

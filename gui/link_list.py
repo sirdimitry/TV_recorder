@@ -149,6 +149,16 @@ class LinkList(ctk.CTkFrame):
 
     def _resolve_row(self, name: str, link: Dict, thumb_label, live_dot, status_badge):
         """Тянет превью и live/VOD статус через yt-dlp в фоне, не блокируя UI."""
+        if link.get('capture_mode') == 'browser':
+            # Прямую ссылку на поток для таких сайтов получить в принципе
+            # нельзя (иначе бы не понадобился режим браузера) — обычная
+            # resolve_link-проверка здесь только впустую сходит в сеть и
+            # покажет вводящее в заблуждение "НЕДОСТУПНО".
+            c = self.colors
+            live_dot.configure(image=get_icon('tv', c['text_muted'], 10))
+            status_badge.configure(text="БРАУЗЕР", text_color=c['text_secondary'])
+            return
+
         def worker():
             info = resolve_link(link.get('url', ''))
             image = None
@@ -224,7 +234,6 @@ class LinkList(ctk.CTkFrame):
                 btn.configure(image=get_icon('record', c['red'], 18), fg_color='transparent')
 
     def _open_preview(self, link: Dict):
-        from gui.mini_player import MiniPlayer
         name = link.get('name', 'Unknown')
         url = link.get('url', '')
 
@@ -232,5 +241,19 @@ class LinkList(ctk.CTkFrame):
             messagebox.showwarning("Внимание", f"У «{name}» нет ссылки")
             return
 
+        if link.get('capture_mode') == 'browser':
+            # Прямой поток для таких ссылок недоступен (иначе не нужен был
+            # бы режим браузера) — MiniPlayer/ffplay здесь просто упадёт с
+            # той же ошибкой. Открываем то же окно-браузер, что и при записи,
+            # только без захвата экрана — чисто посмотреть.
+            import subprocess
+            import sys
+            from pathlib import Path
+            browser_script = Path(__file__).resolve().parent / 'browser_capture.py'
+            subprocess.Popen([sys.executable, str(browser_script), url, name])
+            logger.info(f"Открыто окно-браузер (просмотр без записи): {name}")
+            return
+
+        from gui.mini_player import MiniPlayer
         logger.info(f"Открыт полноэкранный предпросмотр: {name}")
         MiniPlayer(self.root, name, url, fullscreen=True, resolve_via_ytdlp=True)

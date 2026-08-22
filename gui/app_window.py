@@ -414,8 +414,25 @@ class AppWindow:
 
     def _record_link_now(self, name: str, link: Dict):
         """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
-        через yt-dlp (страница -> прямой поток), потом как обычно."""
+        через yt-dlp (страница -> прямой поток), потом как обычно. Для ссылок
+        в режиме браузера (link_resolver не смог получить прямой поток) —
+        вместо этого захват экрана поверх окна-браузера."""
         output = str(self.recorder.build_output_path(name))
+
+        if link.get('capture_mode') == 'browser':
+            def start_browser():
+                task_id = self.recorder.start_browser_recording(
+                    name, link.get('url', ''), output, source="manual",
+                    on_complete=self._on_record_complete,
+                )
+                if task_id:
+                    logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")
+                else:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Ошибка", f"Не удалось начать запись экрана «{name}».\nПроверьте лог."))
+
+            threading.Thread(target=start_browser, daemon=True).start()
+            return
 
         def start():
             info = resolve_link(link.get('url', ''))
@@ -573,7 +590,7 @@ class AppWindow:
 
     def _add_link_dialog(self):
         c = self.colors
-        dialog = self._create_dialog("Добавить ссылку", "480x430")
+        dialog = self._create_dialog("Добавить ссылку", "480x470")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -611,6 +628,17 @@ class AppWindow:
         hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'], justify='left')
         hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
+        # Для сайтов без прямой ссылки на поток (см. core/link_resolver.py) —
+        # запасной способ: открываем страницу в окне-браузере и просто пишем
+        # экран, а fullscreen в плеере пользователь включает сам. Автоматически
+        # включается при неудаче автоопределения, но можно и вручную сразу.
+        browser_mode_var = tk.BooleanVar(value=False)
+        browser_mode_check = ctk.CTkCheckBox(
+            body, text="Режим браузера (захват экрана — для сайтов без прямой ссылки)",
+            variable=browser_mode_var, fg_color=c['accent'], hover_color=c['accent_hover'],
+            text_color=c['text_primary'], border_color=c['border'])
+        browser_mode_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(4, 0))
+
         # --- Запись сразу по расписанию: дата (всегда сегодня) + окно
         # времени, авторасчёт которого — из фактической длительности
         # ролика, как только ссылка разберётся. Для эфира (без известной
@@ -620,16 +648,16 @@ class AppWindow:
                                           fg_color=c['accent'], hover_color=c['accent_hover'],
                                           text_color=c['text_primary'], border_color=c['border'],
                                           command=lambda: toggle_schedule_fields())
-        schedule_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 4))
+        schedule_check.grid(row=5, column=0, columnspan=2, sticky='w', pady=(10, 4))
 
         today = datetime.now()
         day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
         today_weekday = today.weekday()
         ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
-                     text_color=c['text_secondary']).grid(row=5, column=0, columnspan=2, sticky='w', pady=2)
+                     text_color=c['text_secondary']).grid(row=6, column=0, columnspan=2, sticky='w', pady=2)
 
         time_frame = ctk.CTkFrame(body, fg_color='transparent')
-        time_frame.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
+        time_frame.grid(row=7, column=0, columnspan=2, sticky='w', pady=4)
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
         start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
                                  fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
@@ -683,7 +711,14 @@ class AppWindow:
                     if my_generation != detect_generation['id']:
                         return
                     if not info.ok:
-                        hint.configure(text=f"Не удалось определить автоматически: {info.error}")
+                        # Прямую ссылку получить не удалось — включаем режим
+                        # браузера сами, но название всё равно подставляем,
+                        # если запасной разбор HTML успел его найти.
+                        browser_mode_var.set(True)
+                        if not name_touched['value'] and info.title:
+                            name_var.set(info.title)
+                        hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
+                                             f"Включён режим браузера — при записи откроется окно с страницей.")
                         return
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
@@ -725,8 +760,10 @@ class AppWindow:
                 if not self._valid_time_range(start, end, dialog):
                     return
 
+            capture_mode = 'browser' if browser_mode_var.get() else 'stream'
+
             def finish(display_name: str):
-                link = {'name': display_name, 'url': url, 'type': link_type}
+                link = {'name': display_name, 'url': url, 'type': link_type, 'capture_mode': capture_mode}
                 self.storage.save_link(link)
                 if do_schedule:
                     self.storage.add_schedule_item({
@@ -756,7 +793,7 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=7, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=8, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     @staticmethod
     def _valid_time_range(start: str, end: str, parent) -> bool:
@@ -776,7 +813,7 @@ class AppWindow:
 
     def _edit_link_dialog(self, name: str, link: Dict):
         c = self.colors
-        dialog = self._create_dialog(f"Редактировать: {name}", "480x260")
+        dialog = self._create_dialog(f"Редактировать: {name}", "480x300")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -809,11 +846,18 @@ class AppWindow:
                           button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
+        browser_mode_var = tk.BooleanVar(value=link.get('capture_mode') == 'browser')
+        ctk.CTkCheckBox(body, text="Режим браузера (захват экрана — для сайтов без прямой ссылки)",
+                         variable=browser_mode_var, fg_color=c['accent'], hover_color=c['accent_hover'],
+                         text_color=c['text_primary'], border_color=c['border']
+                         ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+
         def save():
             updated = {
                 'name': fields['name'].get().strip(),
                 'url': fields['url'].get().strip(),
                 'type': type_var.get(),
+                'capture_mode': 'browser' if browser_mode_var.get() else 'stream',
             }
             if updated['name'] and updated['url']:
                 if updated['name'] != name:
@@ -826,7 +870,7 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=3, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=4, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _show_settings(self):
         c = self.colors
