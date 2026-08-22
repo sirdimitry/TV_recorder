@@ -68,6 +68,10 @@ def build_screen_capture_cmd(output_path: str, screen_index: int,
         '-pix_fmt', 'yuv420p',
     ]
     if audio_index is not None:
-        cmd += ['-c:a', 'aac', '-b:a', '160k']
+        # BlackHole 16ch и подобные виртуальные устройства отдают все свои
+        # каналы как есть — без явного сведения в стерео aac либо откажется
+        # кодировать, либо распределит звук по каналам, которые никто не
+        # услышит в обычном плеере.
+        cmd += ['-ac', '2', '-c:a', 'aac', '-b:a', '160k']
     cmd += ['-movflags', '+faststart', output_path]
     return cmd
