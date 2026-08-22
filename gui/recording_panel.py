@@ -19,6 +19,14 @@ from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
 
+MAX_NAME_CHARS = 42  # длинные названия (особенно вставленные ссылки) обрезаем,
+                      # чтобы не выталкивать кнопки управления за край строки
+
+
+def _truncate_name(name: str, max_len: int = MAX_NAME_CHARS) -> str:
+    return name if len(name) <= max_len else name[:max_len - 1].rstrip() + '…'
+
+
 STATE_ACCENT = {
     'recording': 'red',
     'paused': 'yellow',
@@ -257,6 +265,21 @@ class RecordingPanel(ctk.CTkFrame):
         row.pack(fill='x', pady=3, padx=2)
         row.pack_propagate(False)
 
+        # Кнопки управления пакуем первыми (side='right') — они должны
+        # оставаться видимыми всегда, а не выталкиваться за край строки
+        # длинным названием канала/ссылки (имя вместо этого обрезаем ниже).
+        actions = ctk.CTkFrame(row, fg_color='transparent')
+        actions.pack(side='right', padx=6, pady=6)
+
+        btn_del = self._icon_button(actions, 'close', lambda t=task: self._remove_task(t))
+        btn_del.pack(side='right', padx=1)
+
+        btn_stop = self._icon_button(actions, 'stop', lambda t=task: self._stop_task(t))
+        btn_stop.pack(side='right', padx=1)
+
+        btn_pause = self._icon_button(actions, 'pause', lambda t=task: self._toggle_pause(t))
+        btn_pause.pack(side='right', padx=1)
+
         accent_bar = ctk.CTkFrame(row, fg_color=c['red'], width=4, corner_radius=2)
         accent_bar.pack(side='left', fill='y', padx=(0, 8), pady=6)
 
@@ -272,7 +295,7 @@ class RecordingPanel(ctk.CTkFrame):
         status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 16))
         status_icon.pack(side='left', padx=(0, 6), pady=8)
 
-        name_lbl = ctk.CTkLabel(row, text=task.channel_name, font=ctk.CTkFont(size=12, weight='bold'),
+        name_lbl = ctk.CTkLabel(row, text=_truncate_name(task.channel_name), font=ctk.CTkFont(size=12, weight='bold'),
                                  text_color=c['text_primary'])
         name_lbl.pack(side='left', padx=(0, 10), pady=8)
 
@@ -287,18 +310,6 @@ class RecordingPanel(ctk.CTkFrame):
         result_lbl = ctk.CTkLabel(row, text="Recording", font=ctk.CTkFont(size=11),
                                    text_color=c['text_secondary'])
         result_lbl.pack(side='left', pady=8)
-
-        actions = ctk.CTkFrame(row, fg_color='transparent')
-        actions.pack(side='right', padx=6, pady=6)
-
-        btn_del = self._icon_button(actions, 'close', lambda t=task: self._remove_task(t))
-        btn_del.pack(side='right', padx=1)
-
-        btn_stop = self._icon_button(actions, 'stop', lambda t=task: self._stop_task(t))
-        btn_stop.pack(side='right', padx=1)
-
-        btn_pause = self._icon_button(actions, 'pause', lambda t=task: self._toggle_pause(t))
-        btn_pause.pack(side='right', padx=1)
 
         self.task_widgets[task.task_id] = {
             'row': row,

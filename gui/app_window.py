@@ -445,12 +445,14 @@ class AppWindow:
         и параллельно пишет экран (core/screen_capture.py) — для сайтов, чью
         прямую ссылку на поток получить не удалось."""
         output = str(self.recorder.build_output_path(name))
-        open_url = link.get('player_url') or link.get('url', '')
+        player_url = link.get('player_url')
+        open_url = player_url or link.get('url', '')
 
         def start():
             task_id = self.recorder.start_browser_recording(
                 name, open_url, output, source="manual",
                 on_complete=self._on_record_complete,
+                auto_fullscreen=bool(player_url),
             )
             if task_id:
                 logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")

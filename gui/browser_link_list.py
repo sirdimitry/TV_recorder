@@ -182,9 +182,10 @@ class BrowserLinkList(ctk.CTkFrame):
         """Открывает то же окно-браузер, что и при записи, но без захвата
         экрана — чисто посмотреть."""
         name = link.get('name', 'Unknown')
-        url = link.get('player_url') or link.get('url', '')
+        player_url = link.get('player_url')
+        url = player_url or link.get('url', '')
         if not url:
             return
         browser_script = Path(__file__).resolve().parent / 'browser_capture.py'
-        subprocess.Popen([sys.executable, str(browser_script), url, name])
+        subprocess.Popen([sys.executable, str(browser_script), url, name, '1' if player_url else '0'])
         logger.info(f"Открыто окно-браузер (просмотр без записи): {name}")
