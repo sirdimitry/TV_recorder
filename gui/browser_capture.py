@@ -15,7 +15,14 @@ fullscreen вручную — окно не пытается сделать эт
 Некоторые сайты (замечено на otr-online.ru) реально грузятся по 15-20
 секунд — без всякой индикации это выглядит так, будто окно просто не
 открылось. Поэтому сперва показываем тёмную заглушку "Загрузка…" и
-переключаемся на настоящий адрес отдельным шагом, а не грузим его сразу."""
+переключаемся на настоящий адрес отдельным шагом, а не грузим его сразу.
+
+На macOS сама кнопка fullscreen внутри плеера страницы (Fullscreen API,
+element.requestFullscreen()) молча не срабатывает: pywebview создаёт
+WKWebView без приватного (не задокументированного публично) флага
+fullScreenEnabled, без которого WebKit сам отклоняет такие запросы —
+это ограничение самого WKWebView, а не конкретного сайта или его плеера.
+Включаем этот флаг вручную через pyobjc сразу после старта GUI-цикла."""
 import sys
 
 LOADING_HTML = """
@@ -44,7 +51,19 @@ def main():
         window.load_url(url)
 
     window.events.loaded += on_loaded
-    webview.start()
+
+    def enable_page_fullscreen():
+        if sys.platform != 'darwin':
+            return
+        try:
+            from webview.platforms.cocoa import BrowserView
+            instance = BrowserView.instances.get(window.uid)
+            if instance is not None:
+                instance.webview.configuration().preferences().setValue_forKey_(True, 'fullScreenEnabled')
+        except Exception as e:
+            print(f"Не удалось включить fullScreenEnabled: {e}", file=sys.stderr)
+
+    webview.start(func=enable_page_fullscreen)
 
 
 if __name__ == '__main__':
