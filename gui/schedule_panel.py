@@ -122,13 +122,13 @@ class SchedulePanel(ctk.CTkFrame):
         time_frame.pack(fill='x', padx=12, pady=4)
 
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
-        self.start_time = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+        self.start_time = TimeEntry(time_frame, width=76, height=30, corner_radius=Config.RADIUS_SM,
                                      fg_color=c['bg_secondary'], border_color=c['border'],
                                      text_color=c['text_primary'])
         self.start_time.pack(side='left', padx=6)
 
         ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
-        self.end_time = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+        self.end_time = TimeEntry(time_frame, width=76, height=30, corner_radius=Config.RADIUS_SM,
                                    fg_color=c['bg_secondary'], border_color=c['border'],
                                    text_color=c['text_primary'])
         self.end_time.pack(side='left', padx=6)
@@ -211,8 +211,8 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.tree.column('channel', width=140)
         self.tree.column('source', width=70, anchor='center')
-        self.tree.column('time', width=110)
-        self.tree.column('days', width=120)
+        self.tree.column('time', width=140)
+        self.tree.column('days', width=90)
         self.tree.column('active', width=70, anchor='center')
         self.tree.column('status', width=100, anchor='center')
 

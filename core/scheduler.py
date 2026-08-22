@@ -134,7 +134,7 @@ class RecordingScheduler:
             self._notify_status(index, 'recording')
             task_id = self.recorder.start_browser_recording(
                 channel_name=name,
-                url=target.get('url', ''),
+                url=target.get('player_url') or target.get('url', ''),
                 output_path=str(output_path),
                 source='schedule',
                 on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),

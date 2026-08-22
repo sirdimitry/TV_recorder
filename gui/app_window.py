@@ -445,10 +445,11 @@ class AppWindow:
         и параллельно пишет экран (core/screen_capture.py) — для сайтов, чью
         прямую ссылку на поток получить не удалось."""
         output = str(self.recorder.build_output_path(name))
+        open_url = link.get('player_url') or link.get('url', '')
 
         def start():
             task_id = self.recorder.start_browser_recording(
-                name, link.get('url', ''), output, source="manual",
+                name, open_url, output, source="manual",
                 on_complete=self._on_record_complete,
             )
             if task_id:
@@ -698,7 +699,7 @@ class AppWindow:
         # Итог последней проверки ссылки: None — ещё не проверяли/не
         # дождались, True — есть прямой поток, False — нет (при сохранении
         # такая ссылка уйдёт во вкладку "Браузер", а не "Мои ссылки").
-        resolve_state = {'ok': None}
+        resolve_state = {'ok': None, 'player_url': None}
 
         def on_url_change(*_):
             if debounce['after_id']:
@@ -734,6 +735,7 @@ class AppWindow:
                         # откроется окно с этой страницей). Название всё
                         # равно подставляем, если запасной разбор HTML нашёл.
                         resolve_state['ok'] = False
+                        resolve_state['player_url'] = info.player_url
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
                         start_now = datetime.now()
@@ -783,11 +785,18 @@ class AppWindow:
                 if not self._valid_time_range(start, end, dialog):
                     return
 
-            def finish(display_name: str, resolved_ok: Optional[bool]):
+            def finish(display_name: str, resolved_ok: Optional[bool], player_url: Optional[str] = None):
                 if resolved_ok is False:
                     # Прямой поток недоступен — сохраняем во вкладку "Браузер"
                     # вместо "Мои ссылки" (там она бы никогда не заиграла).
-                    self.storage.save_browser_link({'name': display_name, 'url': url})
+                    # player_url (og:video страницы), если нашёлся, — сайт,
+                    # чью страницу не отрисовать в нашем встроенном браузере
+                    # (замечено на статьях otr-online.ru), почти всегда
+                    # нормально открывается по прямой ссылке на сам плеер.
+                    browser_link = {'name': display_name, 'url': url}
+                    if player_url:
+                        browser_link['player_url'] = player_url
+                    self.storage.save_browser_link(browser_link)
                     source_type = 'browser'
                 else:
                     self.storage.save_link({'name': display_name, 'url': url, 'type': link_type})
@@ -805,7 +814,7 @@ class AppWindow:
                 self.root.after(0, self._refresh_data)
 
             if name:
-                finish(name, resolve_state['ok'])
+                finish(name, resolve_state['ok'], resolve_state['player_url'])
                 dialog.destroy()
             else:
                 # Название не задано и автоопределение ещё не подоспело —
@@ -814,7 +823,7 @@ class AppWindow:
 
                 def resolve_name():
                     info = resolve_link(url)
-                    finish(info.title if info.ok and info.title else url, info.ok)
+                    finish(info.title if info.ok and info.title else url, info.ok, info.player_url)
 
                 threading.Thread(target=resolve_name, daemon=True).start()
 
@@ -983,6 +992,18 @@ class AppWindow:
             self._refresh_data()
             dialog.destroy()
 
+            # Некоторые страницы не рисуют видео в нашем встроенном браузере
+            # (WKWebView), но публикуют og:video — прямую ссылку на сам
+            # плеер, которая обычно открывается нормально. Ищем её в фоне
+            # и, если найдётся, дописываем в уже сохранённую ссылку.
+            def enrich_player_url():
+                info = resolve_link(url)
+                if info.player_url:
+                    self.storage.save_browser_link({'name': name, 'url': url, 'player_url': info.player_url})
+                    self.root.after(0, self._refresh_data)
+
+            threading.Thread(target=enrich_player_url, daemon=True).start()
+
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
                       ).grid(row=6, column=0, columnspan=2, pady=(16, 0), sticky='ew')
@@ -1014,15 +1035,32 @@ class AppWindow:
         bind_cyrillic_layout_shortcuts(url_entry)
 
         def save():
-            updated = {'name': name_entry.get().strip(), 'url': url_entry.get().strip()}
-            if updated['name'] and updated['url']:
-                if updated['name'] != name:
-                    self.storage.delete_browser_link(name)
-                self.storage.save_browser_link(updated)
-                self._refresh_data()
-                dialog.destroy()
-            else:
+            new_name = name_entry.get().strip()
+            new_url = url_entry.get().strip()
+            if not (new_name and new_url):
                 messagebox.showwarning("Внимание", "Заполните название и ссылку", parent=dialog)
+                return
+
+            url_changed = new_url != link.get('url', '')
+            updated = {'name': new_name, 'url': new_url}
+            if not url_changed and link.get('player_url'):
+                updated['player_url'] = link['player_url']
+            if new_name != name:
+                self.storage.delete_browser_link(name)
+            self.storage.save_browser_link(updated)
+            self._refresh_data()
+            dialog.destroy()
+
+            if url_changed:
+                # Ссылка сменилась — старый player_url (если был) больше не
+                # актуален, ищем заново в фоне, как и при добавлении.
+                def enrich_player_url():
+                    info = resolve_link(new_url)
+                    if info.player_url:
+                        self.storage.save_browser_link({'name': new_name, 'url': new_url, 'player_url': info.player_url})
+                        self.root.after(0, self._refresh_data)
+
+                threading.Thread(target=enrich_player_url, daemon=True).start()
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']

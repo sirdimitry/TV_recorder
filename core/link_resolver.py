@@ -56,6 +56,14 @@ _SOURCE_KEY_RE = re.compile(r'source["\']?\s*[:=]\s*["\']?(' + _STREAM_URL_TAIL 
 _STREAM_URL_RE = re.compile(_STREAM_URL_TAIL, re.IGNORECASE)
 _TITLE_RE = re.compile(r'<title[^>]*>([^<]+)</title>', re.IGNORECASE)
 _OG_IMAGE_RE = re.compile(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE)
+# У некоторых сайтов сама страница рендерит видео через JS-компонент,
+# который в нашем встроенном браузере (WKWebView) не хочет отрисовываться
+# (замечено на otr-online.ru: обычные новостные статьи, в отличие от
+# программных страниц, кладут плеер в Vue-компонент, который просто не
+# гидрируется в WKWebView) — а вот прямая ссылка на сам плеер-фрейм,
+# которую сайты для того и публикуют в og:video (чтобы соцсети могли
+# встроить видео у себя), открывается и работает нормально.
+_OG_VIDEO_RE = re.compile(r'<meta[^>]+property=["\']og:video["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 @dataclass
@@ -68,6 +76,7 @@ class LinkInfo:
     video_url: Optional[str] = None
     audio_url: Optional[str] = None  # None, если поток уже единый (video_url содержит и звук)
     headers: Optional[dict] = None  # заголовки (в первую очередь User-Agent), нужные именно ДЛЯ ЭТОЙ ссылки
+    player_url: Optional[str] = None  # og:video страницы — для режима браузера открываем его вместо самой страницы
     error: str = ''
 
 
@@ -157,13 +166,15 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
         return LinkInfo(ok=False, error=f"HTTP {resp.status_code} при загрузке страницы")
 
     html = resp.text
-    # Заголовок/картинку достаём сразу — если ссылки на поток не найдётся,
-    # они всё равно пригодятся: пусть об этом узнает пользователь, а не
-    # только "yt-dlp не знает такой сайт".
+    # Заголовок/картинку/og:video достаём сразу — если ссылки на поток не
+    # найдётся, они всё равно пригодятся: пусть об этом узнает пользователь,
+    # а не только "yt-dlp не знает такой сайт".
     title_match = _TITLE_RE.search(html)
     title = title_match.group(1).strip() if title_match else url
     thumb_match = _OG_IMAGE_RE.search(html)
     thumbnail = thumb_match.group(1) if thumb_match else ''
+    video_match = _OG_VIDEO_RE.search(html)
+    player_url = video_match.group(1).replace('&amp;', '&') if video_match else None
 
     source_match = _SOURCE_KEY_RE.search(html)
     if source_match:
@@ -172,7 +183,7 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
         generic_match = _STREAM_URL_RE.search(html)
         if not generic_match:
             logger.warning(f"LinkResolver: на странице '{url}' не нашли ссылку на .m3u8/.mpd")
-            return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
+            return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
                              error="Не нашли прямую ссылку на поток на странице")
         stream_url = generic_match.group(0)
     stream_url = stream_url.replace('\\/', '/')
@@ -190,16 +201,18 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
         if check.status_code != 200:
             logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', "
                             f"но он отвечает HTTP {check.status_code}")
-            return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
+            return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
                              error=f"Нашли ссылку на поток, но источник отвечает HTTP {check.status_code} "
                                    f"(вероятно, CDN блокирует доступ)")
     except Exception as e:
         logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', но он недоступен: {e}")
-        return LinkInfo(ok=False, title=title, thumbnail=thumbnail, error=f"Поток недоступен: {e}"[:200])
+        return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
+                         error=f"Поток недоступен: {e}"[:200])
 
     # Такие встроенные плееры почти всегда оказываются прямым эфиром
     # канала, а не конкретным нарезанным роликом — длительность неизвестна.
-    return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True, video_url=stream_url)
+    return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True, video_url=stream_url,
+                     player_url=player_url)
 
 
 def guess_type(url: str) -> str:
