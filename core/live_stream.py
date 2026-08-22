@@ -46,6 +46,7 @@ class LiveThumbnailStream:
 
         cmd = [
             'ffmpeg', '-y',
+            '-allowed_extensions', 'ALL',
             '-headers', header_str,
             # Без -re ffmpeg читает HLS настолько быстро, насколько позволяет
             # сеть/диск (в разы быстрее реального времени) — кадры сыпались

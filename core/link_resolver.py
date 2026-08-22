@@ -26,7 +26,7 @@ JS каждого такого сайта — не масштабируется.
 import re
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 
 import requests
 
@@ -64,6 +64,15 @@ _OG_IMAGE_RE = re.compile(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["
 # которую сайты для того и публикуют в og:video (чтобы соцсети могли
 # встроить видео у себя), открывается и работает нормально.
 _OG_VIDEO_RE = re.compile(r'<meta[^>]+property=["\']og:video["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE)
+# webcaster.pro (используется на otr-online.ru и, вероятно, других
+# российских телеканалах) не кладёт .m3u8 прямо в HTML страницы —
+# сама страница плеера лишь ссылается на XML-конфиг ("data-config"),
+# тот в ответ даёт ещё один XML с адресом "media/start", а уже ОН,
+# при обращении, отдаёт финальный редирект-XML со списком .m3u8-дорожек.
+# Проверено вручную на конкретном примере — см. _resolve_webcaster_player.
+_WEBCASTER_CONFIG_RE = re.compile(r'data-config=["\'][^"\']*config=([^"\'&]+)', re.IGNORECASE)
+_XML_VIDEO_RE = re.compile(r'<video><!\[CDATA\[([^\]]+)]]></video>', re.IGNORECASE)
+_XML_TRACK_RE = re.compile(r'<track[^>]*><!\[CDATA\[([^\]]+\.m3u8[^\]]*)]]></track>', re.IGNORECASE)
 
 
 @dataclass
@@ -151,6 +160,51 @@ def _resolve_via_ytdlp(url: str, timeout: int) -> LinkInfo:
                      video_url=video_url, audio_url=audio_url, headers=headers)
 
 
+def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Optional[str]:
+    """Проходит трёхшаговую цепочку webcaster.pro и возвращает первый
+    найденный .m3u8 или None, если что-то на пути пошло не так. Каждый шаг
+    отдельно логируется — этот путь специфичен для одного вендора и
+    заведомо более хрупкий, чем обычный HTML-поиск, полезно видеть, на
+    каком именно шаге он подвёл."""
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': referer}
+    try:
+        r1 = requests.get(player_url, headers=headers, timeout=timeout)
+        if r1.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: страница плеера '{player_url}' ответила HTTP {r1.status_code}")
+            return None
+        m = _WEBCASTER_CONFIG_RE.search(r1.text)
+        if not m:
+            logger.debug(f"LinkResolver/webcaster: не нашли data-config на '{player_url}'")
+            return None
+        # Значение атрибута само являет собой процент-закодированный URL
+        # (вложенный внутрь HTML-атрибута) — без unquote получаем на выходе
+        # буквальные %3D/%26 вместо =/& и запрос уходит по битому адресу.
+        config_url = unquote(m.group(1).replace('&amp;', '&').replace('\\/', '/'))
+
+        r2 = requests.get(config_url, headers=headers, timeout=timeout)
+        if r2.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: config '{config_url}' ответил HTTP {r2.status_code}")
+            return None
+        vm = _XML_VIDEO_RE.search(r2.text)
+        if not vm:
+            logger.debug(f"LinkResolver/webcaster: не нашли <video> в ответе config")
+            return None
+        media_url = vm.group(1).replace('&amp;', '&')
+
+        r3 = requests.get(media_url, headers=headers, timeout=timeout)
+        if r3.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: media/start '{media_url}' ответил HTTP {r3.status_code}")
+            return None
+        tm = _XML_TRACK_RE.search(r3.text)
+        if not tm:
+            logger.debug(f"LinkResolver/webcaster: не нашли <track> с .m3u8 в ответе media/start")
+            return None
+        return tm.group(1).replace('&amp;', '&').strip()
+    except Exception as e:
+        logger.debug(f"LinkResolver/webcaster: цепочка для '{player_url}' оборвалась: {e}")
+        return None
+
+
 def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     """Запасной путь для сайтов без экстрактора в yt-dlp: тянем страницу и
     ищем прямую ссылку на .m3u8/.mpd прямо в её HTML/JS (в т.ч. заэкранированную
@@ -177,42 +231,59 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     player_url = video_match.group(1).replace('&amp;', '&') if video_match else None
 
     source_match = _SOURCE_KEY_RE.search(html)
+    stream_url = None
     if source_match:
         stream_url = source_match.group(1)
     else:
         generic_match = _STREAM_URL_RE.search(html)
-        if not generic_match:
-            logger.warning(f"LinkResolver: на странице '{url}' не нашли ссылку на .m3u8/.mpd")
-            return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
-                             error="Не нашли прямую ссылку на поток на странице")
-        stream_url = generic_match.group(0)
-    stream_url = stream_url.replace('\\/', '/')
-    if stream_url.startswith('//'):
-        stream_url = 'https:' + stream_url
-    elif not stream_url.startswith('http'):
-        stream_url = urljoin(url, stream_url)
+        if generic_match:
+            stream_url = generic_match.group(0)
 
-    # Ссылка на поток нашлась в HTML, но некоторые CDN (см. модульный
-    # докстринг про cdnvideo.ru/Aloha) всё равно отдают 403 независимо от
-    # заголовков — без этой проверки пользователь узнал бы об этом только
-    # когда реальная запись уже провалилась. Проверяем сразу.
+    if stream_url:
+        stream_url = stream_url.replace('\\/', '/')
+        if stream_url.startswith('//'):
+            stream_url = 'https:' + stream_url
+        elif not stream_url.startswith('http'):
+            stream_url = urljoin(url, stream_url)
+
+        # Ссылка на поток нашлась в HTML, но некоторые CDN (см. модульный
+        # докстринг про cdnvideo.ru/Aloha) всё равно отдают 403 независимо
+        # от заголовков — без этой проверки пользователь узнал бы об этом
+        # только когда реальная запись уже провалилась. Проверяем сразу.
+        if _stream_reachable(stream_url, url, timeout):
+            # Такие встроенные плееры почти всегда оказываются прямым эфиром
+            # канала, а не конкретным нарезанным роликом — длительность
+            # неизвестна.
+            return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True,
+                             video_url=stream_url, player_url=player_url)
+        logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', но он недоступен")
+
+    # Прямого потока в HTML не нашлось (или он не отвечает) — если страница
+    # ссылается на webcaster.pro (og:video), пробуем дойти до .m3u8 через
+    # его собственную XML-цепочку конфигов, вместо того чтобы сразу сдаться.
+    if player_url and 'webcaster.pro' in player_url:
+        # У этой цепочки бывают реальные сетевые подвисания на стороне
+        # webcaster.pro (замечены TLS-таймауты) — держим её короткой, чтобы
+        # не подвешивать диалог добавления ссылки на минуту в худшем случае.
+        webcaster_timeout = min(timeout, 6)
+        webcaster_stream = _resolve_webcaster_player(player_url, url, webcaster_timeout)
+        if webcaster_stream and _stream_reachable(webcaster_stream, url, webcaster_timeout):
+            logger.info(f"LinkResolver: дошли до потока через цепочку webcaster.pro для '{url}'")
+            return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True,
+                             video_url=webcaster_stream, player_url=player_url,
+                             headers={'User-Agent': 'Mozilla/5.0', 'Referer': url})
+
+    logger.warning(f"LinkResolver: на странице '{url}' не нашли рабочую ссылку на поток")
+    return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
+                     error="Не нашли прямую ссылку на поток на странице")
+
+
+def _stream_reachable(stream_url: str, referer: str, timeout: int) -> bool:
     try:
-        check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0', 'Referer': url})
-        if check.status_code != 200:
-            logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', "
-                            f"но он отвечает HTTP {check.status_code}")
-            return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
-                             error=f"Нашли ссылку на поток, но источник отвечает HTTP {check.status_code} "
-                                   f"(вероятно, CDN блокирует доступ)")
-    except Exception as e:
-        logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', но он недоступен: {e}")
-        return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
-                         error=f"Поток недоступен: {e}"[:200])
-
-    # Такие встроенные плееры почти всегда оказываются прямым эфиром
-    # канала, а не конкретным нарезанным роликом — длительность неизвестна.
-    return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True, video_url=stream_url,
-                     player_url=player_url)
+        check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0', 'Referer': referer})
+        return check.status_code == 200
+    except Exception:
+        return False
 
 
 def guess_type(url: str) -> str:

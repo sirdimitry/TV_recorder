@@ -28,6 +28,7 @@ def grab_snapshot(url: str, headers: Optional[dict] = None,
 
     cmd = [
         'ffmpeg', '-y',
+        '-allowed_extensions', 'ALL',
         '-headers', header_str,
         '-analyzeduration', '2000000',
         '-probesize', '1000000',

@@ -698,10 +698,6 @@ class AppWindow:
 
         detect_generation = {'id': 0}
         debounce = {'after_id': None}
-        # Итог последней проверки ссылки: None — ещё не проверяли/не
-        # дождались, True — есть прямой поток, False — нет (при сохранении
-        # такая ссылка уйдёт во вкладку "Браузер", а не "Мои ссылки").
-        resolve_state = {'ok': None, 'player_url': None}
 
         def on_url_change(*_):
             if debounce['after_id']:
@@ -732,21 +728,20 @@ class AppWindow:
                     if my_generation != detect_generation['id']:
                         return
                     if not info.ok:
-                        # Прямую ссылку получить не удалось — сохранится не
-                        # сюда, а во вкладку "Браузер" (там при записи
-                        # откроется окно с этой страницей). Название всё
-                        # равно подставляем, если запасной разбор HTML нашёл.
-                        resolve_state['ok'] = False
-                        resolve_state['player_url'] = info.player_url
+                        # Прямую ссылку получить не удалось — ссылка всё
+                        # равно сохранится в "Мои ссылки" (не переносим
+                        # автоматически в "Браузер"), просто пометится как
+                        # недоступная в списке. Если понадобится режим
+                        # браузера — можно добавить ту же ссылку отдельно
+                        # через вкладку "Браузер".
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
                         start_now = datetime.now()
                         start_entry.set_time(start_now.strftime('%H:%M'))
                         end_entry.set_time((start_now + timedelta(minutes=60)).strftime('%H:%M'))
                         hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
-                                             f"Сохранится во вкладке «Браузер» — откроется окно с этой страницей.")
+                                             f"Ссылка всё равно сохранится, но помечена как недоступная.")
                         return
-                    resolve_state['ok'] = True
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
 
@@ -787,26 +782,17 @@ class AppWindow:
                 if not self._valid_time_range(start, end, dialog):
                     return
 
-            def finish(display_name: str, resolved_ok: Optional[bool], player_url: Optional[str] = None):
-                if resolved_ok is False:
-                    # Прямой поток недоступен — сохраняем во вкладку "Браузер"
-                    # вместо "Мои ссылки" (там она бы никогда не заиграла).
-                    # player_url (og:video страницы), если нашёлся, — сайт,
-                    # чью страницу не отрисовать в нашем встроенном браузере
-                    # (замечено на статьях otr-online.ru), почти всегда
-                    # нормально открывается по прямой ссылке на сам плеер.
-                    browser_link = {'name': display_name, 'url': url}
-                    if player_url:
-                        browser_link['player_url'] = player_url
-                    self.storage.save_browser_link(browser_link)
-                    source_type = 'browser'
-                else:
-                    self.storage.save_link({'name': display_name, 'url': url, 'type': link_type})
-                    source_type = 'link'
+            def finish(display_name: str):
+                # Сохраняем в "Мои ссылки" независимо от того, удалось ли
+                # получить прямой поток — неудачные просто помечаются
+                # недоступными в списке (см. LinkList._resolve_row). Если
+                # нужен режим браузера — та же ссылка добавляется отдельно
+                # через вкладку "Браузер".
+                self.storage.save_link({'name': display_name, 'url': url, 'type': link_type})
                 if do_schedule:
                     self.storage.add_schedule_item({
                         'channel_name': display_name,
-                        'source_type': source_type,
+                        'source_type': 'link',
                         'start_time': start,
                         'end_time': end,
                         'days': [today_weekday],
@@ -816,7 +802,7 @@ class AppWindow:
                 self.root.after(0, self._refresh_data)
 
             if name:
-                finish(name, resolve_state['ok'], resolve_state['player_url'])
+                finish(name)
                 dialog.destroy()
             else:
                 # Название не задано и автоопределение ещё не подоспело —
@@ -825,7 +811,7 @@ class AppWindow:
 
                 def resolve_name():
                     info = resolve_link(url)
-                    finish(info.title if info.ok and info.title else url, info.ok, info.player_url)
+                    finish(info.title if info.ok and info.title else url)
 
                 threading.Thread(target=resolve_name, daemon=True).start()
 

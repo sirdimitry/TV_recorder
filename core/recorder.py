@@ -167,8 +167,8 @@ class Recorder:
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
             cmd = [
                 'ffmpeg', '-y',
-                '-headers', headers, '-i', stream_url,
-                '-headers', headers, '-i', audio_url,
+                '-allowed_extensions', 'ALL', '-headers', headers, '-i', stream_url,
+                '-allowed_extensions', 'ALL', '-headers', headers, '-i', audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
                 '-c', 'copy',
                 '-err_detect', 'ignore_err',
@@ -186,6 +186,7 @@ class Recorder:
 
             cmd = [
                 'ffmpeg', '-y',
+                '-allowed_extensions', 'ALL',
                 '-headers', headers,
                 '-i', stream_url,
                 '-c', 'copy',
