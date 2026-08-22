@@ -149,30 +149,37 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     try:
         resp = requests.get(url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0'})
     except Exception as e:
+        logger.warning(f"LinkResolver: страница '{url}' недоступна: {e}")
         return LinkInfo(ok=False, error=f"Страница недоступна: {e}"[:200])
 
     if resp.status_code != 200:
+        logger.warning(f"LinkResolver: страница '{url}' ответила HTTP {resp.status_code}")
         return LinkInfo(ok=False, error=f"HTTP {resp.status_code} при загрузке страницы")
 
     html = resp.text
+    # Заголовок/картинку достаём сразу — если ссылки на поток не найдётся,
+    # они всё равно пригодятся: пусть об этом узнает пользователь, а не
+    # только "yt-dlp не знает такой сайт".
+    title_match = _TITLE_RE.search(html)
+    title = title_match.group(1).strip() if title_match else url
+    thumb_match = _OG_IMAGE_RE.search(html)
+    thumbnail = thumb_match.group(1) if thumb_match else ''
+
     source_match = _SOURCE_KEY_RE.search(html)
     if source_match:
         stream_url = source_match.group(1)
     else:
         generic_match = _STREAM_URL_RE.search(html)
         if not generic_match:
-            return LinkInfo(ok=False, error="Не нашли прямую ссылку на поток на странице")
+            logger.warning(f"LinkResolver: на странице '{url}' не нашли ссылку на .m3u8/.mpd")
+            return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
+                             error="Не нашли прямую ссылку на поток на странице")
         stream_url = generic_match.group(0)
     stream_url = stream_url.replace('\\/', '/')
     if stream_url.startswith('//'):
         stream_url = 'https:' + stream_url
     elif not stream_url.startswith('http'):
         stream_url = urljoin(url, stream_url)
-
-    title_match = _TITLE_RE.search(html)
-    title = title_match.group(1).strip() if title_match else url
-    thumb_match = _OG_IMAGE_RE.search(html)
-    thumbnail = thumb_match.group(1) if thumb_match else ''
 
     # Ссылка на поток нашлась в HTML, но некоторые CDN (см. модульный
     # докстринг про cdnvideo.ru/Aloha) всё равно отдают 403 независимо от
@@ -181,10 +188,13 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     try:
         check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0', 'Referer': url})
         if check.status_code != 200:
+            logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', "
+                            f"но он отвечает HTTP {check.status_code}")
             return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
                              error=f"Нашли ссылку на поток, но источник отвечает HTTP {check.status_code} "
                                    f"(вероятно, CDN блокирует доступ)")
     except Exception as e:
+        logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', но он недоступен: {e}")
         return LinkInfo(ok=False, title=title, thumbnail=thumbnail, error=f"Поток недоступен: {e}"[:200])
 
     # Такие встроенные плееры почти всегда оказываются прямым эфиром
