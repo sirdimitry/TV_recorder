@@ -294,13 +294,6 @@ class AppWindow:
             command=self._toolbar_check_all)
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
 
-        self.btn_toolbar_add = ctk.CTkButton(
-            toolbar, text="Добавить канал", image=get_icon('plus', c['accent_text'], 16),
-            compound='left', width=150, height=34, corner_radius=Config.RADIUS_SM,
-            fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text'],
-            command=self._toolbar_add)
-        self.btn_toolbar_add.pack(side='right', padx=(6, 0))
-
         # === ОСНОВНАЯ ОБЛАСТЬ: 2 КОЛОНКИ ===
         paned = ttk.PanedWindow(self.root, orient='horizontal')
         paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
@@ -330,6 +323,7 @@ class AppWindow:
             on_record=self._record_channel_now,
             on_delete=self._delete_channel,
             on_preview=self._show_channel_preview,
+            on_add=self._add_channel_dialog,
         )
         self.channel_list.pack(fill='both', expand=True)
 
@@ -340,6 +334,7 @@ class AppWindow:
             on_edit=self._edit_link_dialog,
             on_record=self._record_link_now,
             on_delete=self._delete_link,
+            on_add=self._add_link_dialog,
         )
         self.link_list.pack(fill='both', expand=True)
 
@@ -350,6 +345,7 @@ class AppWindow:
             on_edit=self._edit_browser_link_dialog,
             on_record=self._record_browser_link_now,
             on_delete=self._delete_browser_link,
+            on_add=self._add_browser_link_dialog,
         )
         self.browser_link_list.pack(fill='both', expand=True)
 
@@ -391,19 +387,8 @@ class AppWindow:
         else:
             self.channel_list.check_all()
 
-    def _toolbar_add(self):
-        tab = self.left_tabview.get()
-        if tab == "Мои ссылки":
-            self._add_link_dialog()
-        elif tab == "Браузер":
-            self._add_browser_link_dialog()
-        else:
-            self._add_channel_dialog()
-
     def _on_left_tab_changed(self):
         tab = self.left_tabview.get()
-        label = {"Мои ссылки": "Добавить ссылку", "Браузер": "Добавить (браузер)"}.get(tab, "Добавить канал")
-        self.btn_toolbar_add.configure(text=label)
         self.btn_toolbar_check.configure(text="Обновить статус" if tab == "Мои ссылки" else "Проверить все")
 
     def _on_channel_select(self, name: str):

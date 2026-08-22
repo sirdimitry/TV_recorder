@@ -27,7 +27,7 @@ class BrowserLinkList(ctk.CTkFrame):
 
     def __init__(self, parent, recorder=None, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
-                 on_delete: Optional[Callable] = None):
+                 on_delete: Optional[Callable] = None, on_add: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.root = parent.winfo_toplevel()
         self.colors = Config.COLORS
@@ -36,6 +36,7 @@ class BrowserLinkList(ctk.CTkFrame):
         self.on_edit = on_edit
         self.on_record = on_record
         self.on_delete = on_delete
+        self.on_add = on_add
         self.link_widgets: Dict[str, dict] = {}
 
         self._setup_ui()
@@ -45,9 +46,15 @@ class BrowserLinkList(ctk.CTkFrame):
 
     def _setup_ui(self):
         c = self.colors
-        header = ctk.CTkLabel(self, text="БРАУЗЕР", font=ctk.CTkFont(size=12, weight='bold'),
+        header_row = ctk.CTkFrame(self, fg_color='transparent')
+        header_row.pack(fill='x', padx=14, pady=(12, 6))
+        header = ctk.CTkLabel(header_row, text="БРАУЗЕР", font=ctk.CTkFont(size=12, weight='bold'),
                                text_color=c['text_secondary'])
-        header.pack(fill='x', padx=14, pady=(12, 6), anchor='w')
+        header.pack(side='left', anchor='w')
+        if self.on_add:
+            ctk.CTkButton(header_row, text="", image=get_icon('plus', c['accent_text'], 14), width=26, height=26,
+                          corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
+                          command=self.on_add).pack(side='right')
 
         hint = ctk.CTkLabel(
             self, text="Для сайтов без прямой ссылки на поток: открывается окно-браузер, "
