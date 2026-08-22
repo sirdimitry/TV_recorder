@@ -1,11 +1,13 @@
 # gui/schedule_panel.py
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Callable, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import customtkinter as ctk
 
+from core.link_resolver import resolve_link
 from core.storage import Storage
 from utils.config import Config
 from utils.icons import get_icon
@@ -63,6 +65,7 @@ class SchedulePanel(ctk.CTkFrame):
         self._channel_names: List[str] = []
         self._link_names: List[str] = []
         self._browser_names: List[str] = []
+        self._duration_detect_generation = 0
         self.run_status: Dict[int, str] = {}
 
         self._setup_ui()
@@ -107,7 +110,8 @@ class SchedulePanel(ctk.CTkFrame):
         self.channel_combo = ctk.CTkOptionMenu(channel_frame, values=[''], variable=self.channel_var,
                                                 height=30, corner_radius=Config.RADIUS_SM,
                                                 fg_color=c['bg_secondary'], button_color=c['bg_secondary'],
-                                                button_hover_color=c['bg_hover'], text_color=c['text_primary'])
+                                                button_hover_color=c['bg_hover'], text_color=c['text_primary'],
+                                                command=lambda _v: self._maybe_detect_link_duration())
         self.channel_combo.pack(side='left', padx=6, fill='x', expand=True)
         self.channel_combo.bind('<MouseWheel>', self._scroll_channel_selection)
         self.channel_combo.bind('<Button-4>', lambda event: self._scroll_channel_selection(event, -1))
@@ -131,6 +135,12 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.date_label = ctk.CTkLabel(time_frame, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'])
         self.date_label.pack(side='left', padx=(12, 0))
+
+        # Для ссылки/браузера — статус автоопределения хронометража
+        # (скрыт для канала, там это не нужно).
+        self.duration_hint = ctk.CTkLabel(form_frame, text="", font=ctk.CTkFont(size=10),
+                                           text_color=c['text_muted'], anchor='w', justify='left')
+        self.duration_hint.pack(fill='x', padx=12, pady=(0, 2))
 
         # Дни недели — только для каналов (у ссылки/браузера нет еженедельного
         # эфира, это разовая запись по хронометражу; скрывается в _on_source_type_changed)
@@ -231,6 +241,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.channel_label.configure(text="Канал:" if source_type == 'channel' else "Ссылка:")
         self._refresh_source_dropdown()
         self._apply_time_defaults()
+        self._maybe_detect_link_duration()
 
     def _refresh_source_dropdown(self):
         names = self._names_for(self.source_type_var.get())
@@ -351,7 +362,56 @@ class SchedulePanel(ctk.CTkFrame):
         else:
             idx = max(0, min(len(names) - 1, idx + direction))
         self.channel_var.set(names[idx])
+        self._maybe_detect_link_duration()
         return 'break'
+
+    def _maybe_detect_link_duration(self):
+        """Выбрана ссылка (не браузер, там нет резолвящегося потока) —
+        подтягиваем её фактическую длительность через link_resolver и сами
+        подставляем время окончания, вместо того чтобы пользователь гадал."""
+        if self.source_type_var.get() != 'link':
+            self.duration_hint.configure(text="")
+            return
+        name = self.channel_var.get()
+        if not name:
+            self.duration_hint.configure(text="")
+            return
+        link = next((l for l in self.storage.get_links() if l.get('name') == name), None)
+        if not link or not link.get('url'):
+            self.duration_hint.configure(text="")
+            return
+
+        self._duration_detect_generation += 1
+        my_generation = self._duration_detect_generation
+        self.duration_hint.configure(text="Определяем длительность…")
+
+        def worker():
+            info = resolve_link(link['url'])
+
+            def apply():
+                # Пока резолвили — выбор в форме мог уже поменяться.
+                if my_generation != self._duration_detect_generation:
+                    return
+                if not info.ok:
+                    self.duration_hint.configure(text=f"Не удалось определить длительность: {info.error}")
+                    return
+                try:
+                    start_dt = datetime.strptime(self.start_time.get().strip(), '%H:%M')
+                except ValueError:
+                    start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                if info.duration:
+                    end_dt = start_dt + timedelta(seconds=info.duration)
+                    minutes = int(info.duration // 60)
+                    self.duration_hint.configure(text=f"Определено: длительность ~{minutes} мин")
+                else:
+                    end_dt = start_dt + timedelta(minutes=60)
+                    self.duration_hint.configure(
+                        text="Прямой эфир (длительность неизвестна — окно +60 мин, поправьте при необходимости)")
+                self.end_time.set_time(end_dt.strftime('%H:%M'))
+
+            self.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _days_for_save(self) -> List[int]:
         """Для канала — что отмечено галочками. Для ссылки/браузера дни
@@ -526,6 +586,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         self._clear_form_buttons()
         self._apply_time_defaults()
+        self._maybe_detect_link_duration()
 
     def _clear_form_buttons(self):
         self.btn_add.configure(state='normal')
