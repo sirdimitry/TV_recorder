@@ -157,6 +157,18 @@ def _resolve_via_ytdlp(url: str, timeout: int) -> LinkInfo:
         return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
                          error="Не удалось получить прямую ссылку на поток")
 
+    # yt-dlp's generic 'html5'-экстрактор просто берёт первый <audio>/<video>
+    # тег со страницы — если настоящее видео рендерится через JS (как часто
+    # бывает у российских новостных сайтов), а на странице ЕЩЁ и есть, скажем,
+    # радио-плеер (обычный <audio>), он уверенно вернёт этот radio-поток как
+    # "видео" (vcodec: none) — на выходе шум вместо кадра при живом звуке.
+    vcodec = (requested[0].get('vcodec') if requested else None) or info.get('vcodec')
+    if vcodec == 'none':
+        logger.warning(f"LinkResolver: yt-dlp ({info.get('extractor')}) нашёл только аудио-поток "
+                        f"для '{url}' — это не видео, игнорируем")
+        return LinkInfo(ok=False, title=title, thumbnail=thumbnail,
+                         error="Найден только звук без видео (похоже, реальное видео на JS)")
+
     # Некоторые источники (например VK: vkvd*.okcdn.ru) выдают подписанные
     # ссылки, привязанные к User-Agent, с которым их запросил yt-dlp — с
     # любым другим значением CDN отвечает HTTP 400, даже если сама ссылка
@@ -256,11 +268,15 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
         # докстринг про cdnvideo.ru/Aloha) всё равно отдают 403 независимо
         # от заголовков — без этой проверки пользователь узнал бы об этом
         # только когда реальная запись уже провалилась. Проверяем сразу.
-        if _stream_reachable(stream_url, url, timeout):
-            # Такие встроенные плееры почти всегда оказываются прямым эфиром
-            # канала, а не конкретным нарезанным роликом — длительность
-            # неизвестна.
-            return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True,
+        body = _probe_stream(stream_url, url, timeout)
+        if body is not None:
+            # #EXT-X-ENDLIST в плейлисте — значит это уже готовый ролик с
+            # известной длительностью, а не прямой эфир (раньше здесь всегда
+            # стояло is_live=True, из-за чего у роликов с реальным
+            # хронометражем всё равно подставлялся запасной час).
+            duration = _detect_duration(body, stream_url, url, timeout)
+            return LinkInfo(ok=True, title=title, thumbnail=thumbnail,
+                             is_live=duration is None, duration=duration,
                              video_url=stream_url, player_url=player_url)
         logger.warning(f"LinkResolver: нашли поток '{stream_url}' на странице '{url}', но он недоступен")
 
@@ -273,9 +289,12 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
         # не подвешивать диалог добавления ссылки на минуту в худшем случае.
         webcaster_timeout = min(timeout, 6)
         webcaster_stream = _resolve_webcaster_player(player_url, url, webcaster_timeout)
-        if webcaster_stream and _stream_reachable(webcaster_stream, url, webcaster_timeout):
+        webcaster_body = _probe_stream(webcaster_stream, url, webcaster_timeout) if webcaster_stream else None
+        if webcaster_body is not None:
             logger.info(f"LinkResolver: дошли до потока через цепочку webcaster.pro для '{url}'")
-            return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True,
+            duration = _detect_duration(webcaster_body, webcaster_stream, url, webcaster_timeout)
+            return LinkInfo(ok=True, title=title, thumbnail=thumbnail,
+                             is_live=duration is None, duration=duration,
                              video_url=webcaster_stream, player_url=player_url,
                              headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
 
@@ -284,12 +303,42 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
                      error="Не нашли прямую ссылку на поток на странице")
 
 
-def _stream_reachable(stream_url: str, referer: str, timeout: int) -> bool:
+def _probe_stream(stream_url: str, referer: str, timeout: int) -> Optional[str]:
+    """Возвращает тело ответа, если поток отвечает 200, иначе None. Тело
+    заодно используется для определения хронометража (см. _detect_duration)."""
     try:
         check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': _DEFAULT_UA, 'Referer': referer})
-        return check.status_code == 200
+        return check.text if check.status_code == 200 else None
     except Exception:
-        return False
+        return None
+
+
+_EXTINF_RE = re.compile(r'#EXTINF:([\d.]+)')
+_VARIANT_RE = re.compile(r'^(?!#)(\S+\.m3u8\S*)$', re.MULTILINE)
+
+
+def _detect_duration(m3u8_body: str, base_url: str, referer: str, timeout: int, depth: int = 0) -> Optional[float]:
+    """HLS-плейлист сам говорит, конечный он или нет: #EXT-X-ENDLIST есть
+    только у уже отснятого ролика (VOD) — сумма #EXTINF и даёт его реальную
+    длительность. У живого эфира этого тега нет и не будет — тогда None
+    (дальше используется запасной час, как и раньше). Мастер-плейлист
+    (список битрейт-вариантов, без самих сегментов) не содержит эту
+    информацию напрямую — заходим в первый вариант на один уровень глубже."""
+    if '#EXT-X-ENDLIST' in m3u8_body:
+        durations = _EXTINF_RE.findall(m3u8_body)
+        if durations:
+            return sum(float(d) for d in durations)
+        return None
+
+    if depth == 0 and '#EXT-X-STREAM-INF' in m3u8_body:
+        variant_match = _VARIANT_RE.search(m3u8_body)
+        if variant_match:
+            variant_url = urljoin(base_url, variant_match.group(1).strip())
+            body = _probe_stream(variant_url, referer, timeout)
+            if body:
+                return _detect_duration(body, variant_url, referer, timeout, depth=1)
+
+    return None
 
 
 def guess_type(url: str) -> str:
