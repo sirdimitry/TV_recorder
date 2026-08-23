@@ -138,7 +138,6 @@ class RecordingScheduler:
                 output_path=str(output_path),
                 source='schedule',
                 on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
-                auto_fullscreen=bool(target.get('player_url')),
             )
             if not task_id:
                 self._on_recording_error(name, 'Не удалось начать запись экрана')

@@ -230,15 +230,13 @@ class Recorder:
             return ""
 
     def start_browser_recording(self, channel_name: str, url: str, output_path: str,
-                                 source: str = "manual", on_complete: Optional[Callable] = None,
-                                 auto_fullscreen: bool = False) -> str:
+                                 source: str = "manual", on_complete: Optional[Callable] = None) -> str:
         """Запись через захват экрана: открывает ссылку в отдельном окне-браузере
         и параллельно пишет экран через ffmpeg/avfoundation — для сайтов, чью
         прямую ссылку на поток получить не удалось (core/link_resolver.py).
-
-        auto_fullscreen=True — окно само разворачивается на весь экран после
-        загрузки (передавать только для "чистой" ссылки плеера без сайдбаров/
-        баннеров — LinkInfo.player_url; см. gui/browser_capture.py)."""
+        Окно никогда не уходит в macOS-fullscreen — пишется именно область
+        под окном (см. gui/browser_capture.py), а fullscreen окна сдвинул бы
+        его границы и рассинхронизировал их с уже посчитанной обрезкой."""
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -257,7 +255,7 @@ class Recorder:
         browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
         try:
             browser_proc = subprocess.Popen(
-                [sys.executable, str(browser_script), url, channel_name, '1' if auto_fullscreen else '0'],
+                [sys.executable, str(browser_script), url, channel_name],
                 stdout=subprocess.PIPE, text=True, bufsize=1)
         except Exception as e:
             logger.error(f"Recorder: не удалось открыть окно-браузер: {e}")
