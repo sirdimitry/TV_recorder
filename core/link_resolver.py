@@ -38,6 +38,12 @@ except ImportError:
 
 from utils.logger import logger
 
+# Голое "Mozilla/5.0" читается частью сайтов (замечено на tass.ru) как явный
+# признак бота и получает HTTP 403 — полноценная строка настоящего браузера
+# проходит без вопросов.
+_DEFAULT_UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 '
+               '(KHTML, like Gecko) Version/17.0 Safari/605.1.15')
+
 TARGET_HEIGHT = 720
 # h264+aac в приоритете (максимальная совместимость плеера/Finder),
 # иначе — лучшее, что есть в пределах 720p, иначе — вообще лучшее.
@@ -166,7 +172,7 @@ def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Op
     отдельно логируется — этот путь специфичен для одного вендора и
     заведомо более хрупкий, чем обычный HTML-поиск, полезно видеть, на
     каком именно шаге он подвёл."""
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': referer}
+    headers = {'User-Agent': _DEFAULT_UA, 'Referer': referer}
     try:
         r1 = requests.get(player_url, headers=headers, timeout=timeout)
         if r1.status_code != 200:
@@ -210,7 +216,7 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     ищем прямую ссылку на .m3u8/.mpd прямо в её HTML/JS (в т.ч. заэкранированную
     внутри JSON — вида `\\/\\/host\\/path.m3u8`)."""
     try:
-        resp = requests.get(url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0'})
+        resp = requests.get(url, timeout=timeout, headers={'User-Agent': _DEFAULT_UA})
     except Exception as e:
         logger.warning(f"LinkResolver: страница '{url}' недоступна: {e}")
         return LinkInfo(ok=False, error=f"Страница недоступна: {e}"[:200])
@@ -271,7 +277,7 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
             logger.info(f"LinkResolver: дошли до потока через цепочку webcaster.pro для '{url}'")
             return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=True,
                              video_url=webcaster_stream, player_url=player_url,
-                             headers={'User-Agent': 'Mozilla/5.0', 'Referer': url})
+                             headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
 
     logger.warning(f"LinkResolver: на странице '{url}' не нашли рабочую ссылку на поток")
     return LinkInfo(ok=False, title=title, thumbnail=thumbnail, player_url=player_url,
@@ -280,7 +286,7 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
 
 def _stream_reachable(stream_url: str, referer: str, timeout: int) -> bool:
     try:
-        check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0', 'Referer': referer})
+        check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': _DEFAULT_UA, 'Referer': referer})
         return check.status_code == 200
     except Exception:
         return False
