@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
-from core.screen_capture import build_screen_capture_cmd, find_loopback_audio_index, find_screen_device_index
+from core.screen_capture import (build_screen_capture_cmd, find_loopback_audio_index,
+                                  find_screen_device_index, get_retina_scale_factor)
 from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
@@ -255,15 +256,22 @@ class Recorder:
 
         browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
         try:
-            browser_proc = subprocess.Popen([sys.executable, str(browser_script), url, channel_name,
-                                              '1' if auto_fullscreen else '0'])
+            browser_proc = subprocess.Popen(
+                [sys.executable, str(browser_script), url, channel_name, '1' if auto_fullscreen else '0'],
+                stdout=subprocess.PIPE, text=True, bufsize=1)
         except Exception as e:
             logger.error(f"Recorder: не удалось открыть окно-браузер: {e}")
             return ""
 
-        time.sleep(1.0)  # дать окну реально появиться на экране, прежде чем начать писать
+        crop = self._read_browser_geometry(browser_proc)
+        if crop:
+            logger.info(f"Recorder: пишем только окно-браузер '{channel_name}' ({crop[2]}x{crop[3]}px), "
+                         f"не весь экран")
+        else:
+            logger.warning(f"Recorder: не удалось получить границы окна-браузера '{channel_name}' — "
+                            f"придётся писать весь экран целиком")
 
-        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index)
+        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index, crop=crop)
 
         task = RecordingTask(task_id, channel_name, url, str(output_file), source)
         task.on_complete = on_complete
@@ -294,6 +302,36 @@ class Recorder:
             logger.error(f"Recorder: Ошибка запуска записи экрана: {e}")
             browser_proc.terminate()
             return ""
+
+    def _read_browser_geometry(self, browser_proc: subprocess.Popen, timeout: float = 10.0):
+        """Читает строку "GEOMETRY:x,y,w,h" (в points) из stdout окна-браузера
+        (gui/browser_capture.py печатает её сразу после появления окна) и
+        переводит в пиксели — эта область экрана и обрежется в записи,
+        вместо того чтобы писать весь дисплей целиком."""
+        import select
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if browser_proc.poll() is not None:
+                return None
+            try:
+                ready, _, _ = select.select([browser_proc.stdout], [], [], 0.5)
+            except Exception:
+                ready = [browser_proc.stdout]
+            if not ready:
+                continue
+            line = browser_proc.stdout.readline()
+            if not line:
+                continue
+            line = line.strip()
+            if not line.startswith('GEOMETRY:'):
+                continue
+            try:
+                x, y, w, h = (float(v) for v in line[len('GEOMETRY:'):].split(','))
+            except Exception:
+                return None
+            scale = get_retina_scale_factor()
+            return (round(x * scale), round(y * scale), round(w * scale), round(h * scale))
+        return None
 
     def _watch_browser_proc(self, task: RecordingTask):
         """Если пользователь закрыл окно-браузер вручную, не нажимая Стоп —

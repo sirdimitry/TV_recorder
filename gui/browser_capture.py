@@ -6,18 +6,25 @@ run loop-ом на macOS, и совмещать его с уже работаю�
 subprocess.Popen и параллельно пишет экран через ffmpeg — сам браузер
 кадры не отдаёт и с записью никак не взаимодействует.
 
+Важно: запись пишет НЕ весь экран, а только область под этим окном —
+core/recorder.py читает координаты окна из строки "GEOMETRY:x,y,w,h",
+которую этот процесс печатает в stdout сразу после старта (см.
+on_gui_started), и обрезает по ним запись через core/screen_capture.py.
+Поэтому "раскрыть на весь экран" здесь не значит "занять весь дисплей" —
+достаточно, чтобы видео заполняло само окно, каким бы оно ни было.
+
 Использование: python3 browser_capture.py <url> [title] [auto_fullscreen]
 
 auto_fullscreen ('1'/'0', по умолчанию '0') — сразу после загрузки страницы
-разворачивает само ОКНО во весь экран (macOS-уровня, Cmd+Ctrl+F), а не
-полагается на кнопку fullscreen внутри плеера страницы. Включаем это
-только когда вызывающий код точно передал "чистую" ссылку плеера
+разворачивает само ОКНО во весь экран (macOS-уровня, Cmd+Ctrl+F). Включаем
+это только когда вызывающий код точно передал "чистую" ссылку плеера
 (core/link_resolver.py: LinkInfo.player_url — прямую ссылку на сам
-плеер, без сайдбаров/cookie-баннера), где содержимое и так занимает всё
-окно целиком, поэтому окно=на весь экран это и есть fullscreen-видео.
-Для обычной страницы (без player_url) так не делаем: у неё есть ещё
-и сайдбар/реклама/баннер, разворачивать окно молча — только исказит то,
-что человек ожидает увидеть.
+плеер, без сайдбаров/cookie-баннера) — там содержимое и так занимает всё
+окно целиком. Для обычной страницы (без player_url) так не делаем: у неё
+есть ещё и сайдбар/реклама/баннер, разворачивать окно молча — только
+исказит то, что человек ожидает увидеть. И поскольку запись всё равно
+обрезана по окну (см. выше), окно-fullscreen тут — просто "покрупнее",
+а не обязательное условие для нормальной записи.
 
 Кнопка fullscreen внутри самого плеера страницы (Fullscreen API,
 element.requestFullscreen()) на macOS ненадёжна: pywebview создаёт
@@ -141,18 +148,39 @@ def main():
 
     window.events.loaded += on_splash_loaded
 
-    def enable_page_fullscreen():
-        if sys.platform != 'darwin':
-            return
-        try:
-            from webview.platforms.cocoa import BrowserView
-            instance = BrowserView.instances.get(window.uid)
-            if instance is not None:
-                instance.webview.configuration().preferences().setValue_forKey_(True, 'fullScreenEnabled')
-        except Exception as e:
-            print(f"Не удалось включить fullScreenEnabled: {e}", file=sys.stderr)
+    def on_gui_started():
+        # По умолчанию — вся рамка окна (запасной вариант для не-macOS);
+        # на macOS ниже пересчитываем на область именно содержимого, без
+        # строки заголовка со светофором, чтобы она не попадала в запись.
+        x, y, w, h = window.x, window.y, window.width, window.height
 
-    webview.start(func=enable_page_fullscreen)
+        if sys.platform == 'darwin':
+            try:
+                from webview.platforms.cocoa import BrowserView
+                instance = BrowserView.instances.get(window.uid)
+                if instance is not None:
+                    instance.webview.configuration().preferences().setValue_forKey_(True, 'fullScreenEnabled')
+                    native_window = instance.window
+                    content_rect = native_window.contentRectForFrameRect_(native_window.frame())
+                    screen_height = instance.screen.size.height
+                    x = content_rect.origin.x
+                    y = screen_height - content_rect.origin.y - content_rect.size.height
+                    w = content_rect.size.width
+                    h = content_rect.size.height
+            except Exception as e:
+                print(f"Не удалось включить fullScreenEnabled / вычислить область содержимого: {e}",
+                      file=sys.stderr)
+
+        # core/recorder.py читает эту строку из stdout, чтобы обрезать
+        # запись экрана точно по границам окна вместо всего дисплея —
+        # координаты в points (как их отдаёт pywebview/Cocoa), пересчёт в
+        # пиксели делает читающая сторона (там же, где известен retina-масштаб).
+        try:
+            print(f"GEOMETRY:{x},{y},{w},{h}", flush=True)
+        except Exception as e:
+            print(f"Не удалось сообщить геометрию окна: {e}", file=sys.stderr)
+
+    webview.start(func=on_gui_started)
 
 
 if __name__ == '__main__':

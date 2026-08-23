@@ -2,8 +2,10 @@
 """Захват экрана через ffmpeg (avfoundation) — запасной способ записи для
 сайтов, чью прямую ссылку на поток получить не удаётся (см.
 core/link_resolver.py): пользователь сам открывает такую ссылку во
-встроенном окне-браузере (gui/browser_capture.py) и включает fullscreen
-в плеере страницы, а мы в это время просто пишем экран.
+встроенном окне-браузере (gui/browser_capture.py), а мы в это время
+пишем именно область экрана под этим окном (не весь дисплей целиком —
+см. build_screen_capture_cmd(crop=...) и core/recorder.py, который читает
+реальные координаты окна из browser_capture.py и передаёт их сюда).
 
 В отличие от всей остальной записи в проекте, здесь неизбежно идёт
 перекодирование: avfoundation отдаёт сырые кадры экрана, а не уже
@@ -11,11 +13,23 @@ core/link_resolver.py): пользователь сам открывает та�
 """
 import re
 import subprocess
-from typing import Optional
+from typing import Optional, Tuple
 
 TARGET_HEIGHT = 720
 BITRATE = "4M"
 MAXRATE = "5M"
+
+
+def get_retina_scale_factor() -> float:
+    """Координаты окна из pywebview приходят в points, а avfoundation
+    захватывает экран в физических пикселях — на retina-экране это не одно
+    и то же (обычно 2x). Без пересчёта обрезка захвата уезжала бы вчетверо
+    меньше нужной области."""
+    try:
+        import AppKit
+        return float(AppKit.NSScreen.mainScreen().backingScaleFactor())
+    except Exception:
+        return 1.0
 
 
 def _list_avfoundation_devices() -> str:
@@ -57,12 +71,20 @@ def find_loopback_audio_index() -> Optional[int]:
 
 
 def build_screen_capture_cmd(output_path: str, screen_index: int,
-                              audio_index: Optional[int] = None) -> list:
+                              audio_index: Optional[int] = None,
+                              crop: Optional[Tuple[int, int, int, int]] = None) -> list:
+    """crop — (x, y, width, height) в пикселях (уже с поправкой на retina),
+    обычно граница окна-браузера: без него пишется весь экран целиком."""
     input_spec = f"{screen_index}:{audio_index}" if audio_index is not None else f"{screen_index}:none"
+    vf = []
+    if crop:
+        x, y, w, h = crop
+        vf.append(f'crop={w}:{h}:{x}:{y}')
+    vf.append(f'scale=-2:{TARGET_HEIGHT}')
     cmd = [
         'ffmpeg', '-y',
         '-f', 'avfoundation', '-framerate', '30', '-i', input_spec,
-        '-vf', f'scale=-2:{TARGET_HEIGHT}',
+        '-vf', ','.join(vf),
         '-c:v', 'libx264', '-preset', 'veryfast',
         '-b:v', BITRATE, '-maxrate', MAXRATE, '-bufsize', '8M',
         '-pix_fmt', 'yuv420p',
