@@ -37,8 +37,17 @@ fullScreenEnabled — без него WebKit по умолчанию откло�
 Некоторые сайты (замечено на otr-online.ru) реально грузятся по 15-20
 секунд — без всякой индикации это выглядит так, будто окно просто не
 открылось. Поэтому сперва показываем тёмную заглушку "Загрузка…" и
-переключаемся на настоящий адрес отдельным шагом, а не грузим его сразу."""
+переключаемся на настоящий адрес отдельным шагом, а не грузим его сразу.
+
+Ещё один универсальный трюк (по образцу OBS Studio Browser Source —
+там при "не раскрывается видео на весь экран" помогает подвинуть размер
+окна источника на 1px и обратно): некоторые плееры после клика по своей
+кнопке fullscreen меняют внутреннее состояние/CSS, но движок браузера не
+перерисовывает кадр под новый размер, пока не получит настоящее событие
+resize. Поэтому после каждой загрузки страницы и по Cmd+Enter мы сами
+дёргаем размер окна на 1px и возвращаем обратно — см. _nudge_relayout."""
 import sys
+import threading
 
 LOADING_HTML = """
 <html><body style="background:#1a1a1a;color:#999;margin:0;height:100vh;
@@ -65,10 +74,23 @@ FULLSCREEN_HOTKEY_JS = """
 """
 
 
+def _nudge_relayout(window):
+    """Резкий resize окна на 1px и обратно — форсирует у WKWebView пересчёт
+    раскладки и перерисовку. Тот же приём, что спасает в OBS Studio Browser
+    Source, когда плеер после клика по своему fullscreen не перерисовывается
+    сам (видео технически "развернулось", но кадр так и остался маленьким)."""
+    try:
+        w, h = window.width, window.height
+        window.resize(w, h + 1)
+        threading.Timer(0.15, lambda: window.resize(w, h)).start()
+    except Exception as e:
+        print(f"Не удалось форсировать перерисовку окна: {e}", file=sys.stderr)
+
+
 class _FullscreenApi:
-    """Мост из JS страницы в pywebview.Window.toggle_fullscreen() — сама
-    страница попросить macOS-fullscreen окна не может, поэтому по Cmd+Enter
-    js-обработчик вызывает эту функцию через window.pywebview.api."""
+    """Мост из JS страницы в pywebview.Window — сама страница попросить
+    macOS-fullscreen окна или форсированный resize не может, поэтому по
+    Cmd+Enter js-обработчик вызывает эти функции через window.pywebview.api."""
 
     def __init__(self):
         self.window = None
@@ -76,6 +98,7 @@ class _FullscreenApi:
     def toggle_fullscreen(self):
         if self.window is not None:
             self.window.toggle_fullscreen()
+            _nudge_relayout(self.window)
 
 
 def main():
@@ -101,6 +124,10 @@ def main():
         if auto_fullscreen and not first_real_load['done']:
             window.toggle_fullscreen()
         first_real_load['done'] = True
+        # Даём плееру время инициализироваться, потом форсируем перерисовку
+        # даже без нажатия Cmd+Enter — часто именно первый рендер после
+        # загрузки и оказывается тем самым "застрявшим" кадром.
+        threading.Timer(2.0, lambda: _nudge_relayout(window)).start()
 
     def on_splash_loaded():
         # 'loaded' сработает и для настоящей страницы тоже — отписываемся
