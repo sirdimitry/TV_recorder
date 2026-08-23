@@ -27,7 +27,8 @@ class LinkList(ctk.CTkFrame):
 
     def __init__(self, parent, recorder=None, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
-                 on_delete: Optional[Callable] = None, on_add: Optional[Callable] = None):
+                 on_delete: Optional[Callable] = None, on_add: Optional[Callable] = None,
+                 on_preview: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.root = parent.winfo_toplevel()
         self.colors = Config.COLORS
@@ -37,6 +38,7 @@ class LinkList(ctk.CTkFrame):
         self.on_record = on_record
         self.on_delete = on_delete
         self.on_add = on_add
+        self.on_preview = on_preview
         self.link_widgets: Dict[str, dict] = {}
 
         self._setup_ui()
@@ -178,6 +180,9 @@ class LinkList(ctk.CTkFrame):
             def apply():
                 if name not in self.link_widgets:
                     return
+                # Кэшируем — по клику на строку показываем встроенное превью
+                # (PreviewPanel) без повторного resolve_link на каждый клик.
+                self.link_widgets[name]['resolved_info'] = info
                 c = self.colors
                 if image is not None:
                     thumb_label.configure(image=image)
@@ -196,7 +201,13 @@ class LinkList(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_click(self, name: str):
-        if self.on_select: self.on_select(name)
+        if self.on_select:
+            self.on_select(name)
+        if self.on_preview:
+            widgets = self.link_widgets.get(name)
+            info = widgets.get('resolved_info') if widgets else None
+            if info and info.ok and info.video_url:
+                self.on_preview(name, info.video_url, info.headers)
 
     def _on_edit(self, name: str, link: Dict):
         if self.on_edit: self.on_edit(name, link)

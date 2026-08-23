@@ -335,6 +335,7 @@ class AppWindow:
             on_record=self._record_link_now,
             on_delete=self._delete_link,
             on_add=self._add_link_dialog,
+            on_preview=self._show_channel_preview,
         )
         self.link_list.pack(fill='both', expand=True)
 
