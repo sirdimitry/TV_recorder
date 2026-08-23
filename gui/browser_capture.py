@@ -27,6 +27,13 @@ fullScreenEnabled — без него WebKit по умолчанию откло�
 он не гарантирует, что кнопка заработает на всех сайтах — авто-fullscreen
 окна через auto_fullscreen надёжнее там, где применим.
 
+Универсальный запасной вариант — сочетание клавиш Cmd+Enter прямо в окне:
+переключает ОКНО во весь экран независимо от того, нашёлся ли player_url
+и работает ли у сайта своя кнопка fullscreen (пример, где ни то ни другое
+не сработало: iz.ru — там вообще нет предсказуемо встроенного плеера).
+Работает всегда, на любой странице, в т.ч. после перехода по ссылкам
+внутри сайта — слушатель клавиш переустанавливается на каждую загрузку.
+
 Некоторые сайты (замечено на otr-online.ru) реально грузятся по 15-20
 секунд — без всякой индикации это выглядит так, будто окно просто не
 открылось. Поэтому сперва показываем тёмную заглушку "Загрузка…" и
@@ -41,6 +48,35 @@ font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;">
 </body></html>
 """
 
+# document на каждой загруженной странице/навигации — идемпотентно (флаг
+# на window, чтобы не навешивать по второму слушателю при повторных вызовах
+# evaluate_js на той же странице).
+FULLSCREEN_HOTKEY_JS = """
+(function() {
+    if (window.__tvrecorder_fs_bound) return;
+    window.__tvrecorder_fs_bound = true;
+    document.addEventListener('keydown', function(e) {
+        if (e.metaKey && e.key === 'Enter') {
+            e.preventDefault();
+            window.pywebview.api.toggle_fullscreen();
+        }
+    }, true);
+})();
+"""
+
+
+class _FullscreenApi:
+    """Мост из JS страницы в pywebview.Window.toggle_fullscreen() — сама
+    страница попросить macOS-fullscreen окна не может, поэтому по Cmd+Enter
+    js-обработчик вызывает эту функцию через window.pywebview.api."""
+
+    def __init__(self):
+        self.window = None
+
+    def toggle_fullscreen(self):
+        if self.window is not None:
+            self.window.toggle_fullscreen()
+
 
 def main():
     if len(sys.argv) < 2:
@@ -51,19 +87,29 @@ def main():
     auto_fullscreen = sys.argv[3] == '1' if len(sys.argv) > 3 else False
 
     import webview
-    window = webview.create_window(title, html=LOADING_HTML, width=1280, height=800)
+    api = _FullscreenApi()
+    window = webview.create_window(title, html=LOADING_HTML, width=1280, height=800, js_api=api)
+    api.window = window
 
-    def on_real_page_loaded():
-        window.events.loaded -= on_real_page_loaded
-        if auto_fullscreen:
+    first_real_load = {'done': False}
+
+    def on_page_loaded():
+        try:
+            window.evaluate_js(FULLSCREEN_HOTKEY_JS)
+        except Exception as e:
+            print(f"Не удалось привязать Cmd+Enter для fullscreen: {e}", file=sys.stderr)
+        if auto_fullscreen and not first_real_load['done']:
             window.toggle_fullscreen()
+        first_real_load['done'] = True
 
     def on_splash_loaded():
         # 'loaded' сработает и для настоящей страницы тоже — отписываемся
-        # от заглушки и вешаем отдельный обработчик на реальную загрузку,
-        # иначе уйдём в бесконечную перезагрузку.
+        # от заглушки и вешаем постоянный обработчик на реальные загрузки
+        # (в т.ч. переходы по ссылкам внутри сайта), иначе уйдём в
+        # бесконечную перезагрузку и потеряем слушатель клавиш после
+        # первой же навигации.
         window.events.loaded -= on_splash_loaded
-        window.events.loaded += on_real_page_loaded
+        window.events.loaded += on_page_loaded
         window.load_url(url)
 
     window.events.loaded += on_splash_loaded
