@@ -9,7 +9,7 @@ from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
 from core.screen_capture import (build_screen_capture_cmd, find_loopback_audio_index,
                                   find_screen_device_index, get_retina_scale_factor)
-from core.stream_resolver import hls_opts, resolve_variant_url
+from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.config import Config
 from utils.filenames import safe_filename
 from utils.logger import logger
@@ -155,8 +155,8 @@ class Recorder:
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
             cmd = [
                 'ffmpeg', '-y',
-                *hls_opts(stream_url), '-headers', headers, '-i', stream_url,
-                *hls_opts(audio_url), '-headers', headers, '-i', audio_url,
+                *RECONNECT_OPTS, *hls_opts(stream_url), '-headers', headers, '-i', stream_url,
+                *RECONNECT_OPTS, *hls_opts(audio_url), '-headers', headers, '-i', audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
                 '-c', 'copy',
                 '-err_detect', 'ignore_err',
@@ -174,7 +174,7 @@ class Recorder:
 
             cmd = [
                 'ffmpeg', '-y',
-                *hls_opts(stream_url),
+                *RECONNECT_OPTS, *hls_opts(stream_url),
                 '-headers', headers,
                 '-i', stream_url,
                 '-c', 'copy',

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from core.link_resolver import resolve_link
-from core.stream_resolver import hls_opts, resolve_variant_url
+from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.filenames import safe_filename
 from utils.logger import logger
 
@@ -159,8 +159,8 @@ class Downloader:
         if info.audio_url:
             cmd = [
                 'ffmpeg', '-y',
-                *hls_opts(video_url), '-headers', headers, '-i', video_url,
-                *hls_opts(info.audio_url), '-headers', headers, '-i', info.audio_url,
+                *RECONNECT_OPTS, *hls_opts(video_url), '-headers', headers, '-i', video_url,
+                *RECONNECT_OPTS, *hls_opts(info.audio_url), '-headers', headers, '-i', info.audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
                 '-c', 'copy',
                 '-err_detect', 'ignore_err',
@@ -174,7 +174,7 @@ class Downloader:
                                              target_height=task.target_height)
             cmd = [
                 'ffmpeg', '-y',
-                *hls_opts(video_url),
+                *RECONNECT_OPTS, *hls_opts(video_url),
                 '-headers', headers,
                 '-i', video_url,
                 '-c', 'copy',

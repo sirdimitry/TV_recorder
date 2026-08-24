@@ -134,6 +134,15 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
             logger.info(f"LinkResolver: yt-dlp не знает '{url}', нашли поток напрямую в HTML")
         return fallback
 
+    # 1tv.ru рисует плеер через JS (iframe на static.1tv.ru появляется уже
+    # после гидратации React) — ни у yt-dlp, ни в сыром HTML ссылки нет.
+    # Но сам JS-плеер внутри просто дёргает свой собственный публичный
+    # JSON-эндпоинт по числовому id из URL — тот же вызов можно сделать
+    # напрямую, без браузера вообще (см. _resolve_1tv).
+    onetv = _resolve_1tv(url, timeout)
+    if onetv is not None:
+        return onetv
+
     # Ни у yt-dlp, ни в сыром HTML ничего не нашлось — если у страницы
     # есть своя embed-страница (og:video), сначала пробуем прогнать через
     # браузер именно её (там меньше постороннего шума в сетевых запросах,
@@ -276,6 +285,52 @@ def _resolve_via_ytdlp(url: str, timeout: int, target_height: int = TARGET_HEIGH
     # дефолтный User-Agent.
     return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=is_live, duration=duration,
                      video_url=video_url, audio_url=audio_url, headers=headers)
+
+
+_ONETV_NEWS_ID_RE = re.compile(r'1tv\.ru/n/(\d+)', re.IGNORECASE)
+
+
+def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
+    """1tv.ru/n/<id> статьи рисуют плеер JS-ом (EUMP, static.1tv.ru) —
+    в сыром HTML ссылки нет. Но сам плеер после гидратации просто дёргает
+    свой публичный JSON: https://www.1tv.ru/video_materials.json?news_id=<id>
+    (тип запроса "11" = news_id — виден в query-параметре встраиваемого
+    iframe, static.1tv.ru/eump/embeds/public_vod.html?v=<id>:11, разобранном
+    вручную из initializers/public_vod.js). Тот же вызов делаем напрямую —
+    без браузера вообще, быстрее и надёжнее sniff-а. Возвращает None, если
+    URL не похож на /n/<id> или запрос не удался — тогда resolve_link()
+    просто идёт дальше по обычной цепочке."""
+    match = _ONETV_NEWS_ID_RE.search(url)
+    if not match:
+        return None
+    news_id = match.group(1)
+    api_url = f"https://www.1tv.ru/video_materials.json?news_id={news_id}&single=true"
+    try:
+        resp = requests.get(api_url, headers={'User-Agent': _DEFAULT_UA, 'Referer': url}, timeout=timeout)
+        if resp.status_code != 200:
+            logger.debug(f"LinkResolver/1tv: '{api_url}' ответил HTTP {resp.status_code}")
+            return None
+        items = resp.json()
+        if not items:
+            return None
+        item = items[0]
+    except Exception as e:
+        logger.debug(f"LinkResolver/1tv: не удалось разобрать '{url}': {e}")
+        return None
+
+    sources = item.get('sources') or []
+    stream_url = next((s['src'] for s in sources if s.get('type') == 'application/x-mpegURL'), None)
+    if not stream_url:
+        stream_url = next((s['src'] for s in sources if s.get('src')), None)
+    if not stream_url:
+        return None
+    if stream_url.startswith('//'):
+        stream_url = 'https:' + stream_url
+
+    logger.info(f"LinkResolver/1tv: нашли поток для '{url}' через video_materials.json")
+    return LinkInfo(ok=True, title=item.get('title', url), thumbnail=item.get('poster', ''),
+                     is_live=False, duration=item.get('duration'), video_url=stream_url,
+                     headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
 
 
 def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Optional[str]:

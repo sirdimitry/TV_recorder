@@ -18,6 +18,13 @@ TARGET_HEIGHT = 720
 TARGET_BITRATE_KBPS = 5000
 
 
+# Без этого ffmpeg молча падает на любом временном обрыве TLS/HTTP-соединения
+# посреди потока ("IO error: End of file") вместо того, чтобы просто
+# переподключиться — замечено на 1tv.ru (balancer-vod.1tv.ru явно рвёт
+# долгие соединения), но актуально для любого HTTP(S)-источника.
+RECONNECT_OPTS = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+
+
 def hls_opts(url: str) -> list:
     """-allowed_extensions — опция HLS-демуксера (снимает ограничение на
     расширения сегментов у капризных CDN); для прямого файла (.mp4 и т.п.,
