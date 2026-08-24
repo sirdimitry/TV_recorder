@@ -304,6 +304,22 @@ class _SnifferApi:
         self._report('IFRAME', url)
 
 
+def _hide_from_dock():
+    """minimized=True (см. ниже) рендерит страницу по-настоящему, но на
+    macOS каждый такой процесс всё равно ненадолго получает собственную
+    иконку в Dock (обычное поведение любого GUI-процесса) — при частых
+    sniff-попытках они успевают заметно накопиться визуально. Переводим
+    процесс в "accessory" (как строка-меню без иконки в Dock) — окно и
+    его рендеринг работают точно так же, просто в Dock ничего не видно."""
+    if sys.platform != 'darwin':
+        return
+    try:
+        import AppKit
+        AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    except Exception as e:
+        print(f"Не удалось скрыть окно поиска потока из Dock: {e}", file=sys.stderr)
+
+
 def _run_sniff(url: str, timeout: float = 40.0):
     import webview
     api = _SnifferApi()
@@ -337,7 +353,7 @@ def _run_sniff(url: str, timeout: float = 40.0):
                 pass
 
     threading.Thread(target=watchdog, daemon=True).start()
-    webview.start(user_agent=_USER_AGENT)
+    webview.start(func=_hide_from_dock, user_agent=_USER_AGENT)
 
 
 def main():

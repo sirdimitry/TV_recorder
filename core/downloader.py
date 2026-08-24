@@ -37,12 +37,21 @@ class DownloadTask:
         # resolving -> downloading -> done | error | canceled
         self.status = 'resolving'
         self.error_message = ''
+        self.progress: Optional[float] = None  # 0-100, None пока неизвестно (не тот же duration или ещё не начали)
+        self.elapsed_seconds: float = 0.0
         self.created_at = datetime.now()
         self.finished_at: Optional[datetime] = None
         self.on_complete: Optional[Callable] = None
 
     def to_dict(self) -> Dict:
-        """Для core/storage.py — то, что переживает перезапуск приложения."""
+        """Снимок задачи как есть — используется и для живого обновления
+        строки в интерфейсе (там 'downloading' должен доходить как есть,
+        не подменяться), и для сохранения в core/storage.py на случай
+        перезапуска приложения. За превращение зависшего на 'downloading'
+        значения в честную ошибку (задача была прервана закрытием
+        приложения, реального процесса за ней уже нет) отвечает
+        DownloadList.load_downloads() — она видит эти данные только один
+        раз, при самой первой загрузке с диска."""
         return {
             'id': self.task_id,
             'url': self.url,
@@ -51,8 +60,9 @@ class DownloadTask:
             'duration': self.duration,
             'target_height': self.target_height,
             'output_path': self.output_path,
-            'status': self.status if self.status != 'downloading' else 'error',
-            'error_message': self.error_message or ('Прервано закрытием приложения' if self.status == 'downloading' else ''),
+            'status': self.status,
+            'error_message': self.error_message,
+            'progress': self.progress,
         }
 
 
@@ -155,10 +165,16 @@ class Downloader:
         ref = headers_dict.get('Referer', '')
         headers = ''.join(f"{k}: {v}\r\n" for k, v in headers_dict.items())
 
+        # -progress pipe:1 -nostats: структурированные key=value строки в
+        # stdout вместо текстовых "frame=... time=..." в stderr — оттуда и
+        # берём прогресс (см. _watch_progress). Настоящие ошибки ffmpeg
+        # по-прежнему пишет в stderr, -nostats их не трогает.
+        progress_opts = ['-progress', 'pipe:1', '-nostats']
+
         video_url = info.video_url
         if info.audio_url:
             cmd = [
-                'ffmpeg', '-y',
+                'ffmpeg', '-y', *progress_opts,
                 *RECONNECT_OPTS, *hls_opts(video_url), '-headers', headers, '-i', video_url,
                 *RECONNECT_OPTS, *hls_opts(info.audio_url), '-headers', headers, '-i', info.audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
@@ -173,7 +189,7 @@ class Downloader:
             video_url = resolve_variant_url(video_url, user_agent=ua, referer=ref,
                                              target_height=task.target_height)
             cmd = [
-                'ffmpeg', '-y',
+                'ffmpeg', '-y', *progress_opts,
                 *RECONNECT_OPTS, *hls_opts(video_url),
                 '-headers', headers,
                 '-i', video_url,
@@ -186,7 +202,8 @@ class Downloader:
             ]
 
         try:
-            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                             text=True, bufsize=1)
         except Exception as e:
             task.status = 'error'
             task.error_message = f'Не удалось запустить ffmpeg: {e}'
@@ -197,7 +214,25 @@ class Downloader:
             return
 
         logger.info(f"Downloader: начато скачивание '{task.name}' → {output_path}")
-        _, stderr = task.process.communicate()
+
+        # stdout (прогресс) и stderr (диагностика на случай ошибки) нужно
+        # читать одновременно отдельными потоками — иначе при заполнении
+        # непрочитанного буфера одного из них ffmpeg зависнет намертво.
+        stderr_lines = []
+
+        def drain_stderr():
+            try:
+                for line in task.process.stderr:
+                    stderr_lines.append(line)
+                    if len(stderr_lines) > 300:
+                        stderr_lines.pop(0)
+            except Exception:
+                pass
+
+        threading.Thread(target=drain_stderr, daemon=True).start()
+        self._watch_progress(task)
+
+        task.process.wait()
         returncode = task.process.returncode
 
         if task.status == 'canceled':
@@ -211,10 +246,11 @@ class Downloader:
 
         if success:
             task.status = 'done'
+            task.progress = 100.0
             logger.info(f"Downloader: '{task.name}' скачан → {output_path}")
         else:
             task.status = 'error'
-            err_msg = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ''
+            err_msg = ''.join(stderr_lines)[-500:]
             if not has_usable_file:
                 err_msg = "Не удалось создать файл. " + err_msg
             task.error_message = err_msg
@@ -223,3 +259,28 @@ class Downloader:
         self._notify_ui()
         if task.on_complete:
             task.on_complete(success, task, task.error_message)
+
+    def _watch_progress(self, task: DownloadTask):
+        """Читает key=value строки из -progress pipe:1 и переводит
+        out_time_us в проценты от известной длительности ролика.
+        Уведомления троттлятся — иначе на быстром скачивании (на диске уже
+        готовый файл, ffmpeg просто копирует байты) UI-callback звался бы
+        на каждую строку, десятки раз в секунду."""
+        last_notify = 0.0
+        try:
+            for line in task.process.stdout:
+                line = line.strip()
+                if line.startswith('out_time_us='):
+                    try:
+                        task.elapsed_seconds = int(line.split('=', 1)[1]) / 1_000_000
+                    except ValueError:
+                        continue
+                    if task.duration:
+                        task.progress = max(0.0, min(100.0, task.elapsed_seconds / task.duration * 100))
+                elif line.startswith('progress='):
+                    now = time.time()
+                    if now - last_notify >= 0.5 or line.endswith('end'):
+                        last_notify = now
+                        self._notify_ui()
+        except Exception:
+            pass

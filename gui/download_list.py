@@ -71,6 +71,19 @@ class DownloadList(ctk.CTkFrame):
             widget.destroy()
         self.row_widgets.clear()
 
+        # 'downloading' в данных с диска — это либо реально идущая сейчас
+        # задача (тогда в self.downloader есть живая DownloadTask с тем же
+        # id — эта функция может звlater перевызываться, пока загрузка ещё
+        # идёт, и её статус трогать нельзя), либо хвост от прошлого запуска
+        # приложения, который прервали закрытием — тогда живой задачи с
+        # таким id уже нет и не будет, значит это тихая ошибка, а не
+        # "качается" навечно.
+        live_ids = {t.task_id for t in self.downloader.get_all_downloads()} if self.downloader else set()
+        for item in items:
+            if item.get('status') == 'downloading' and item.get('id') not in live_ids:
+                item['status'] = 'error'
+                item['error_message'] = item.get('error_message') or 'Прервано закрытием приложения'
+
         if not items:
             ctk.CTkLabel(self.scroll_frame, text="Пока нет ни одной загрузки",
                          font=ctk.CTkFont(size=11), text_color=self.colors['text_muted']).pack(pady=18)
@@ -119,6 +132,10 @@ class DownloadList(ctk.CTkFrame):
         status_dot = ctk.CTkLabel(badge_row, text="", image=get_icon('record', c['text_muted'], 10))
         status_dot.pack(side='left', padx=(6, 0))
 
+        progress_bar = ctk.CTkProgressBar(info_frame, height=4, corner_radius=2,
+                                           fg_color=c['bg_tertiary'], progress_color=c['accent'])
+        progress_bar.set(0)
+
         error_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9), text_color=c['red'],
                                     anchor='w', wraplength=220, justify='left')
         error_label.pack(fill='x', anchor='w')
@@ -147,9 +164,9 @@ class DownloadList(ctk.CTkFrame):
 
         self.row_widgets[download_id] = {
             'row': row, 'thumb_label': thumb_label, 'label_name': label_name, 'badge': badge,
-            'status_dot': status_dot, 'error_label': error_label,
+            'status_dot': status_dot, 'error_label': error_label, 'progress_bar': progress_bar,
             'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'item': item,
-            'thumbnail_loaded': False,
+            'thumbnail_loaded': False, 'progress_shown': False,
         }
         self._apply_status(download_id, item)
 
@@ -176,6 +193,21 @@ class DownloadList(ctk.CTkFrame):
         widgets['status_dot'].configure(image=get_icon('record', dot_color, 10))
         error_message = item.get('error_message') if status == 'error' else ''
         widgets['error_label'].configure(text=error_message or '')
+
+        # Полоска прогресса — только пока реально качается, и только если
+        # знаем длительность (иначе процент посчитать не из чего; для
+        # эфиров/неизвестной длины просто не показываем полоску вообще).
+        progress = item.get('progress')
+        show_progress = status == 'downloading' and progress is not None
+        if show_progress:
+            widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
+            if not widgets['progress_shown']:
+                widgets['progress_bar'].pack(fill='x', anchor='w', pady=(4, 0))
+                widgets['progress_shown'] = True
+        elif widgets['progress_shown']:
+            widgets['progress_bar'].pack_forget()
+            widgets['progress_shown'] = False
+
         widgets['btn_folder'].configure(state='normal' if status == 'done' else 'disabled')
         widgets['btn_cancel'].configure(
             state='normal' if status in ('resolving', 'downloading') else 'disabled')
