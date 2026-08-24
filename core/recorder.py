@@ -5,13 +5,13 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-import re
 from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
 from core.screen_capture import (build_screen_capture_cmd, find_loopback_audio_index,
                                   find_screen_device_index, get_retina_scale_factor)
-from core.stream_resolver import resolve_variant_url
+from core.stream_resolver import hls_opts, resolve_variant_url
 from utils.config import Config
+from utils.filenames import safe_filename
 from utils.logger import logger
 
 SNAPSHOT_FPS = 4  # активных записей может быть много одновременно (1-16+) — держим частоту скромной
@@ -72,18 +72,6 @@ class RecordingTask:
 
 
 class Recorder:
-    TRANSLITERATION = str.maketrans({
-        'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E',
-        'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M',
-        'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
-        'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Sch',
-        'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya',
-        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
-        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-        'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
-    })
     CHANNEL_HEADERS = {
         "Первый канал": {"ua": "Mozilla/5.0", "ref": "https://www.1tv.ru"},
         "Россия 1": {"ua": "Mozilla/5.0", "ref": "https://smotrim.ru"},
@@ -123,8 +111,7 @@ class Recorder:
     def build_output_path(cls, channel_name: str, recorded_at: datetime | None = None) -> Path:
         """Builds a portable filename so macOS and Windows handle it identically."""
         timestamp = (recorded_at or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S')
-        latin_name = channel_name.translate(cls.TRANSLITERATION)
-        safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', latin_name).strip('_') or 'channel'
+        safe_name = safe_filename(channel_name)
         return Config.get_recordings_dir() / f"{safe_name}_{timestamp}.mp4"
 
     def _notify_ui(self):
@@ -161,16 +148,6 @@ class Recorder:
             ref = headers_info.get("ref", "https://www.google.com")
             headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
             headers_dict = {"User-Agent": ua, "Referer": ref, "Origin": ref}
-
-        # -allowed_extensions — опция HLS-демуксера (снимает ограничение на
-        # расширения сегментов у капризных CDN); для прямого файла (.mp4 и
-        # т.п., не .m3u8) ffmpeg её просто не знает и падает с "Option
-        # allowed_extensions not found" ещё до открытия потока — замечено
-        # на VK/okcdn.ru (прямой .mp4-подобный URL без .m3u8), но касалось
-        # бы и любой другой напрямую найденной .mp4-ссылки (см.
-        # link_resolver.py). Добавляем опцию только когда поток реально HLS.
-        def hls_opts(u: str):
-            return ['-allowed_extensions', 'ALL'] if '.m3u8' in u.lower() else []
 
         if audio_url:
             # Видео и звук — уже отдельные закодированные дорожки (типично

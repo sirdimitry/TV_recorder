@@ -11,6 +11,8 @@ import customtkinter as ctk
 
 from gui.browser_link_list import BrowserLinkList
 from gui.channel_list import ChannelList
+from gui.download_dialog import show_add_download_dialog
+from gui.download_list import DownloadList
 from gui.link_list import LinkList
 from gui.preview_panel import PreviewPanel
 from gui.schedule_panel import SchedulePanel, TimeEntry
@@ -20,44 +22,16 @@ from core.link_resolver import resolve_link, guess_type
 from core.storage import Storage
 from core.scheduler import RecordingScheduler
 from core.recorder import Recorder
+from core.downloader import Downloader
 from utils.config import Config
 from utils.icons import get_icon
 from utils.vpn_manager import VPNManager
 from utils.network_monitor import NetworkMonitor
+from utils.tk_helpers import bind_cyrillic_layout_shortcuts
 from utils.logger import logger
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
-
-
-def _make_clipboard_action(virtual_event: str):
-    def handler(event):
-        event.widget.event_generate(virtual_event)
-        return 'break'
-    return handler
-
-
-# Tk на macOS матчит Cmd+C/V/X/A по СИМВОЛУ, который даёт нажатая клавиша,
-# а не по её физическому положению. При активной русской раскладке (ЙЦУКЕН)
-# те же клавиши дают кириллицу (V→М, C→С, X→Ч, A→Ф), и родные биндинги
-# просто не срабатывают — при этом обычный ввод текста не страдает, отсюда
-# и путаница "вставить не могу, а руками написать могу". Дублируем те же
-# действия на кириллические варианты, ничего не убирая: на английской
-# раскладке эти биндинги на кириллические клавиши никогда не сработают,
-# так что двойной вставки не будет.
-_CYRILLIC_CLIPBOARD_KEYSYMS = {
-    '<<Paste>>': ('Cyrillic_em', 'Cyrillic_EM'),
-    '<<Copy>>': ('Cyrillic_es', 'Cyrillic_ES'),
-    '<<Cut>>': ('Cyrillic_che', 'Cyrillic_CHE'),
-    '<<SelectAll>>': ('Cyrillic_ef', 'Cyrillic_EF'),
-}
-
-
-def bind_cyrillic_layout_shortcuts(widget):
-    for virtual_event, keysyms in _CYRILLIC_CLIPBOARD_KEYSYMS.items():
-        action = _make_clipboard_action(virtual_event)
-        for keysym in keysyms:
-            widget.bind(f'<Command-{keysym}>', action)
 
 
 class SplashScreen(ctk.CTkToplevel):
@@ -143,6 +117,7 @@ class AppWindow:
         self.colors = Config.COLORS
         self.storage = Storage()
         self.recorder = Recorder()
+        self.downloader = Downloader()
         self.scheduler = RecordingScheduler(recorder=self.recorder)
         self._network_results = Queue(maxsize=1)
         self._network_monitor_running = False
@@ -337,6 +312,7 @@ class AppWindow:
         tab_channels = self.left_tabview.add("Каналы")
         tab_links = self.left_tabview.add("Мои ссылки")
         tab_browser = self.left_tabview.add("Браузер")
+        tab_downloads = self.left_tabview.add("Загрузки")
 
         self.channel_list = ChannelList(
             tab_channels,
@@ -373,6 +349,14 @@ class AppWindow:
         )
         self.browser_link_list.pack(fill='both', expand=True)
 
+        self.download_list = DownloadList(
+            tab_downloads,
+            downloader=self.downloader,
+            storage=self.storage,
+            on_add=self._add_download_dialog,
+        )
+        self.download_list.pack(fill='both', expand=True)
+
         paned.add(left_frame, weight=1)
 
         right_paned = ttk.PanedWindow(paned, orient='vertical')
@@ -397,7 +381,12 @@ class AppWindow:
         self.channel_list.load_channels(self.storage.get_channels())
         self.link_list.load_links(self.storage.get_links())
         self.browser_link_list.load_links(self.storage.get_browser_links())
+        self.download_list.load_downloads(self.storage.get_downloads())
         self.schedule_panel.refresh()
+
+    def _add_download_dialog(self):
+        show_add_download_dialog(self.root, self.colors, self.storage, self.downloader,
+                                  on_added=lambda: self.left_tabview.set("Загрузки"))
 
     def _check_all_channels(self):
         self.channel_list.check_all()
@@ -1111,41 +1100,46 @@ class AppWindow:
 
     def _show_settings(self):
         c = self.colors
-        dialog = self._create_dialog("Settings", "620x220")
-        directory = tk.StringVar(value=str(Config.get_recordings_dir()))
+        dialog = self._create_dialog("Settings", "620x320")
+        recordings_dir = tk.StringVar(value=str(Config.get_recordings_dir()))
+        downloads_dir = tk.StringVar(value=str(Config.get_downloads_dir()))
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
         body.pack(fill='both', expand=True, padx=20, pady=20)
         body.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(body, text="Recording folder:", text_color=c['text_secondary']).pack(anchor='w')
+        def folder_row(label_text: str, variable: tk.StringVar):
+            ctk.CTkLabel(body, text=label_text, text_color=c['text_secondary']).pack(anchor='w')
+            entry = ctk.CTkEntry(body, textvariable=variable, height=32, corner_radius=Config.RADIUS_SM,
+                                  fg_color=c['bg_primary'], border_color=c['border'],
+                                  text_color=c['text_primary'], state='readonly')
+            entry.pack(fill='x', pady=(8, 4))
 
-        entry = ctk.CTkEntry(body, textvariable=directory, height=32, corner_radius=Config.RADIUS_SM,
-                              fg_color=c['bg_primary'], border_color=c['border'],
-                              text_color=c['text_primary'], state='readonly')
-        entry.pack(fill='x', pady=(8, 12))
+            def choose_folder():
+                selected = filedialog.askdirectory(parent=dialog, initialdir=variable.get())
+                if selected:
+                    variable.set(selected)
 
-        def choose_folder():
-            selected = filedialog.askdirectory(parent=dialog, initialdir=directory.get())
-            if selected:
-                directory.set(selected)
+            ctk.CTkButton(body, text="Choose…", command=choose_folder, height=32, width=110,
+                          corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
+                          text_color=c['text_primary']).pack(anchor='w', pady=(0, 16))
+
+        folder_row("Recording folder:", recordings_dir)
+        folder_row("Downloads folder:", downloads_dir)
 
         def save():
             try:
-                Config.set_recordings_dir(directory.get())
+                Config.set_recordings_dir(recordings_dir.get())
+                Config.set_downloads_dir(downloads_dir.get())
                 logger.info(f"Recording folder changed to: {Config.get_recordings_dir()}")
+                logger.info(f"Downloads folder changed to: {Config.get_downloads_dir()}")
                 dialog.destroy()
             except OSError as error:
                 messagebox.showerror("Settings", f"Could not use this folder:\n{error}", parent=dialog)
 
-        btn_row = ctk.CTkFrame(body, fg_color='transparent')
-        btn_row.pack(fill='x', pady=(4, 0))
-        ctk.CTkButton(btn_row, text="Choose…", command=choose_folder, height=32, width=110,
-                      corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
-                      text_color=c['text_primary']).pack(side='left')
-        ctk.CTkButton(btn_row, text="Save", command=save, height=32, width=90,
+        ctk.CTkButton(body, text="Save", command=save, height=32, width=90,
                       corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
-                      text_color=c['accent_text']).pack(side='right')
+                      text_color=c['accent_text']).pack(anchor='e')
 
     def _show_about(self):
         c = self.colors

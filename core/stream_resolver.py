@@ -18,6 +18,16 @@ TARGET_HEIGHT = 720
 TARGET_BITRATE_KBPS = 5000
 
 
+def hls_opts(url: str) -> list:
+    """-allowed_extensions — опция HLS-демуксера (снимает ограничение на
+    расширения сегментов у капризных CDN); для прямого файла (.mp4 и т.п.,
+    не .m3u8) ffmpeg её просто не знает и падает с "Option allowed_extensions
+    not found" ещё до открытия потока — замечено на VK/okcdn.ru (прямой
+    .mp4-подобный URL без .m3u8). Единая точка для этой проверки — раньше
+    была продублирована и разошлась бы снова при следующей правке."""
+    return ['-allowed_extensions', 'ALL'] if '.m3u8' in url.lower() else []
+
+
 def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Optional[str] = None,
                          target_height: int = TARGET_HEIGHT,
                          target_bitrate_kbps: int = TARGET_BITRATE_KBPS) -> str:

@@ -16,6 +16,7 @@ class Storage:
         self.links_file = Config.LINKS_FILE
         self.browser_links_file = Config.BROWSER_LINKS_FILE
         self.schedule_file = Config.SCHEDULE_FILE
+        self.downloads_file = Config.DOWNLOADS_FILE
         self.default_channels_file = Config.BASE_DIR / "data" / "default_channels.json"
 
         # Создаем файлы если не существуют
@@ -27,6 +28,8 @@ class Storage:
             self._save_json(self.browser_links_file, [])
         if not self.schedule_file.exists():
             self._save_json(self.schedule_file, [])
+        if not self.downloads_file.exists():
+            self._save_json(self.downloads_file, [])
             
         # Автозагрузка дефолтных каналов, если список пуст
         self._load_default_channels_if_empty()
@@ -154,3 +157,27 @@ class Storage:
         if 0 <= index < len(schedule):
             schedule[index]['enabled'] = not schedule[index].get('enabled', True)
             self._save_json(self.schedule_file, schedule)
+
+    # === Загрузки (вкладка "Загрузки" — разовое скачивание в файл,
+    # core/downloader.py) — упорядочены по "id", а не по "name": в отличие
+    # от каналов/ссылок несколько загрузок вполне могут называться одинаково. ===
+    def get_downloads(self) -> List[Dict]:
+        return self._load_json(self.downloads_file)
+
+    def save_download(self, item: Dict):
+        downloads = self.get_downloads()
+        found = False
+        for i, d in enumerate(downloads):
+            if d.get('id') == item.get('id'):
+                downloads[i] = item
+                found = True
+                break
+        if not found:
+            downloads.append(item)
+        self._save_json(self.downloads_file, downloads)
+
+    def delete_download(self, download_id: str):
+        downloads = self.get_downloads()
+        downloads = [d for d in downloads if d.get('id') != download_id]
+        self._save_json(self.downloads_file, downloads)
+        logger.info(f"Загрузка удалена: {download_id}")

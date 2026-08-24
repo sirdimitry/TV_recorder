@@ -59,6 +59,11 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
         d.line([px*0.26, px*0.26, px*0.74, px*0.74], fill=color, width=stroke)
         d.line([px*0.74, px*0.26, px*0.26, px*0.74], fill=color, width=stroke)
 
+    elif name == 'download':
+        d.line([px*0.5, px*0.14, px*0.5, px*0.60], fill=color, width=stroke)
+        d.polygon([(px*0.30, px*0.44), (px*0.70, px*0.44), (px*0.5, px*0.68)], fill=color)
+        d.line([px*0.18, px*0.82, px*0.82, px*0.82], fill=color, width=stroke)
+
     elif name == 'folder':
         d.polygon([(px*0.14, px*0.30), (px*0.42, px*0.30), (px*0.48, px*0.38),
                     (px*0.86, px*0.38), (px*0.86, px*0.80), (px*0.14, px*0.80)],

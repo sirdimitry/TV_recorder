@@ -51,13 +51,18 @@ _DEFAULT_UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.
                '(KHTML, like Gecko) Version/17.0 Safari/605.1.15')
 
 TARGET_HEIGHT = 720
-# h264+aac в приоритете (максимальная совместимость плеера/Finder),
-# иначе — лучшее, что есть в пределах 720p, иначе — вообще лучшее.
-FORMAT_SELECTOR = (
-    f'bv*[height<={TARGET_HEIGHT}][vcodec^=avc1]+ba[acodec^=mp4a]/'
-    f'bv*[height<={TARGET_HEIGHT}]+ba/'
-    f'b[height<={TARGET_HEIGHT}]/best'
-)
+
+
+def _format_selector(target_height: int = TARGET_HEIGHT) -> str:
+    """h264+aac в приоритете (максимальная совместимость плеера/Finder),
+    иначе — лучшее, что есть в пределах target_height, иначе — вообще
+    лучшее. Параметризовано (не модульная константа) — раздел "Загрузки"
+    просит конкретное разрешение от пользователя, а не всегда 720p."""
+    return (
+        f'bv*[height<={target_height}][vcodec^=avc1]+ba[acodec^=mp4a]/'
+        f'bv*[height<={target_height}]+ba/'
+        f'b[height<={target_height}]/best'
+    )
 
 _STREAM_URL_TAIL = r'(?:https?:)?\\?/\\?/[^\s"\'<>\\]+?\.(?:m3u8|mpd|mp4)'
 # Большинство встраиваемых плееров кладут ссылку на поток под ключом
@@ -101,19 +106,25 @@ class LinkInfo:
     error: str = ''
 
 
-def resolve_link(url: str, timeout: int = 15) -> LinkInfo:
+def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT) -> LinkInfo:
     """Разбирает страницу/ссылку: сперва через yt-dlp, а если для этого
     сайта у него нет экстрактора — пробует найти прямую ссылку на поток
     прямо в HTML страницы, а если и там пусто (сайт рисует плеер через
     JS) — последним рубежом открывает её в настоящем браузерном движке
     и слушает его собственные сетевые запросы (см. _resolve_via_browser_sniff).
-    Ничего не скачивает."""
+    Ничего не скачивает.
+
+    target_height влияет только на выбор варианта у yt-dlp (там реально
+    есть из чего выбирать) — у HTML-скрейпа и sniff-пути отдаётся то, что
+    нашлось; если это HLS-мастер-плейлист, конкретный битрейт под
+    target_height выбирается позже, при сборке команды ffmpeg
+    (см. core/stream_resolver.py: resolve_variant_url)."""
     if not url:
         return LinkInfo(ok=False, error="Пустая ссылка")
 
     ytdlp_result = None
     if YTDLP_AVAILABLE:
-        ytdlp_result = _resolve_via_ytdlp(url, timeout)
+        ytdlp_result = _resolve_via_ytdlp(url, timeout, target_height)
         if ytdlp_result.ok:
             return ytdlp_result
 
@@ -209,12 +220,12 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
     return stream_url, body
 
 
-def _resolve_via_ytdlp(url: str, timeout: int) -> LinkInfo:
+def _resolve_via_ytdlp(url: str, timeout: int, target_height: int = TARGET_HEIGHT) -> LinkInfo:
     opts = {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'format': FORMAT_SELECTOR,
+        'format': _format_selector(target_height),
         'socket_timeout': timeout,
     }
     try:
