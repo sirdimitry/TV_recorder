@@ -652,7 +652,7 @@ class AppWindow:
 
     def _add_link_dialog(self):
         c = self.colors
-        dialog = self._create_dialog("Добавить ссылку", "480x400")
+        dialog = self._create_dialog("Добавить ссылку", "480x430")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -687,9 +687,23 @@ class AppWindow:
                           button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
-        hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'],
+        hint_frame = ctk.CTkFrame(body, fg_color='transparent')
+        hint_frame.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        hint = ctk.CTkLabel(hint_frame, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'],
                              justify='left', wraplength=430)
-        hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        hint.pack(anchor='w')
+        # Прямую ссылку на поток получить не всегда возможно (видео
+        # рисуется JS-ом на странице, сайт отдаёт стаб анти-бот системе и
+        # т.п.) — тут ничего не "доразвить", HTTP-запросом такое в
+        # принципе не пройти. Единственный рабочий вариант для таких
+        # сайтов — режим "Браузер" (открывается настоящий движок и
+        # пишется экран), поэтому вместо тихого "недоступно" сразу
+        # предлагаем переключиться, не заставляя вбивать ссылку заново.
+        switch_btn = ctk.CTkButton(
+            hint_frame, text="Открыть эту ссылку в режиме браузера", height=26,
+            corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
+            text_color=c['text_primary'], font=ctk.CTkFont(size=11),
+            command=lambda: switch_to_browser())
 
         # --- Запись сразу по хронометражу ролика: это не расписание по
         # часам (ссылка не привязана к календарной дате/времени эфира) —
@@ -739,6 +753,12 @@ class AppWindow:
         end_entry.bind('<Key>', lambda e: end_touched.__setitem__('value', True))
         resolved_duration = {'value': None}
 
+        def switch_to_browser():
+            prefill_url = url_var.get().strip()
+            prefill_name = name_var.get().strip()
+            dialog.destroy()
+            self._add_browser_link_dialog(prefill_url=prefill_url, prefill_name=prefill_name)
+
         detect_generation = {'id': 0}
         debounce = {'after_id': None}
 
@@ -751,6 +771,7 @@ class AppWindow:
 
         def start_detection():
             url = url_var.get().strip()
+            switch_btn.pack_forget()
             if not url:
                 hint.configure(text="")
                 return
@@ -771,13 +792,13 @@ class AppWindow:
                     if my_generation != detect_generation['id']:
                         return
                     if not info.ok:
-                        # Прямую ссылку получить не удалось — ссылка всё
-                        # равно сохранится в "Мои ссылки" (не переносим
-                        # автоматически в "Браузер"), просто пометится как
-                        # недоступная в списке. Если понадобится режим
-                        # браузера — можно добавить ту же ссылку отдельно
-                        # через вкладку "Браузер". Длительность неизвестна —
-                        # "До:" оставляем пустым, а не гадаем.
+                        # Прямую ссылку получить не удалось — обычно потому,
+                        # что видео рисуется JS-ом или сайт отдаёт анти-бот
+                        # заглушку, а это HTTP-запросом принципиально не
+                        # обойти. Ссылка всё равно сохранится в "Мои ссылки"
+                        # (просто пометится недоступной), но предлагаем
+                        # сразу переключиться на режим "Браузер" — там
+                        # реальный движок, который такое проходит.
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
                         resolved_duration['value'] = None
@@ -785,6 +806,7 @@ class AppWindow:
                             end_entry.set_time('')
                         hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
                                              f"Ссылка всё равно сохранится, но помечена как недоступная.")
+                        switch_btn.pack(anchor='w', pady=(4, 0))
                         return
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
@@ -929,7 +951,7 @@ class AppWindow:
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
                       ).grid(row=3, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
-    def _add_browser_link_dialog(self):
+    def _add_browser_link_dialog(self, prefill_url: str = '', prefill_name: str = ''):
         """Ссылка для вкладки "Браузер": сайт, чью прямую ссылку на поток
         получить не удалось — при записи откроется окно-браузер, fullscreen
         в плеере включает сам пользователь, пишется экран."""
@@ -942,7 +964,7 @@ class AppWindow:
 
         ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
             row=0, column=0, padx=(0, 12), pady=8, sticky='w')
-        url_var = tk.StringVar()
+        url_var = tk.StringVar(value=prefill_url)
         url_entry = ctk.CTkEntry(body, textvariable=url_var, height=32, corner_radius=Config.RADIUS_SM,
                                   placeholder_text="https://…", fg_color=c['bg_primary'],
                                   border_color=c['border'], text_color=c['text_primary'])
@@ -951,7 +973,7 @@ class AppWindow:
 
         ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
             row=1, column=0, padx=(0, 12), pady=8, sticky='w')
-        name_var = tk.StringVar()
+        name_var = tk.StringVar(value=prefill_name)
         name_entry = ctk.CTkEntry(body, textvariable=name_var, height=32, corner_radius=Config.RADIUS_SM,
                                    placeholder_text="Например: ОТР — прямой эфир", fg_color=c['bg_primary'],
                                    border_color=c['border'], text_color=c['text_primary'])

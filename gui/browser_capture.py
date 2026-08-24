@@ -21,13 +21,15 @@ macOS-fullscreen (Cmd+Ctrl+F/toggle_fullscreen) — тогда окно займ
 Использование: python3 browser_capture.py <url> [title]
 
 Кнопка fullscreen внутри самого плеера страницы (Fullscreen API,
-element.requestFullscreen()) на macOS ненадёжна: pywebview создаёт
-WKWebView без приватного (не задокументированного публично) флага
-fullScreenEnabled — без него WebKit по умолчанию отклоняет такие запросы
-у части сайтов. Включаем этот флаг (см. on_gui_started) на случай, если
-плеер при успешном fullscreen просто меняет размер/раскладку внутри той
-же страницы (а не пытается захватить весь физический экран) — тогда
-дальше срабатывает всё тот же _nudge_relayout ниже.
+element.requestFullscreen()) — та же беда, что и с нативным
+toggle_fullscreen() выше: WebKit разворачивает элемент на весь ФИЗИЧЕСКИЙ
+экран ноутбука, а не в пределах этого окна, и вырезаемая по старым
+координатам область записи с этим никак не совпадает (замечено на
+1tv.ru — играющее видео раздувается на весь монитор). Поэтому явно
+запрещаем нативный fullscreen WKWebView (fullScreenEnabled=False, см.
+on_gui_started) — плееру ничего не остаётся, кроме как остаться в
+пределах страницы; если конкретный плеер после клика по кнопке не
+перерисовался сам, добивает всё тот же _nudge_relayout ниже.
 
 Универсальный трюк на случай, если плеер после клика по своей кнопке
 fullscreen не перерисовался (по образцу OBS Studio Browser Source — там
@@ -51,6 +53,14 @@ import threading
 # (масштабируется до 720p уже после обрезки, см. core/screen_capture.py).
 DEFAULT_WIDTH = 1600
 DEFAULT_HEIGHT = 900
+
+# Тот же UA, что и в core/link_resolver.py (_DEFAULT_UA) — держим одно и
+# то же "лицо браузера" везде. Без него часть сайтов (замечено на
+# 1tv.ru — баннер "ваш браузер устарел") принимает WKWebView за что-то
+# нестандартное/устаревшее и рендерит урезанную/деградированную версию
+# страницы.
+_USER_AGENT = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 '
+               '(KHTML, like Gecko) Version/17.0 Safari/605.1.15')
 
 LOADING_HTML = """
 <html><body style="background:#1a1a1a;color:#999;margin:0;height:100vh;
@@ -112,6 +122,7 @@ def main():
     title = sys.argv[2] if len(sys.argv) > 2 else "TV Recorder — Браузер"
 
     import webview
+    webview.settings['user_agent'] = _USER_AGENT
     api = _RelayoutApi()
     window = webview.create_window(title, html=LOADING_HTML,
                                     width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, js_api=api)
@@ -150,7 +161,7 @@ def main():
                 from webview.platforms.cocoa import BrowserView
                 instance = BrowserView.instances.get(window.uid)
                 if instance is not None:
-                    instance.webview.configuration().preferences().setValue_forKey_(True, 'fullScreenEnabled')
+                    instance.webview.configuration().preferences().setValue_forKey_(False, 'fullScreenEnabled')
                     native_window = instance.window
                     content_rect = native_window.contentRectForFrameRect_(native_window.frame())
                     screen_height = instance.screen.size.height
