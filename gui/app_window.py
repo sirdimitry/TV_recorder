@@ -5,7 +5,6 @@ from typing import Dict, Optional
 import time
 import threading
 import json
-from datetime import datetime, timedelta
 from queue import Empty, Queue
 
 import customtkinter as ctk
@@ -108,6 +107,30 @@ class SplashScreen(ctk.CTkToplevel):
     def close(self):
         self.progress.stop()
         self.destroy()
+
+
+def _format_hhmm(total_seconds: float) -> str:
+    """Секунды -> "ЧЧ:ММ", как длительность ролика, а не время на часах.
+    Часы не ограничены 23 (клипы длиннее суток на практике не встречаются,
+    но переполнение TimeEntry просто даст странное число, а не сломается)."""
+    total_minutes = round(total_seconds / 60)
+    return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def _parse_duration_seconds(start: str, end: str) -> Optional[float]:
+    """"С:"/"До:" здесь — положение в самом ролике (00:00 = его начало),
+    не время на часах — поэтому длительность считаем прямым вычитанием, а
+    не через datetime.strptime(). None — если "До:" не заполнено (значит,
+    без автоматической остановки — пишем, пока не остановят вручную)."""
+    if not end:
+        return None
+    try:
+        sh, sm = (int(p) for p in start.split(':'))
+        eh, em = (int(p) for p in end.split(':'))
+    except ValueError:
+        return None
+    seconds = (eh * 60 + em) * 60 - (sh * 60 + sm) * 60
+    return seconds if seconds > 0 else None
 
 
 class AppWindow:
@@ -419,9 +442,12 @@ class AppWindow:
 
         threading.Thread(target=start, daemon=True).start()
 
-    def _record_link_now(self, name: str, link: Dict):
+    def _record_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None):
         """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
-        через yt-dlp (страница -> прямой поток), потом как обычно."""
+        через yt-dlp (страница -> прямой поток), потом как обычно.
+        stop_after — секунды, через сколько остановить запись самим (длина
+        ролика из диалога добавления, а не время по часам); None — не
+        останавливать, ждать ручной остановки."""
         output = str(self.recorder.build_output_path(name))
 
         def start():
@@ -438,13 +464,19 @@ class AppWindow:
             )
             if task_id:
                 logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
+                if stop_after:
+                    timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
+                    timer.daemon = True
+                    timer.start()
 
         threading.Thread(target=start, daemon=True).start()
 
-    def _record_browser_link_now(self, name: str, link: Dict):
+    def _record_browser_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None):
         """Мгновенная запись ссылки из вкладки "Браузер": открывает окно-браузер
         и параллельно пишет экран (core/screen_capture.py) — для сайтов, чью
-        прямую ссылку на поток получить не удалось."""
+        прямую ссылку на поток получить не удалось.
+        stop_after — необязательное ограничение длительности в секундах
+        (из диалога добавления); None — писать до ручной остановки."""
         output = str(self.recorder.build_output_path(name))
         open_url = link.get('player_url') or link.get('url', '')
 
@@ -455,6 +487,10 @@ class AppWindow:
             )
             if task_id:
                 logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")
+                if stop_after:
+                    timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
+                    timer.daemon = True
+                    timer.start()
             else:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Ошибка", f"Не удалось начать запись экрана «{name}».\nПроверьте лог."))
@@ -616,7 +652,7 @@ class AppWindow:
 
     def _add_link_dialog(self):
         c = self.colors
-        dialog = self._create_dialog("Добавить ссылку", "480x430")
+        dialog = self._create_dialog("Добавить ссылку", "480x400")
         fields = {}
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
@@ -655,25 +691,23 @@ class AppWindow:
                              justify='left', wraplength=430)
         hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
-        # --- Запись сразу по расписанию: дата (всегда сегодня) + окно
-        # времени, авторасчёт которого — из фактической длительности
-        # ролика, как только ссылка разберётся. Для эфира (без известной
-        # длительности) — запасной вариант +60 минут от старта.
+        # --- Запись сразу по хронометражу ролика: это не расписание по
+        # часам (ссылка не привязана к календарной дате/времени эфира) —
+        # "С:"/"До:" здесь означают положение в САМОМ ролике (00:00 — его
+        # начало), а не время на часах. По умолчанию — весь ролик целиком
+        # (00:00 до его настоящей длительности, как только она определится);
+        # можно указать вручную более короткое "До:", чтобы записать не
+        # до конца. При включении запись стартует сразу же, без ожидания
+        # какого-либо расписания.
         schedule_var = tk.BooleanVar(value=True)
-        schedule_check = ctk.CTkCheckBox(body, text="Сразу запланировать запись", variable=schedule_var,
+        schedule_check = ctk.CTkCheckBox(body, text="Начать запись сразу же", variable=schedule_var,
                                           fg_color=c['accent'], hover_color=c['accent_hover'],
                                           text_color=c['text_primary'], border_color=c['border'],
                                           command=lambda: toggle_schedule_fields())
         schedule_check.grid(row=4, column=0, columnspan=2, sticky='w', pady=(10, 4))
 
-        today = datetime.now()
-        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-        today_weekday = today.weekday()
-        ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
-                     text_color=c['text_secondary']).grid(row=5, column=0, columnspan=2, sticky='w', pady=2)
-
         time_frame = ctk.CTkFrame(body, fg_color='transparent')
-        time_frame.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
+        time_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
         start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
                                  fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
@@ -682,8 +716,8 @@ class AppWindow:
         end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
                                fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
         end_entry.pack(side='left', padx=6)
-        start_entry.set_time(today.strftime('%H:%M'))
-        end_entry.set_time(today.strftime('%H:%M'))
+        start_entry.set_time('00:00')
+        end_entry.set_time('')
 
         def toggle_schedule_fields():
             state = 'normal' if schedule_var.get() else 'disabled'
@@ -694,6 +728,16 @@ class AppWindow:
         # даже если оно ещё выполняется в фоне и придёт позже.
         name_touched = {'value': False}
         fields['name'].bind('<Key>', lambda e: name_touched.__setitem__('value', True))
+
+        # TimeEntry показывает "До:" только с точностью до минуты, а
+        # реальная длительность может быть, например, 83.968 сек — если по
+        # округлённому до минуты значению ставить таймер остановки, запись
+        # обрежется на десятки секунд раньше конца ролика. Поэтому точную
+        # длительность храним отдельно и используем её при сохранении, если
+        # пользователь сам не трогал поле "До:".
+        end_touched = {'value': False}
+        end_entry.bind('<Key>', lambda e: end_touched.__setitem__('value', True))
+        resolved_duration = {'value': None}
 
         detect_generation = {'id': 0}
         debounce = {'after_id': None}
@@ -732,31 +776,37 @@ class AppWindow:
                         # автоматически в "Браузер"), просто пометится как
                         # недоступная в списке. Если понадобится режим
                         # браузера — можно добавить ту же ссылку отдельно
-                        # через вкладку "Браузер".
+                        # через вкладку "Браузер". Длительность неизвестна —
+                        # "До:" оставляем пустым, а не гадаем.
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
-                        start_now = datetime.now()
-                        start_entry.set_time(start_now.strftime('%H:%M'))
-                        end_entry.set_time((start_now + timedelta(minutes=60)).strftime('%H:%M'))
+                        resolved_duration['value'] = None
+                        if not end_touched['value']:
+                            end_entry.set_time('')
                         hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
                                              f"Ссылка всё равно сохранится, но помечена как недоступная.")
                         return
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
 
-                    # Окно записи — от текущего момента (начала) и до конца
-                    # ролика по его фактической длительности; для эфира без
-                    # известной длительности — запасной час.
-                    start_now = datetime.now()
-                    start_entry.set_time(start_now.strftime('%H:%M'))
+                    # "До:" — фактическая длительность самого ролика (не
+                    # время на часах): по умолчанию пишем его целиком. Для
+                    # эфира без известной длительности оставляем поле
+                    # пустым — пусть человек сам решит, сколько писать,
+                    # а не гадаем случайным числом.
                     if info.duration:
-                        end_dt = start_now + timedelta(seconds=info.duration)
+                        resolved_duration['value'] = info.duration
+                        if not end_touched['value']:
+                            end_entry.set_time(_format_hhmm(info.duration))
                         minutes = int(info.duration // 60)
-                        hint.configure(text=f"Определено: запись, длительность ~{minutes} мин")
+                        hint.configure(text=f"Определено: длительность ролика ~{minutes} мин")
                     else:
-                        end_dt = start_now + timedelta(minutes=60)
-                        hint.configure(text="Определено: прямой эфир (длительность неизвестна — окно +60 мин, поправьте при необходимости)")
-                    end_entry.set_time(end_dt.strftime('%H:%M'))
+                        resolved_duration['value'] = None
+                        if not end_touched['value']:
+                            end_entry.set_time('')
+                        hint.configure(text="Определено: прямой эфир (длительность неизвестна — "
+                                             "укажите «До:» сами, либо оставьте пустым, чтобы писать "
+                                             "до ручной остановки)")
 
                 self.root.after(0, apply)
 
@@ -777,9 +827,20 @@ class AppWindow:
             do_schedule = schedule_var.get()
             start = start_entry.get().strip()
             end = end_entry.get().strip()
-            if do_schedule:
-                if not self._valid_time_range(start, end, dialog):
-                    return
+            duration_seconds = None
+            if do_schedule and end:
+                # Поле "До:" округлено до минуты — если пользователь его не
+                # трогал, используем точную длительность ролика (секунды),
+                # чтобы таймер остановки не обрезал запись раньше конца.
+                if not end_touched['value'] and resolved_duration['value']:
+                    duration_seconds = resolved_duration['value']
+                else:
+                    duration_seconds = _parse_duration_seconds(start, end)
+                    if duration_seconds is None:
+                        messagebox.showwarning(
+                            "Внимание", "«До:» должно быть позже «С:» — введите длительность в формате ЧЧ:ММ, "
+                                         "либо оставьте поле пустым, чтобы писать до ручной остановки", parent=dialog)
+                        return
 
             def finish(display_name: str):
                 # Сохраняем в "Мои ссылки" независимо от того, удалось ли
@@ -787,18 +848,14 @@ class AppWindow:
                 # недоступными в списке (см. LinkList._resolve_row). Если
                 # нужен режим браузера — та же ссылка добавляется отдельно
                 # через вкладку "Браузер".
-                self.storage.save_link({'name': display_name, 'url': url, 'type': link_type})
-                if do_schedule:
-                    self.storage.add_schedule_item({
-                        'channel_name': display_name,
-                        'source_type': 'link',
-                        'start_time': start,
-                        'end_time': end,
-                        'days': [today_weekday],
-                        'enabled': True,
-                    })
-                    self.root.after(0, self.scheduler.reload_schedules)
+                link = {'name': display_name, 'url': url, 'type': link_type}
+                self.storage.save_link(link)
                 self.root.after(0, self._refresh_data)
+                if do_schedule:
+                    # Не расписание по часам — ссылка стартует записью
+                    # сразу же, "До:" (если задано) лишь ограничивает её
+                    # длительность.
+                    self.root.after(0, lambda: self._record_link_now(display_name, link, stop_after=duration_seconds))
 
             if name:
                 finish(name)
@@ -816,23 +873,7 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=7, column=0, columnspan=2, pady=(16, 0), sticky='ew')
-
-    @staticmethod
-    def _valid_time_range(start: str, end: str, parent) -> bool:
-        try:
-            datetime.strptime(start, '%H:%M')
-            datetime.strptime(end, '%H:%M')
-        except ValueError:
-            messagebox.showwarning("Внимание", "Введите время в формате ЧЧ:ММ, например 09:30", parent=parent)
-            return False
-        if start == end:
-            messagebox.showwarning(
-                "Внимание",
-                "Измените время окончания: одинаковое время означало бы запись на 24 часа.",
-                parent=parent)
-            return False
-        return True
+                      ).grid(row=6, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _edit_link_dialog(self, name: str, link: Dict):
         c = self.colors
@@ -893,7 +934,7 @@ class AppWindow:
         получить не удалось — при записи откроется окно-браузер, fullscreen
         в плеере включает сам пользователь, пишется экран."""
         c = self.colors
-        dialog = self._create_dialog("Добавить (браузер)", "480x380")
+        dialog = self._create_dialog("Добавить (браузер)", "480x330")
 
         body = ctk.CTkFrame(dialog, fg_color='transparent')
         body.pack(fill='both', expand=True, padx=20, pady=20)
@@ -922,35 +963,29 @@ class AppWindow:
                      font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=430, justify='left'
                      ).grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 8))
 
+        # Экран-запись, а не расписание по часам: у неё нет "хронометража
+        # ролика" (это живой захват экрана), поэтому вместо "С:"/"До:" —
+        # необязательное ограничение длительности. Пусто = писать, пока не
+        # остановят вручную.
         schedule_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(body, text="Сразу запланировать запись", variable=schedule_var,
+        ctk.CTkCheckBox(body, text="Начать запись сразу же", variable=schedule_var,
                          fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['text_primary'],
                          border_color=c['border'], command=lambda: toggle_schedule_fields()
                          ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(6, 4))
 
-        today = datetime.now()
-        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-        today_weekday = today.weekday()
-        ctk.CTkLabel(body, text=f"Дата: сегодня, {day_names[today_weekday]} {today:%d.%m.%Y}",
-                     text_color=c['text_secondary']).grid(row=4, column=0, columnspan=2, sticky='w', pady=2)
-
-        time_frame = ctk.CTkFrame(body, fg_color='transparent')
-        time_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
-        ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
-        start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
-                                 fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
-        start_entry.pack(side='left', padx=6)
-        ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
-        end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
-                               fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
-        end_entry.pack(side='left', padx=6)
-        start_entry.set_time(today.strftime('%H:%M'))
-        end_entry.set_time((today + timedelta(minutes=60)).strftime('%H:%M'))
+        duration_frame = ctk.CTkFrame(body, fg_color='transparent')
+        duration_frame.grid(row=4, column=0, columnspan=2, sticky='w', pady=4)
+        ctk.CTkLabel(duration_frame, text="Длительность:", text_color=c['text_secondary']).pack(side='left')
+        duration_entry = TimeEntry(duration_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+                                    fg_color=c['bg_primary'], border_color=c['border'],
+                                    text_color=c['text_primary'])
+        duration_entry.pack(side='left', padx=6)
+        ctk.CTkLabel(duration_frame, text="ЧЧ:ММ, необязательно — иначе до ручной остановки",
+                     font=ctk.CTkFont(size=10), text_color=c['text_muted']).pack(side='left', padx=(4, 0))
+        duration_entry.set_time('')
 
         def toggle_schedule_fields():
-            state = 'normal' if schedule_var.get() else 'disabled'
-            start_entry.configure(state=state)
-            end_entry.configure(state=state)
+            duration_entry.configure(state='normal' if schedule_var.get() else 'disabled')
 
         def save():
             url = url_var.get().strip()
@@ -960,24 +995,23 @@ class AppWindow:
                 return
 
             do_schedule = schedule_var.get()
-            start = start_entry.get().strip()
-            end = end_entry.get().strip()
-            if do_schedule and not self._valid_time_range(start, end, dialog):
-                return
-
-            self.storage.save_browser_link({'name': name, 'url': url})
+            duration_seconds = None
             if do_schedule:
-                self.storage.add_schedule_item({
-                    'channel_name': name,
-                    'source_type': 'browser',
-                    'start_time': start,
-                    'end_time': end,
-                    'days': [today_weekday],
-                    'enabled': True,
-                })
-                self.scheduler.reload_schedules()
+                duration_text = duration_entry.get().strip()
+                if duration_text:
+                    duration_seconds = _parse_duration_seconds('00:00', duration_text)
+                    if duration_seconds is None:
+                        messagebox.showwarning("Внимание", "Длительность — в формате ЧЧ:ММ, либо оставьте "
+                                                            "поле пустым", parent=dialog)
+                        return
+
+            link = {'name': name, 'url': url}
+            self.storage.save_browser_link(link)
             self._refresh_data()
             dialog.destroy()
+
+            if do_schedule:
+                self._record_browser_link_now(name, link, stop_after=duration_seconds)
 
             # Некоторые страницы не рисуют видео в нашем встроенном браузере
             # (WKWebView), но публикуют og:video — прямую ссылку на сам
@@ -993,7 +1027,7 @@ class AppWindow:
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=6, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                      ).grid(row=5, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _edit_browser_link_dialog(self, name: str, link: Dict):
         c = self.colors
