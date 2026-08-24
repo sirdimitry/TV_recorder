@@ -11,15 +11,6 @@ from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
 
-STATUS_LABELS = {
-    'resolving': 'ИЩЕМ ПОТОК',
-    'downloading': 'СКАЧИВАЕТСЯ',
-    'done': 'ГОТОВО',
-    'error': 'ОШИБКА',
-    'canceled': 'ОТМЕНЕНО',
-}
-
-
 def _format_duration(seconds: Optional[float]) -> str:
     if not seconds:
         return ''
@@ -122,9 +113,11 @@ class DownloadList(ctk.CTkFrame):
                               fg_color=c['bg_tertiary'], corner_radius=5, width=1, height=16)
         badge.pack(side='left', ipadx=4)
 
-        status_badge = ctk.CTkLabel(badge_row, text="", font=ctk.CTkFont(size=9, weight='bold'),
-                                     text_color=c['text_muted'], width=1, height=16)
-        status_badge.pack(side='left', padx=(6, 0))
+        # Текстовый статус ("ГОТОВО" и т.п.) не влезал в узкую колонку и
+        # обрезался — точка тем же цветом занимает в разы меньше места и
+        # достаточно понятна сама по себе (зелёный/красный и так читаются).
+        status_dot = ctk.CTkLabel(badge_row, text="", image=get_icon('record', c['text_muted'], 10))
+        status_dot.pack(side='left', padx=(6, 0))
 
         error_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9), text_color=c['red'],
                                     anchor='w', wraplength=220, justify='left')
@@ -154,11 +147,11 @@ class DownloadList(ctk.CTkFrame):
 
         self.row_widgets[download_id] = {
             'row': row, 'thumb_label': thumb_label, 'label_name': label_name, 'badge': badge,
-            'status_badge': status_badge, 'error_label': error_label,
+            'status_dot': status_dot, 'error_label': error_label,
             'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'item': item,
+            'thumbnail_loaded': False,
         }
         self._apply_status(download_id, item)
-        self._load_thumbnail(download_id, item)
 
     def _apply_status(self, download_id: str, item: Dict):
         widgets = self.row_widgets.get(download_id)
@@ -179,13 +172,21 @@ class DownloadList(ctk.CTkFrame):
             'resolving': c['text_muted'], 'downloading': c['accent'],
             'done': c['green'], 'error': c['red'], 'canceled': c['text_muted'],
         }
-        widgets['status_badge'].configure(text=STATUS_LABELS.get(status, status.upper()),
-                                           text_color=colors_by_status.get(status, c['text_muted']))
+        dot_color = colors_by_status.get(status, c['text_muted'])
+        widgets['status_dot'].configure(image=get_icon('record', dot_color, 10))
         error_message = item.get('error_message') if status == 'error' else ''
         widgets['error_label'].configure(text=error_message or '')
         widgets['btn_folder'].configure(state='normal' if status == 'done' else 'disabled')
         widgets['btn_cancel'].configure(
             state='normal' if status in ('resolving', 'downloading') else 'disabled')
+
+        # Превью появляется только после resolve — при создании строки
+        # (status='resolving') его ещё нет, а на этот момент вызывается
+        # только этот метод (не _load_thumbnail отдельно), поэтому ловим
+        # его тут же, как только thumbnail станет непустым.
+        if item.get('thumbnail') and not widgets['thumbnail_loaded']:
+            widgets['thumbnail_loaded'] = True
+            self._load_thumbnail(download_id, item)
 
     def _load_thumbnail(self, download_id: str, item: Dict):
         thumbnail_url = item.get('thumbnail')

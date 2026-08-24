@@ -29,8 +29,10 @@ data/links.json
 data/browser_links.json
 data/schedule.json
 data/settings.json
+data/downloads.json
 logs/
 recordings/
+downloads/
 data/logos/
 
 # Медиафайлы (видео, аудио, изображения)
