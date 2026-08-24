@@ -19,6 +19,16 @@ macOS-fullscreen (Cmd+Ctrl+F/toggle_fullscreen) — тогда окно займ
 и пишется оно целиком, каким бы оно ни было.
 
 Использование: python3 browser_capture.py <url> [title]
+Использование (режим поиска потока): python3 browser_capture.py <url> --sniff
+
+Второй режим — не для просмотра/записи, а для core/link_resolver.py:
+когда сайт рисует плеер через JS и обычный HTTP-скрейп HTML ничего не
+находит, открываем страницу здесь (окно скрыто, hidden=True) и слушаем
+её же собственные сетевые запросы — почти любой JS-плеер (hls.js и т.п.)
+всё равно тянет .m3u8/.mpd/.mp4 через fetch/XHR или обычный <video src>,
+просто это не видно в исходном HTML. Первая подходящая ссылка печатается
+в stdout как "STREAM:<url>" (та же stdout-IPC схема, что и GEOMETRY:
+ниже) — и окно сразу закрывается, никакой записи тут не происходит.
 
 Кнопка fullscreen внутри самого плеера страницы (Fullscreen API,
 element.requestFullscreen()) — та же беда, что и с нативным
@@ -114,12 +124,113 @@ class _RelayoutApi:
             _nudge_relayout(self.window)
 
 
+# Перехватываем fetch/XHR (там уходит подавляющее большинство запросов
+# плееров вроде hls.js — сам манифест и его загрузку они всегда делают
+# через один из этих двух API, даже если рендерят кадры через MediaSource)
+# плюс на всякий случай следим за src/currentSrc у <video>/<source> —
+# для страниц, отдающих поток нативно, без JS-плеера поверх. Дедуп по
+# window.__tvrecorder_seen, чтобы не звать API на каждый повторный чанк.
+SNIFF_JS = r"""
+(function() {
+    if (window.__tvrecorder_sniff_bound) return;
+    window.__tvrecorder_sniff_bound = true;
+    var seen = {};
+    var STREAM_RE = /\.(m3u8|mpd|mp4)(\?|#|$)/i;
+    function report(url) {
+        try {
+            if (!url || seen[url] || !STREAM_RE.test(url)) return;
+            seen[url] = true;
+            window.pywebview.api.report_stream(url);
+        } catch (e) {}
+    }
+    var origFetch = window.fetch;
+    if (origFetch) {
+        window.fetch = function(input, init) {
+            try { report(typeof input === 'string' ? input : (input && input.url)); } catch (e) {}
+            return origFetch.apply(this, arguments);
+        };
+    }
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        try { report(url); } catch (e) {}
+        return origOpen.apply(this, arguments);
+    };
+    function scanMedia() {
+        document.querySelectorAll('video,source').forEach(function(el) {
+            report(el.currentSrc || el.src);
+        });
+    }
+    scanMedia();
+    new MutationObserver(scanMedia).observe(document.documentElement,
+        {subtree: true, childList: true, attributes: true, attributeFilter: ['src']});
+    setInterval(scanMedia, 1000);
+})();
+"""
+
+
+class _SnifferApi:
+    """Мост JS -> Python для режима --sniff: страница сама зовёт
+    report_stream(url), как только её плеер обратился за потоком."""
+
+    def __init__(self):
+        self.window = None
+        self.found = threading.Event()
+
+    def report_stream(self, url):
+        if self.found.is_set():
+            return
+        self.found.set()
+        try:
+            print(f"STREAM:{url}", flush=True)
+        except Exception as e:
+            print(f"Не удалось сообщить найденный поток: {e}", file=sys.stderr)
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
+
+
+def _run_sniff(url: str, timeout: float = 12.0):
+    import webview
+    api = _SnifferApi()
+    window = webview.create_window("TV Recorder — sniff", url=url, hidden=True, js_api=api)
+    api.window = window
+
+    def on_loaded():
+        try:
+            window.evaluate_js(SNIFF_JS)
+        except Exception as e:
+            print(f"Не удалось привязать sniff: {e}", file=sys.stderr)
+
+    window.events.loaded += on_loaded
+
+    def watchdog():
+        # Ничего не нашли за отведённое время — закрываем сами, чтобы
+        # вызывающая сторона (LinkResolver) не ждала дольше таймаута.
+        if not api.found.wait(timeout):
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    webview.start(user_agent=_USER_AGENT)
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: browser_capture.py <url> [title]", file=sys.stderr)
+    args = [a for a in sys.argv[1:] if a != '--sniff']
+    sniff = '--sniff' in sys.argv[1:]
+    if not args:
+        print("Usage: browser_capture.py <url> [title] | browser_capture.py <url> --sniff", file=sys.stderr)
         sys.exit(1)
-    url = sys.argv[1]
-    title = sys.argv[2] if len(sys.argv) > 2 else "TV Recorder — Браузер"
+    url = args[0]
+
+    if sniff:
+        _run_sniff(url)
+        return
+
+    title = args[1] if len(args) > 1 else "TV Recorder — Браузер"
 
     import webview
     api = _RelayoutApi()

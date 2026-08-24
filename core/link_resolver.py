@@ -24,7 +24,13 @@ JS каждого такого сайта — не масштабируется.
 проверки потока выше по стеку), а не будет тихо ломаться.
 """
 import re
+import select
+import shutil
+import subprocess
+import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urljoin
 
@@ -53,7 +59,7 @@ FORMAT_SELECTOR = (
     f'b[height<={TARGET_HEIGHT}]/best'
 )
 
-_STREAM_URL_TAIL = r'(?:https?:)?\\?/\\?/[^\s"\'<>\\]+?\.(?:m3u8|mpd)'
+_STREAM_URL_TAIL = r'(?:https?:)?\\?/\\?/[^\s"\'<>\\]+?\.(?:m3u8|mpd|mp4)'
 # Большинство встраиваемых плееров кладут ссылку на поток под ключом
 # source (JS-объект, JSON-конфиг или query-параметр вида ...&source=//..)
 # — ищем именно так в первую очередь, иначе жадный общий поиск слишком
@@ -98,26 +104,109 @@ class LinkInfo:
 def resolve_link(url: str, timeout: int = 15) -> LinkInfo:
     """Разбирает страницу/ссылку: сперва через yt-dlp, а если для этого
     сайта у него нет экстрактора — пробует найти прямую ссылку на поток
-    прямо в HTML страницы. Ничего не скачивает."""
+    прямо в HTML страницы, а если и там пусто (сайт рисует плеер через
+    JS) — последним рубежом открывает её в настоящем браузерном движке
+    и слушает его собственные сетевые запросы (см. _resolve_via_browser_sniff).
+    Ничего не скачивает."""
     if not url:
         return LinkInfo(ok=False, error="Пустая ссылка")
 
+    ytdlp_result = None
     if YTDLP_AVAILABLE:
-        result = _resolve_via_ytdlp(url, timeout)
-        if result.ok:
-            return result
-        fallback = _resolve_via_html_scrape(url, timeout)
-        if fallback.ok:
+        ytdlp_result = _resolve_via_ytdlp(url, timeout)
+        if ytdlp_result.ok:
+            return ytdlp_result
+
+    fallback = _resolve_via_html_scrape(url, timeout)
+    if fallback.ok:
+        if ytdlp_result is not None:
             logger.info(f"LinkResolver: yt-dlp не знает '{url}', нашли поток напрямую в HTML")
-            return fallback
+        return fallback
+
+    # Ни у yt-dlp, ни в сыром HTML ничего не нашлось — если у страницы
+    # есть своя embed-страница (og:video), сначала пробуем прогнать через
+    # браузер именно её (там меньше постороннего шума в сетевых запросах,
+    # чем на всей статье), иначе — саму страницу.
+    sniffed = _resolve_via_browser_sniff(fallback.player_url or url, url, timeout)
+    if sniffed:
+        stream_url, body = sniffed
+        if stream_url.split('?', 1)[0].lower().endswith('.mp4'):
+            duration = _probe_mp4_duration(stream_url, url, timeout)
+        else:
+            duration = _detect_duration(body, stream_url, url, timeout) if body else None
+        logger.info(f"LinkResolver: нашли поток для '{url}' через встроенный браузер")
+        return LinkInfo(ok=True, title=fallback.title or url, thumbnail=fallback.thumbnail,
+                         is_live=duration is None, duration=duration,
+                         video_url=stream_url, player_url=fallback.player_url,
+                         headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
+
+    if ytdlp_result is not None:
         # Если запасной путь дошёл до конкретной причины (нашли ссылку на
         # поток, но источник её не отдаёт) — это полезнее, чем общее
         # "нет экстрактора" от yt-dlp.
         if fallback.title:
             return fallback
-        return result  # иначе исходная ошибка yt-dlp обычно информативнее
+        return ytdlp_result  # иначе исходная ошибка yt-dlp обычно информативнее
+    return fallback
 
-    return _resolve_via_html_scrape(url, timeout)
+
+def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Optional[tuple]:
+    """Открывает sniff_url в настоящем WKWebView (gui/browser_capture.py
+    --sniff, отдельным процессом — pywebview не может делить run loop с
+    остальным приложением, тот же приём, что и в core/recorder.py для
+    записи браузером) и слушает её собственные fetch/XHR/<video src> —
+    почти любой JS-плеер (hls.js и т.п.) всё равно тянет .m3u8/.mpd/.mp4
+    одним из этих способов, просто в сыром HTML этого не видно. Возвращает
+    (url, тело-или-пустая-строка) первой найденной и отвечающей ссылки,
+    либо None, если ничего не нашлось или окно не поднялось за таймаут."""
+    browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(browser_script), sniff_url, '--sniff'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    except Exception as e:
+        logger.warning(f"LinkResolver: не удалось запустить sniff-браузер: {e}")
+        return None
+
+    # Независимо от timeout самого HTTP-резолва — sniff нужен свой запас:
+    # окну надо подняться, странице догрузиться и плееру начать тянуть
+    # поток. gui/browser_capture.py сам закрывается по своему сторожевому
+    # таймеру (12с), тут просто небольшой запас поверх него.
+    stream_url = None
+    deadline = time.time() + 16.0
+    try:
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+            except Exception:
+                ready = [proc.stdout]
+            if not ready:
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                continue
+            line = line.strip()
+            if line.startswith('STREAM:'):
+                stream_url = line[len('STREAM:'):]
+                break
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+
+    if not stream_url:
+        return None
+
+    body = _probe_stream(stream_url, referer, timeout)
+    if body is None:
+        logger.warning(f"LinkResolver: sniff-браузер нашёл поток '{stream_url}', но он недоступен")
+        return None
+    return stream_url, body
 
 
 def _resolve_via_ytdlp(url: str, timeout: int) -> LinkInfo:
@@ -273,8 +362,12 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
             # #EXT-X-ENDLIST в плейлисте — значит это уже готовый ролик с
             # известной длительностью, а не прямой эфир (раньше здесь всегда
             # стояло is_live=True, из-за чего у роликов с реальным
-            # хронометражем всё равно подставлялся запасной час).
-            duration = _detect_duration(body, stream_url, url, timeout)
+            # хронометражем всё равно подставлялся запасной час). У готового
+            # .mp4 тела нет (см. _probe_stream) — длительность через ffprobe.
+            if stream_url.split('?', 1)[0].lower().endswith('.mp4'):
+                duration = _probe_mp4_duration(stream_url, url, timeout)
+            else:
+                duration = _detect_duration(body, stream_url, url, timeout)
             return LinkInfo(ok=True, title=title, thumbnail=thumbnail,
                              is_live=duration is None, duration=duration,
                              video_url=stream_url, player_url=player_url)
@@ -305,10 +398,34 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
 
 def _probe_stream(stream_url: str, referer: str, timeout: int) -> Optional[str]:
     """Возвращает тело ответа, если поток отвечает 200, иначе None. Тело
-    заодно используется для определения хронометража (см. _detect_duration)."""
+    заодно используется для определения хронометража (см. _detect_duration)
+    у m3u8/mpd-плейлистов — они текстовые и небольшие. Для готового .mp4
+    тело не нужно (и качать его целиком ради проверки доступности не
+    нужно тем более — это может быть гигабайт видео) — там достаточно
+    HEAD, а длительность отдельно достаёт ffprobe (см. _probe_mp4_duration)."""
+    headers = {'User-Agent': _DEFAULT_UA, 'Referer': referer}
     try:
-        check = requests.get(stream_url, timeout=timeout, headers={'User-Agent': _DEFAULT_UA, 'Referer': referer})
+        if stream_url.split('?', 1)[0].lower().endswith('.mp4'):
+            check = requests.head(stream_url, timeout=timeout, headers=headers, allow_redirects=True)
+            return '' if check.status_code == 200 else None
+        check = requests.get(stream_url, timeout=timeout, headers=headers)
         return check.text if check.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def _probe_mp4_duration(stream_url: str, referer: str, timeout: int) -> Optional[float]:
+    """Длительность готового .mp4 — через ffprobe, а не requests: он читает
+    по HTTP только moov-атом (обычно первые/последние килобайты), а не
+    качает файл целиком."""
+    if not shutil.which('ffprobe'):
+        return None
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-headers', f'User-Agent: {_DEFAULT_UA}\r\nReferer: {referer}\r\n',
+             '-show_entries', 'format=duration', '-of', 'csv=p=0', stream_url],
+            capture_output=True, text=True, timeout=timeout)
+        return float(result.stdout.strip())
     except Exception:
         return None
 
