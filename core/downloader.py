@@ -97,6 +97,7 @@ class Downloader:
         with self._lock:
             self.tasks[task_id] = task
         self._notify_ui()
+        logger.info(f"Downloader: добавлена загрузка '{url}' (id: {task_id}, до {target_height}p)")
 
         threading.Thread(target=self._run, args=(task,), daemon=True).start()
         return task_id
@@ -133,6 +134,7 @@ class Downloader:
         if not info.ok:
             task.status = 'error'
             task.error_message = info.error or 'Не удалось найти поток'
+            logger.warning(f"Downloader: не удалось разобрать '{task.url}' (id: {task.task_id}): {task.error_message}")
             self._notify_ui()
             if task.on_complete:
                 task.on_complete(False, task, task.error_message)
