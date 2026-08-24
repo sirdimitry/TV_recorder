@@ -162,14 +162,24 @@ class Recorder:
             headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
             headers_dict = {"User-Agent": ua, "Referer": ref, "Origin": ref}
 
+        # -allowed_extensions — опция HLS-демуксера (снимает ограничение на
+        # расширения сегментов у капризных CDN); для прямого файла (.mp4 и
+        # т.п., не .m3u8) ffmpeg её просто не знает и падает с "Option
+        # allowed_extensions not found" ещё до открытия потока — замечено
+        # на VK/okcdn.ru (прямой .mp4-подобный URL без .m3u8), но касалось
+        # бы и любой другой напрямую найденной .mp4-ссылки (см.
+        # link_resolver.py). Добавляем опцию только когда поток реально HLS.
+        def hls_opts(u: str):
+            return ['-allowed_extensions', 'ALL'] if '.m3u8' in u.lower() else []
+
         if audio_url:
             # Видео и звук — уже отдельные закодированные дорожки (типично
             # для YouTube на 720p+): просто мультиплексируем их в один файл,
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
             cmd = [
                 'ffmpeg', '-y',
-                '-allowed_extensions', 'ALL', '-headers', headers, '-i', stream_url,
-                '-allowed_extensions', 'ALL', '-headers', headers, '-i', audio_url,
+                *hls_opts(stream_url), '-headers', headers, '-i', stream_url,
+                *hls_opts(audio_url), '-headers', headers, '-i', audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
                 '-c', 'copy',
                 '-err_detect', 'ignore_err',
@@ -187,7 +197,7 @@ class Recorder:
 
             cmd = [
                 'ffmpeg', '-y',
-                '-allowed_extensions', 'ALL',
+                *hls_opts(stream_url),
                 '-headers', headers,
                 '-i', stream_url,
                 '-c', 'copy',
