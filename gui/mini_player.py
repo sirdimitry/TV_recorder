@@ -16,14 +16,24 @@ class MiniPlayer(tk.Toplevel):
 
     _active_players = {}  # name -> list[subprocess.Popen] (1 обычно, 2 при пайпе ffmpeg->ffplay)
 
+    # -fs у ffplay уходит в НАСТОЯЩИЙ macOS-fullscreen — на весь физический
+    # экран, без рамки окна и без простого способа выйти, если поток
+    # подвиснет (не переключишься на другое окно, Dock/меню-бар скрыты).
+    # Один такой завис уже перекрывал всю работу пользователю. Вместо
+    # этого для "большого" предпросмотра просто открываем ffplay крупным
+    # обычным окном — та же логика, что и с окном браузера (см.
+    # browser_capture.py) — просто больше, а не fullscreen.
+    LARGE_WIDTH = 1600
+    LARGE_HEIGHT = 900
+
     def __init__(self, parent, channel_name: str, stream_url: str,
-                 fullscreen: bool = False, resolve_via_ytdlp: bool = False):
+                 large: bool = False, resolve_via_ytdlp: bool = False):
         super().__init__(parent)
         self.withdraw()
 
         self.channel_name = channel_name
         self.stream_url = stream_url
-        self.fullscreen = fullscreen
+        self.large = large
         self.resolve_via_ytdlp = resolve_via_ytdlp
 
         # TOGGLE: если уже играет - убиваем и открываем заново
@@ -105,8 +115,8 @@ class MiniPlayer(tk.Toplevel):
                 '-framedrop',
                 '-sync', 'audio',
             ]
-            if self.fullscreen:
-                ffplay_cmd.append('-fs')
+            if self.large:
+                ffplay_cmd += ['-x', str(self.LARGE_WIDTH), '-y', str(self.LARGE_HEIGHT)]
 
             if audio_url:
                 # ffplay умеет играть только один вход, а видео и звук здесь —

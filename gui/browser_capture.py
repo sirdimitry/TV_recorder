@@ -122,7 +122,6 @@ def main():
     title = sys.argv[2] if len(sys.argv) > 2 else "TV Recorder — Браузер"
 
     import webview
-    webview.settings['user_agent'] = _USER_AGENT
     api = _RelayoutApi()
     window = webview.create_window(title, html=LOADING_HTML,
                                     width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, js_api=api)
@@ -182,7 +181,7 @@ def main():
         except Exception as e:
             print(f"Не удалось сообщить геометрию окна: {e}", file=sys.stderr)
 
-    webview.start(func=on_gui_started)
+    webview.start(func=on_gui_started, user_agent=_USER_AGENT)
 
 
 if __name__ == '__main__':

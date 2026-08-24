@@ -250,5 +250,5 @@ class LinkList(ctk.CTkFrame):
             return
 
         from gui.mini_player import MiniPlayer
-        logger.info(f"Открыт полноэкранный предпросмотр: {name}")
-        MiniPlayer(self.root, name, url, fullscreen=True, resolve_via_ytdlp=True)
+        logger.info(f"Открыт крупный предпросмотр: {name}")
+        MiniPlayer(self.root, name, url, large=True, resolve_via_ytdlp=True)
