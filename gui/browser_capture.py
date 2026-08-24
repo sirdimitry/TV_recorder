@@ -80,16 +80,82 @@ font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;">
 </body></html>
 """
 
-# Слушатель клавиш вешаем на каждую загруженную страницу/навигацию —
-# идемпотентно (флаг на window, чтобы не навешивать по второму слушателю
-# при повторных вызовах evaluate_js на той же странице).
+# Раз нативный Fullscreen API у WKWebView отключён (fullScreenEnabled=False,
+# см. on_gui_started — иначе видео раздувается на весь физический экран, а
+# не в пределах этого окна), у страницы часто ПРОПАДАЕТ и собственная
+# кнопка fullscreen в плеере: добропорядочные плееры сами проверяют
+# document.fullscreenEnabled и просто не рисуют кнопку, если браузер её не
+# поддерживает (замечено на vkvideo.ru — кнопки нет вовсе). Значит просить
+# "нажать на кнопку в плеере" после нашего же запрета бессмысленно — надо
+# самим сделать то же самое визуально, не трогая настоящий Fullscreen API.
+# Поэтому Cmd+Enter теперь не полагается на requestFullscreen() вообще:
+# находит проигрываемое <video>, сам растягивает его чистым CSS
+# (position:fixed на весь вьюпорт) — растянуть можно только в пределах
+# ЭТОГО окна (position:fixed считает от вьюпорта страницы, а не от
+# физического экрана), сбежать некуда физически. Заодно включаем родные
+# controls у <video> — своя оверлей-панель плеера (play/пауза/громкость)
+# при таком трюке визуально перекрывается на весь экран вместе с видео и
+# больше не кликабельна, нужна какая-то замена.
+#
+# Слушатель вешаем на каждую загруженную страницу/навигацию — идемпотентно
+# (флаг на window, чтобы не навешивать по второму слушателю при повторных
+# вызовах evaluate_js на той же странице). Помимо CSS-трюка дёргаем и
+# старый resize-wobble (nudge_relayout через Python) — лишний толчок к
+# перерисовке некоторым плеерам всё ещё не помешает.
 RELAYOUT_HOTKEY_JS = """
 (function() {
     if (window.__tvrecorder_relayout_bound) return;
     window.__tvrecorder_relayout_bound = true;
+
+    window.__tvrecorder_toggle_fs = function() {
+        if (window.__tvrecorder_fs_video) {
+            // Второе нажатие — возвращаем как было. Inline-стиль, а не
+            // класс+stylesheet: реальный плеер у многих сайтов (замечено
+            // на vkvideo.ru) рендерится внутри open shadow DOM, а стили
+            // из document.head туда не проникают — правило CSS-инкапсуляции.
+            // Инлайновый style на самом элементе действует независимо от
+            // границы shadow root.
+            window.__tvrecorder_fs_video.style.cssText = window.__tvrecorder_fs_prev_style || '';
+            window.__tvrecorder_fs_video = null;
+            return;
+        }
+        // Ищем <video> не только в обычном DOM, но и рекурсивно внутри
+        // shadow root-ов — иначе на таких сайтах вообще ничего не найдём
+        // (document.querySelectorAll их не видит в принципе).
+        function collectVideos(root, out) {
+            out = out || [];
+            root.querySelectorAll('video').forEach(function(v) { out.push(v); });
+            root.querySelectorAll('*').forEach(function(el) {
+                if (el.shadowRoot) collectVideos(el.shadowRoot, out);
+            });
+            return out;
+        }
+        var videos = collectVideos(document);
+        if (!videos.length) return;
+        // Среди нескольких <video> (превью похожих роликов в сайдбаре и
+        // т.п.) реальный плеер почти всегда либо единственный проигрываемый
+        // сейчас, либо (если ничего не запущено) визуально самый крупный.
+        var video = videos.find(function(v) { return !v.paused; });
+        if (!video) {
+            video = videos.reduce(function(best, v) {
+                if (!best) return v;
+                var r = v.getBoundingClientRect(), br = best.getBoundingClientRect();
+                return (r.width * r.height) > (br.width * br.height) ? v : best;
+            }, null);
+        }
+        window.__tvrecorder_fs_video = video;
+        window.__tvrecorder_fs_prev_style = video.style.cssText;
+        video.style.cssText = 'position:fixed !important; inset:0 !important; ' +
+            'width:100vw !important; height:100vh !important; max-width:100vw !important; ' +
+            'max-height:100vh !important; z-index:2147483647 !important; background:#000 !important; ' +
+            'object-fit:contain !important;';
+        video.controls = true;
+    };
+
     document.addEventListener('keydown', function(e) {
         if (e.metaKey && e.key === 'Enter') {
             e.preventDefault();
+            try { window.__tvrecorder_toggle_fs(); } catch (err) {}
             window.pywebview.api.nudge_relayout();
         }
     }, true);
