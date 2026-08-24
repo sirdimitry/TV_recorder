@@ -109,13 +109,17 @@ RELAYOUT_HOTKEY_JS = """
 
     window.__tvrecorder_toggle_fs = function() {
         if (window.__tvrecorder_fs_video) {
-            // Второе нажатие — возвращаем как было. Inline-стиль, а не
-            // класс+stylesheet: реальный плеер у многих сайтов (замечено
-            // на vkvideo.ru) рендерится внутри open shadow DOM, а стили
-            // из document.head туда не проникают — правило CSS-инкапсуляции.
-            // Инлайновый style на самом элементе действует независимо от
-            // границы shadow root.
-            window.__tvrecorder_fs_video.style.cssText = window.__tvrecorder_fs_prev_style || '';
+            // Второе нажатие — возвращаем как было: и стиль, и место в
+            // дереве (см. ниже, почему видео вообще пришлось переносить).
+            var v = window.__tvrecorder_fs_video;
+            v.style.cssText = window.__tvrecorder_fs_prev_style || '';
+            v.controls = window.__tvrecorder_fs_prev_controls;
+            var parent = window.__tvrecorder_fs_prev_parent;
+            var next = window.__tvrecorder_fs_prev_next;
+            if (parent) {
+                if (next && next.parentNode === parent) parent.insertBefore(v, next);
+                else parent.appendChild(v);
+            }
             window.__tvrecorder_fs_video = null;
             return;
         }
@@ -145,6 +149,17 @@ RELAYOUT_HOTKEY_JS = """
         }
         window.__tvrecorder_fs_video = video;
         window.__tvrecorder_fs_prev_style = video.style.cssText;
+        window.__tvrecorder_fs_prev_controls = video.controls;
+        window.__tvrecorder_fs_prev_parent = video.parentNode;
+        window.__tvrecorder_fs_prev_next = video.nextSibling;
+        // position:fixed растягивается на весь ВЬЮПОРТ, только если ни у
+        // одного предка нет transform/filter/contain — у такого предка
+        // fixed-потомок вместо этого растягивается только в его пределах
+        // (замечено на vkvideo.ru: видео увеличивалось только в границах
+        // маленького исходного плеера). Player-обёртки почти всегда именно
+        // такие (transform для анимаций карусели и т.п.) — переносим сам
+        // <video> прямо в <body>, минуя всех потенциальных "виновников".
+        document.body.appendChild(video);
         video.style.cssText = 'position:fixed !important; inset:0 !important; ' +
             'width:100vw !important; height:100vh !important; max-width:100vw !important; ' +
             'max-height:100vh !important; z-index:2147483647 !important; background:#000 !important; ' +
