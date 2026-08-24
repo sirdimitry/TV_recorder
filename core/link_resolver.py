@@ -178,7 +178,13 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
     почти любой JS-плеер (hls.js и т.п.) всё равно тянет .m3u8/.mpd/.mp4
     одним из этих способов, просто в сыром HTML этого не видно. Возвращает
     (url, тело-или-пустая-строка) первой найденной и отвечающей ссылки,
-    либо None, если ничего не нашлось или окно не поднялось за таймаут."""
+    либо None, если ничего не нашлось или окно не поднялось за таймаут.
+
+    Если плеер живёт в чужом origin (<iframe>, вставленный уже после
+    гидратации — до него не дотянуться скриптом сниффера), browser_capture.py
+    вместо STREAM: печатает IFRAME:<url его src> — тут пробуем довести ЕГО
+    до потока через уже готовую цепочку webcaster.pro, тот же путь, что и
+    для og:video-ссылок, найденных прямо в статическом HTML."""
     browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
     try:
         proc = subprocess.Popen(
@@ -190,10 +196,15 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
 
     # Независимо от timeout самого HTTP-резолва — sniff нужен свой запас:
     # окну надо подняться, странице догрузиться и плееру начать тянуть
-    # поток. gui/browser_capture.py сам закрывается по своему сторожевому
-    # таймеру (12с), тут просто небольшой запас поверх него.
+    # поток. Некоторые сайты (otr-online.ru — уже задокументировано выше
+    # по коду) реально грузятся 15-20с — при более коротком таймауте
+    # evaluate_js успевал привязаться, но сканеру не хватало времени найти
+    # то, что появилось буквально в последнюю секунду перед закрытием окна.
+    # gui/browser_capture.py сам закрывается по своему сторожевому таймеру
+    # (40с), тут просто небольшой запас поверх него.
     stream_url = None
-    deadline = time.time() + 16.0
+    iframe_url = None
+    deadline = time.time() + 46.0
     try:
         while time.time() < deadline:
             if proc.poll() is not None:
@@ -211,6 +222,9 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
             if line.startswith('STREAM:'):
                 stream_url = line[len('STREAM:'):]
                 break
+            if line.startswith('IFRAME:'):
+                iframe_url = line[len('IFRAME:'):]
+                break
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -218,6 +232,12 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
                 proc.wait(timeout=3)
             except Exception:
                 proc.kill()
+
+    if iframe_url and 'webcaster.pro' in iframe_url:
+        webcaster_stream = _resolve_webcaster_player(iframe_url, referer, timeout)
+        if webcaster_stream:
+            logger.info(f"LinkResolver: довели iframe '{iframe_url}' (найден браузером) до потока через webcaster.pro")
+            stream_url = webcaster_stream
 
     if not stream_url:
         return None

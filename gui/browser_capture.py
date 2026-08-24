@@ -28,7 +28,11 @@ macOS-fullscreen (Cmd+Ctrl+F/toggle_fullscreen) — тогда окно займ
 всё равно тянет .m3u8/.mpd/.mp4 через fetch/XHR или обычный <video src>,
 просто это не видно в исходном HTML. Первая подходящая ссылка печатается
 в stdout как "STREAM:<url>" (та же stdout-IPC схема, что и GEOMETRY:
-ниже) — и окно сразу закрывается, никакой записи тут не происходит.
+ниже). Если вместо прямого потока страница вставляет <iframe> с чужого
+домена (плеер там, а не тут — cross-origin, внутрь не залезть скриптом),
+печатаем его src как "IFRAME:<url>" — resolve_link() пробует довести его
+до потока отдельно (см. _resolve_via_browser_sniff). В обоих случаях окно
+сразу закрывается, никакой записи тут не происходит.
 
 Кнопка fullscreen внутри самого плеера страницы (Fullscreen API,
 element.requestFullscreen()) — та же беда, что и с нативным
@@ -211,6 +215,16 @@ class _RelayoutApi:
 # плюс на всякий случай следим за src/currentSrc у <video>/<source> —
 # для страниц, отдающих поток нативно, без JS-плеера поверх. Дедуп по
 # window.__tvrecorder_seen, чтобы не звать API на каждый повторный чанк.
+#
+# Отдельно ловим и <iframe> — плеер может жить в чужом origin (замечено
+# на otr-online.ru: сама статья рисуется Vue-ем нормально, но конкретный
+# ролик — в iframe на otr.webcaster.pro, вставленном уже ПОСЛЕ гидратации,
+# так что в исходном HTML его нет). Внутрь чужого iframe скриптом не
+# залезть (та же история, что и с cross-origin у 1tv.ru), но сам src
+# читается снаружи без проблем — а webcaster.pro-ссылки core/link_resolver.py
+# уже умеет доводить до .m3u8 своей отдельной XML-цепочкой
+# (_resolve_webcaster_player). /schedule-путь у этого вендора — общий
+# виджет "сейчас в эфире", не ролик конкретной страницы, его пропускаем.
 SNIFF_JS = r"""
 (function() {
     if (window.__tvrecorder_sniff_bound) return;
@@ -222,6 +236,14 @@ SNIFF_JS = r"""
             if (!url || seen[url] || !STREAM_RE.test(url)) return;
             seen[url] = true;
             window.pywebview.api.report_stream(url);
+        } catch (e) {}
+    }
+    var seenIframes = {};
+    function reportIframe(url) {
+        try {
+            if (!url || seenIframes[url] || url.indexOf('/schedule') !== -1) return;
+            seenIframes[url] = true;
+            window.pywebview.api.report_iframe(url);
         } catch (e) {}
     }
     var origFetch = window.fetch;
@@ -240,6 +262,9 @@ SNIFF_JS = r"""
         document.querySelectorAll('video,source').forEach(function(el) {
             report(el.currentSrc || el.src);
         });
+        document.querySelectorAll('iframe').forEach(function(el) {
+            reportIframe(el.src || el.getAttribute('data-src'));
+        });
     }
     scanMedia();
     new MutationObserver(scanMedia).observe(document.documentElement,
@@ -251,18 +276,19 @@ SNIFF_JS = r"""
 
 class _SnifferApi:
     """Мост JS -> Python для режима --sniff: страница сама зовёт
-    report_stream(url), как только её плеер обратился за потоком."""
+    report_stream(url)/report_iframe(url), как только её плеер обратился
+    за потоком или в разметке появился фрейм с плеером."""
 
     def __init__(self):
         self.window = None
         self.found = threading.Event()
 
-    def report_stream(self, url):
+    def _report(self, prefix: str, url: str):
         if self.found.is_set():
             return
         self.found.set()
         try:
-            print(f"STREAM:{url}", flush=True)
+            print(f"{prefix}:{url}", flush=True)
         except Exception as e:
             print(f"Не удалось сообщить найденный поток: {e}", file=sys.stderr)
         if self.window is not None:
@@ -271,11 +297,26 @@ class _SnifferApi:
             except Exception:
                 pass
 
+    def report_stream(self, url):
+        self._report('STREAM', url)
 
-def _run_sniff(url: str, timeout: float = 12.0):
+    def report_iframe(self, url):
+        self._report('IFRAME', url)
+
+
+def _run_sniff(url: str, timeout: float = 40.0):
     import webview
     api = _SnifferApi()
-    window = webview.create_window("TV Recorder — sniff", url=url, hidden=True, js_api=api)
+    # hidden=True, а не minimized — казалось безопаснее (никогда не мелькнёт
+    # на экране), но оказалось, что по-настоящему скрытое окно на macOS не
+    # получает нормальный viewport: у сайтов, которые подгружают плеер лениво
+    # по видимости (IntersectionObserver — частый паттерн, замечено на
+    # otr-online.ru: страница рендерится, а iframe с плеером — не вставляется
+    # вовсе), sniff молчал все 18с впустую. minimized=True рендерит страницу
+    # по-настоящему (просто окно тут же уходит в Dock, не мелькая на экране)
+    # — и та же страница находится сразу.
+    window = webview.create_window("TV Recorder — sniff", url=url, minimized=True,
+                                    width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, js_api=api)
     api.window = window
 
     def on_loaded():
