@@ -104,6 +104,14 @@ _VIPLER_IFRAME_RE = re.compile(r'<iframe[^>]+src=["\']([^"\']*/video/embed/\d+[^
 _VIPLER_HLS_RE = re.compile(r'"hls"\s*:\s*"([^"]+)"')
 _VIPLER_MP4_RE = re.compile(r'"reserve"\s*:\s*\{\s*"mp4"\s*:\s*"([^"]+)"')
 _VIPLER_DURATION_RE = re.compile(r'property=["\']video:duration["\'][^>]+content=["\']([\d.]+)["\']', re.IGNORECASE)
+# Многие новостные сайты (don24.ru и т.п.) вставляют видео как VK-плеер
+# в "embed"-формате — <iframe src="https://vkvideo.ru/video_ext.php?oid=X&id=Y">
+# — а не как обычную ссылку на страницу видео (vk.com/video-X_Y или
+# vkvideo.ru/video-X_Y), которую понимает штатный VK-экстрактор yt-dlp.
+# oid/id из embed-URL и есть та же пара, что и в "video{oid}_{id}" — не
+# нужно ничего разбирать глубже, просто собираем каноническую ссылку и
+# отдаём её тому же yt-dlp.
+_VK_EMBED_RE = re.compile(r'vk(?:video)?\.(?:ru|com)/video_ext\.php\?oid=(-?\d+)&(?:amp;)?id=(\d+)', re.IGNORECASE)
 
 
 @dataclass
@@ -142,7 +150,7 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
         if ytdlp_result.ok:
             return ytdlp_result
 
-    fallback = _resolve_via_html_scrape(url, timeout)
+    fallback = _resolve_via_html_scrape(url, timeout, target_height)
     if fallback.ok:
         if ytdlp_result is not None:
             logger.info(f"LinkResolver: yt-dlp не знает '{url}', нашли поток напрямую в HTML")
@@ -487,7 +495,23 @@ def _resolve_vipler_embed(html: str, base_url: str, timeout: int) -> Optional[Li
     return None
 
 
-def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
+def _resolve_vk_embed(html: str, timeout: int, target_height: int) -> Optional[LinkInfo]:
+    """См. докстринг у _VK_EMBED_RE. Возвращает None, если на странице нет
+    такого iframe — тогда _resolve_via_html_scrape идёт дальше как обычно."""
+    m = _VK_EMBED_RE.search(html)
+    if not m:
+        return None
+    oid, video_id = m.group(1), m.group(2)
+    canonical_url = f"https://vkvideo.ru/video{oid}_{video_id}"
+    result = _resolve_via_ytdlp(canonical_url, timeout, target_height)
+    if result.ok:
+        logger.info(f"LinkResolver/vk: embed-iframe (oid={oid}, id={video_id}) сведён к '{canonical_url}'")
+        return result
+    logger.debug(f"LinkResolver/vk: '{canonical_url}' (из embed-iframe) не разобрался: {result.error}")
+    return None
+
+
+def _resolve_via_html_scrape(url: str, timeout: int, target_height: int = TARGET_HEIGHT) -> LinkInfo:
     """Запасной путь для сайтов без экстрактора в yt-dlp: тянем страницу и
     ищем прямую ссылку на .m3u8/.mpd прямо в её HTML/JS (в т.ч. заэкранированную
     внутри JSON — вида `\\/\\/host\\/path.m3u8`)."""
@@ -515,6 +539,10 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     vipler = _resolve_vipler_embed(html, url, timeout)
     if vipler:
         return vipler
+
+    vk_embed = _resolve_vk_embed(html, timeout, target_height)
+    if vk_embed:
+        return vk_embed
 
     source_match = _SOURCE_KEY_RE.search(html)
     stream_url = None
