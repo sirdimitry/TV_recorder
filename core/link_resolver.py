@@ -248,7 +248,10 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
                 proc.kill()
 
     if iframe_url and 'webcaster.pro' in iframe_url:
-        webcaster_stream = _resolve_webcaster_player(iframe_url, referer, timeout)
+        # min(...) — _resolve_webcaster_player сам повторяет каждый запрос
+        # несколько раз (см. _webcaster_get), поэтому таймаут ОДНОЙ попытки
+        # должен быть коротким, а не растягиваться на весь бюджет sniff'а.
+        webcaster_stream = _resolve_webcaster_player(iframe_url, referer, min(timeout, 5))
         if webcaster_stream:
             logger.info(f"LinkResolver: довели iframe '{iframe_url}' (найден браузером) до потока через webcaster.pro")
             stream_url = webcaster_stream
@@ -367,17 +370,34 @@ def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
                      headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
 
 
+def _webcaster_get(url: str, headers: dict, timeout: int, retries: int = 4) -> Optional[requests.Response]:
+    """otr.webcaster.pro/bl.webcaster.pro регулярно молча не отвечают —
+    проверено вручную: 2 из 3 запросов подряд к ОДНОМУ И ТОМУ ЖЕ URL висят
+    до истечения таймаута, а третий отвечает меньше чем за секунду. Не
+    перегрузка (была бы медленной, но стабильной), а будто соединение
+    иногда просто роняется — раз так, несколько быстрых повторов надёжнее
+    одной попытки с длинным таймаутом."""
+    for _ in range(retries):
+        try:
+            return requests.get(url, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException:
+            continue
+    return None
+
+
 def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Optional[str]:
     """Проходит трёхшаговую цепочку webcaster.pro и возвращает первый
     найденный .m3u8 или None, если что-то на пути пошло не так. Каждый шаг
     отдельно логируется — этот путь специфичен для одного вендора и
     заведомо более хрупкий, чем обычный HTML-поиск, полезно видеть, на
-    каком именно шаге он подвёл."""
+    каком именно шаге он подвёл. Каждый запрос — через _webcaster_get
+    (см. её докстринг про то, почему тут повторы, а не длинный таймаут)."""
     headers = {'User-Agent': _DEFAULT_UA, 'Referer': referer}
     try:
-        r1 = requests.get(player_url, headers=headers, timeout=timeout)
-        if r1.status_code != 200:
-            logger.debug(f"LinkResolver/webcaster: страница плеера '{player_url}' ответила HTTP {r1.status_code}")
+        r1 = _webcaster_get(player_url, headers, timeout)
+        if r1 is None or r1.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: страница плеера '{player_url}' "
+                         f"{'не ответила' if r1 is None else f'ответила HTTP {r1.status_code}'}")
             return None
         m = _WEBCASTER_CONFIG_RE.search(r1.text)
         if not m:
@@ -388,9 +408,10 @@ def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Op
         # буквальные %3D/%26 вместо =/& и запрос уходит по битому адресу.
         config_url = unquote(m.group(1).replace('&amp;', '&').replace('\\/', '/'))
 
-        r2 = requests.get(config_url, headers=headers, timeout=timeout)
-        if r2.status_code != 200:
-            logger.debug(f"LinkResolver/webcaster: config '{config_url}' ответил HTTP {r2.status_code}")
+        r2 = _webcaster_get(config_url, headers, timeout)
+        if r2 is None or r2.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: config '{config_url}' "
+                         f"{'не ответил' if r2 is None else f'ответил HTTP {r2.status_code}'}")
             return None
         vm = _XML_VIDEO_RE.search(r2.text)
         if not vm:
@@ -398,9 +419,10 @@ def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Op
             return None
         media_url = vm.group(1).replace('&amp;', '&')
 
-        r3 = requests.get(media_url, headers=headers, timeout=timeout)
-        if r3.status_code != 200:
-            logger.debug(f"LinkResolver/webcaster: media/start '{media_url}' ответил HTTP {r3.status_code}")
+        r3 = _webcaster_get(media_url, headers, timeout)
+        if r3 is None or r3.status_code != 200:
+            logger.debug(f"LinkResolver/webcaster: media/start '{media_url}' "
+                         f"{'не ответил' if r3 is None else f'ответил HTTP {r3.status_code}'}")
             return None
         tm = _XML_TRACK_RE.search(r3.text)
         if not tm:
@@ -535,9 +557,11 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     # его собственную XML-цепочку конфигов, вместо того чтобы сразу сдаться.
     if player_url and 'webcaster.pro' in player_url:
         # У этой цепочки бывают реальные сетевые подвисания на стороне
-        # webcaster.pro (замечены TLS-таймауты) — держим её короткой, чтобы
-        # не подвешивать диалог добавления ссылки на минуту в худшем случае.
-        webcaster_timeout = min(timeout, 6)
+        # webcaster.pro (замечены TLS-таймауты) — держим таймаут ОДНОЙ
+        # попытки коротким; устойчивость к самим зависаниям обеспечивают
+        # повторы внутри _resolve_webcaster_player (см. _webcaster_get),
+        # а не один длинный таймаут.
+        webcaster_timeout = min(timeout, 4)
         webcaster_stream = _resolve_webcaster_player(player_url, url, webcaster_timeout)
         webcaster_body = _probe_stream(webcaster_stream, url, webcaster_timeout) if webcaster_stream else None
         if webcaster_body is not None:
