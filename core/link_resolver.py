@@ -90,6 +90,20 @@ _OG_VIDEO_RE = re.compile(r'<meta[^>]+property=["\']og:video["\'][^>]+content=["
 _WEBCASTER_CONFIG_RE = re.compile(r'data-config=["\'][^"\']*config=([^"\'&]+)', re.IGNORECASE)
 _XML_VIDEO_RE = re.compile(r'<video><!\[CDATA\[([^\]]+)]]></video>', re.IGNORECASE)
 _XML_TRACK_RE = re.compile(r'<track[^>]*><!\[CDATA\[([^\]]+\.m3u8[^\]]*)]]></track>', re.IGNORECASE)
+# "vipler" — общий видеоплеер сети сайтов (iz.ru, ren.tv, 5-tv.ru,
+# sport-express.ru — виден общий словарь тем в его собственном JS,
+# window.config...themes={"ren.tv":...,"iz.ru":...,"5-tv.ru":...}).
+# Статья вставляет видео как <iframe class="igi-player" src="/video/embed/<id>">
+# прямо в статический HTML (не через JS-гидратацию) — а сама embed-страница
+# в свою очередь публикует ссылку на поток открытым текстом в
+# window.config = {...,"sources":[{"hls":"...","reserve":{"mp4":"..."}}]};
+# — ни yt-dlp, ни общий _STREAM_URL_RE её не видят (тег iframe, а не
+# прямая ссылка в самой статье), но и браузер не нужен: одного HTTP-запроса
+# к embed-странице достаточно.
+_VIPLER_IFRAME_RE = re.compile(r'<iframe[^>]+src=["\']([^"\']*/video/embed/\d+[^"\']*)["\']', re.IGNORECASE)
+_VIPLER_HLS_RE = re.compile(r'"hls"\s*:\s*"([^"]+)"')
+_VIPLER_MP4_RE = re.compile(r'"reserve"\s*:\s*\{\s*"mp4"\s*:\s*"([^"]+)"')
+_VIPLER_DURATION_RE = re.compile(r'property=["\']video:duration["\'][^>]+content=["\']([\d.]+)["\']', re.IGNORECASE)
 
 
 @dataclass
@@ -398,6 +412,59 @@ def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Op
         return None
 
 
+def _resolve_vipler_embed(html: str, base_url: str, timeout: int) -> Optional[LinkInfo]:
+    """См. докстринг у _VIPLER_IFRAME_RE. Возвращает None, если на странице
+    нет такого iframe или его embed-страница не отдала рабочую ссылку —
+    тогда _resolve_via_html_scrape просто идёт дальше по обычной цепочке."""
+    iframe_match = _VIPLER_IFRAME_RE.search(html)
+    if not iframe_match:
+        return None
+    embed_url = urljoin(base_url, iframe_match.group(1).replace('&amp;', '&')).split('#', 1)[0]
+    headers = {'User-Agent': _DEFAULT_UA, 'Referer': base_url}
+    try:
+        resp = requests.get(embed_url, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            logger.debug(f"LinkResolver/vipler: embed '{embed_url}' ответил HTTP {resp.status_code}")
+            return None
+        embed_html = resp.text
+    except Exception as e:
+        logger.debug(f"LinkResolver/vipler: embed '{embed_url}' недоступен: {e}")
+        return None
+
+    candidates = []
+    hls_match = _VIPLER_HLS_RE.search(embed_html)
+    if hls_match:
+        candidates.append(hls_match.group(1).replace('\\/', '/'))
+    mp4_match = _VIPLER_MP4_RE.search(embed_html)
+    if mp4_match:
+        candidates.append(mp4_match.group(1).replace('\\/', '/'))
+    if not candidates:
+        logger.debug(f"LinkResolver/vipler: не нашли sources в конфиге '{embed_url}'")
+        return None
+
+    title_match = _TITLE_RE.search(embed_html)
+    title = title_match.group(1).strip() if title_match else base_url
+    thumb_match = _OG_IMAGE_RE.search(embed_html)
+    thumbnail = thumb_match.group(1) if thumb_match else ''
+    duration_match = _VIPLER_DURATION_RE.search(embed_html)
+    meta_duration = float(duration_match.group(1)) if duration_match else None
+
+    for stream_url in candidates:
+        body = _probe_stream(stream_url, base_url, timeout)
+        if body is None:
+            continue
+        if stream_url.split('?', 1)[0].lower().endswith('.mp4'):
+            duration = _probe_mp4_duration(stream_url, base_url, timeout) or meta_duration
+        else:
+            duration = _detect_duration(body, stream_url, base_url, timeout) or meta_duration
+        logger.info(f"LinkResolver/vipler: нашли поток для '{base_url}' через embed-страницу {embed_url}")
+        return LinkInfo(ok=True, title=title, thumbnail=thumbnail, is_live=False,
+                         duration=duration, video_url=stream_url, headers=headers)
+
+    logger.debug(f"LinkResolver/vipler: ссылки из конфига '{embed_url}' недоступны")
+    return None
+
+
 def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     """Запасной путь для сайтов без экстрактора в yt-dlp: тянем страницу и
     ищем прямую ссылку на .m3u8/.mpd прямо в её HTML/JS (в т.ч. заэкранированную
@@ -422,6 +489,10 @@ def _resolve_via_html_scrape(url: str, timeout: int) -> LinkInfo:
     thumbnail = thumb_match.group(1) if thumb_match else ''
     video_match = _OG_VIDEO_RE.search(html)
     player_url = video_match.group(1).replace('&amp;', '&') if video_match else None
+
+    vipler = _resolve_vipler_embed(html, url, timeout)
+    if vipler:
+        return vipler
 
     source_match = _SOURCE_KEY_RE.search(html)
     stream_url = None
