@@ -220,14 +220,21 @@ class DownloadList(ctk.CTkFrame):
         error_message = item.get('error_message') if status == 'error' else ''
         widgets['error_label'].configure(text=error_message or '')
 
-        # Полоска прогресса — только пока реально качается, и только если
-        # знаем длительность (иначе процент посчитать не из чего; для
-        # эфиров/неизвестной длины просто не показываем полоску вообще).
+        # Полоска прогресса — с самого начала статуса 'downloading', даже
+        # пока процент ещё не из чего посчитать (медленный источник вроде
+        # 1tv.ru может по минуте не отдавать ffmpeg вообще ничего, пока
+        # тянется самый первый сегмент — раньше это выглядело так, будто
+        # ничего не происходит вообще; теперь хотя бы "подключение…" сразу
+        # показывает, что задача жива, а не зависла).
         progress = item.get('progress')
-        show_progress = status == 'downloading' and progress is not None
+        show_progress = status == 'downloading'
         if show_progress:
-            widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
-            parts = [f"{progress:.0f}%"]
+            if progress is not None:
+                widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
+                parts = [f"{progress:.0f}%"]
+            else:
+                widgets['progress_bar'].set(0)
+                parts = ["подключение…"]
             speed_text = _format_speed(item.get('speed_bps'))
             if speed_text:
                 parts.append(speed_text)
