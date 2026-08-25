@@ -667,6 +667,51 @@ def _detect_duration(m3u8_body: str, base_url: str, referer: str, timeout: int, 
     return None
 
 
+def list_available_heights(url: str, info: LinkInfo, timeout: int = 10) -> Optional[list]:
+    """Реальный список качеств, которые есть у источника — чтобы диалог
+    добавления загрузки мог честно сказать "доступно только 480p" вместо
+    того, чтобы притворяться, будто дропдаун 360-1080p всегда на что-то
+    влияет. У многих встраиваемых плееров (см. iz.ru/5-tv.ru — вариант
+    _resolve_vipler_embed) на деле только ОДНО качество, выбирать не из
+    чего. Возвращает None, если определить не удалось — тогда UI просто
+    промолчит про доступные качества, а не соврёт про них что-то конкретное.
+
+    info — уже посчитанный дефолтным вызовом resolve_link() результат
+    (диалог и так его получает для превью названия/хронометража) — не
+    гоняем сеть повторно там, где достаточно того, что уже есть."""
+    if YTDLP_AVAILABLE:
+        try:
+            opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'socket_timeout': timeout}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                yt_info = ydl.extract_info(url, download=False)
+            if yt_info:
+                heights = {f.get('height') for f in (yt_info.get('formats') or [])
+                           if f.get('height') and f.get('vcodec') not in (None, 'none')}
+                if heights:
+                    return sorted(heights, reverse=True)
+        except Exception:
+            pass
+
+    # yt-dlp либо не знает сайт, либо не сообщил высоту у форматов — если
+    # найденный поток сам оказался HLS-мастер-плейлистом (webcaster.pro,
+    # 1tv.ru, часть vipler-сайтов), у него самого может быть список
+    # битрейт-вариантов с разрешением, тот же список, из которого потом
+    # выбирает resolve_variant_url при скачивании.
+    if not info.ok or not info.video_url or '.m3u8' not in info.video_url.lower():
+        return None
+    try:
+        headers = {'User-Agent': _DEFAULT_UA}
+        if info.headers:
+            headers.update(info.headers)
+        resp = requests.get(info.video_url, timeout=timeout, headers=headers)
+        if resp.status_code != 200:
+            return None
+        heights = {int(m.group(1)) for m in re.finditer(r'RESOLUTION=\d+x(\d+)', resp.text)}
+        return sorted(heights, reverse=True) if heights else None
+    except Exception:
+        return None
+
+
 def guess_type(url: str) -> str:
     """Грубое определение платформы по домену — только для бейджа в UI."""
     u = url.lower()

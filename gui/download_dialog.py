@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from core.link_resolver import resolve_link
+from core.link_resolver import list_available_heights, resolve_link
 from utils.config import Config
 from utils.tk_helpers import bind_cyrillic_layout_shortcuts
 
@@ -53,10 +53,18 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
                        button_color=c['bg_tertiary'], button_hover_color=c['bg_hover'],
                        text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='w')
 
+    # Дропдаун качества реально на что-то влияет, только если у источника
+    # больше одного варианта — у многих встраиваемых плееров новостных
+    # сайтов доступно ровно одно (см. list_available_heights) — эта строка
+    # честно говорит, во что выбор превратится, а не оставляет гадать.
+    quality_hint = ctk.CTkLabel(body, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'],
+                                 justify='left', wraplength=430)
+    quality_hint.grid(row=3, column=0, columnspan=2, sticky='w', pady=(0, 0))
+
     ctk.CTkLabel(body, text="Папка:", text_color=c['text_secondary']).grid(
-        row=3, column=0, padx=(0, 12), pady=8, sticky='w')
+        row=4, column=0, padx=(0, 12), pady=8, sticky='w')
     folder_frame = ctk.CTkFrame(body, fg_color='transparent')
-    folder_frame.grid(row=3, column=1, pady=8, sticky='ew')
+    folder_frame.grid(row=4, column=1, pady=8, sticky='ew')
     folder_frame.columnconfigure(0, weight=1)
     folder_var = tk.StringVar(value=str(Config.get_downloads_dir()))
     folder_entry = ctk.CTkEntry(folder_frame, textvariable=folder_var, height=32,
@@ -90,6 +98,7 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
         detect_generation['id'] += 1
         my_generation = detect_generation['id']
         hint.configure(text="Ищем видео на странице…")
+        quality_hint.configure(text="")
 
         def resolve_async():
             # Само разрешение по выбранному качеству досчитывается заново
@@ -109,6 +118,27 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
                 hint.configure(text=f"Найдено: {info.title}{duration_part}")
 
             dialog.after(0, apply)
+
+            # Список доступных качеств — отдельным (более медленным) шагом
+            # после основного превью, чтобы название/превью не ждали лишний
+            # сетевой запрос — сама подпись обновится чуть позже, это не
+            # блокирует остальной диалог.
+            if info.ok:
+                heights = list_available_heights(url, info)
+
+                def apply_quality():
+                    if my_generation != detect_generation['id']:
+                        return
+                    if not heights:
+                        quality_hint.configure(text="")
+                    elif len(heights) == 1:
+                        quality_hint.configure(text=f"У источника доступно только {heights[0]}p "
+                                                     f"— выбор качества не повлияет")
+                    else:
+                        available = ", ".join(f"{h}p" for h in heights)
+                        quality_hint.configure(text=f"Доступные качества: {available}")
+
+                dialog.after(0, apply_quality)
 
         threading.Thread(target=resolve_async, daemon=True).start()
 
@@ -135,4 +165,4 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
 
     ctk.CTkButton(body, text="Скачать", command=save, height=36, corner_radius=Config.RADIUS_SM,
                   fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                  ).grid(row=4, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                  ).grid(row=5, column=0, columnspan=2, pady=(16, 0), sticky='ew')
