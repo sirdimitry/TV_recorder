@@ -39,6 +39,8 @@ class DownloadTask:
         self.error_message = ''
         self.progress: Optional[float] = None  # 0-100, None пока неизвестно (не тот же duration или ещё не начали)
         self.elapsed_seconds: float = 0.0
+        self.speed_bps: Optional[float] = None  # байт/сек, сглаженная скорость записи файла
+        self.eta_seconds: Optional[float] = None  # оценка по реальному времени, None пока не из чего считать
         self.created_at = datetime.now()
         self.finished_at: Optional[datetime] = None
         self.on_complete: Optional[Callable] = None
@@ -63,6 +65,8 @@ class DownloadTask:
             'status': self.status,
             'error_message': self.error_message,
             'progress': self.progress,
+            'speed_bps': self.speed_bps,
+            'eta_seconds': self.eta_seconds,
         }
 
 
@@ -247,6 +251,8 @@ class Downloader:
         if success:
             task.status = 'done'
             task.progress = 100.0
+            task.speed_bps = None
+            task.eta_seconds = None
             logger.info(f"Downloader: '{task.name}' скачан → {output_path}")
         else:
             task.status = 'error'
@@ -261,12 +267,19 @@ class Downloader:
             task.on_complete(success, task, task.error_message)
 
     def _watch_progress(self, task: DownloadTask):
-        """Читает key=value строки из -progress pipe:1 и переводит
-        out_time_us в проценты от известной длительности ролика.
+        """Читает key=value строки из -progress pipe:1: out_time_us даёт
+        проценты от известной длительности ролика, total_size — сколько
+        байт уже записано в файл (по нему считаем реальную скорость и,
+        вместе с процентом, оценку оставшегося времени — не по позиции
+        в видео, а по настоящему часам, иначе на -c copy, который обычно
+        в разы быстрее реального времени ролика, ETA была бы мимо).
         Уведомления троттлятся — иначе на быстром скачивании (на диске уже
         готовый файл, ffmpeg просто копирует байты) UI-callback звался бы
         на каждую строку, десятки раз в секунду."""
         last_notify = 0.0
+        download_started = time.time()
+        last_size = 0
+        last_size_time = download_started
         try:
             for line in task.process.stdout:
                 line = line.strip()
@@ -277,6 +290,26 @@ class Downloader:
                         continue
                     if task.duration:
                         task.progress = max(0.0, min(100.0, task.elapsed_seconds / task.duration * 100))
+                        if task.progress > 0.5:
+                            wall_elapsed = time.time() - download_started
+                            estimated_total = wall_elapsed * 100 / task.progress
+                            task.eta_seconds = max(0.0, estimated_total - wall_elapsed)
+                elif line.startswith('total_size='):
+                    try:
+                        total_size = int(line.split('=', 1)[1])
+                    except ValueError:
+                        continue
+                    now = time.time()
+                    dt = now - last_size_time
+                    if dt > 0 and total_size >= last_size:
+                        instant_speed = (total_size - last_size) / dt
+                        # Сглаживаем (EMA) — сырые значения между двумя
+                        # соседними -progress тиками слишком дёрганые для
+                        # человекочитаемого "сейчас качается со скоростью N".
+                        task.speed_bps = (instant_speed if task.speed_bps is None
+                                           else 0.6 * task.speed_bps + 0.4 * instant_speed)
+                    last_size = total_size
+                    last_size_time = now
                 elif line.startswith('progress='):
                     now = time.time()
                     if now - last_notify >= 0.5 or line.endswith('end'):

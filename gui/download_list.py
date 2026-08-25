@@ -20,6 +20,24 @@ def _format_duration(seconds: Optional[float]) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def _format_speed(bps: Optional[float]) -> str:
+    if not bps or bps <= 0:
+        return ''
+    units = ['Б/с', 'КБ/с', 'МБ/с', 'ГБ/с']
+    value = float(bps)
+    i = 0
+    while value >= 1024 and i < len(units) - 1:
+        value /= 1024
+        i += 1
+    return f"{value:.1f} {units[i]}"
+
+
+def _format_eta(seconds: Optional[float]) -> str:
+    if seconds is None or seconds <= 0:
+        return ''
+    return "осталось ~" + _format_duration(seconds)
+
+
 class DownloadList(ctk.CTkFrame):
     """Список загрузок ("Загрузки") — присланная ссылка ищется универсально
     (core/link_resolver.py: yt-dlp -> HTML-скрейп -> sniff через встроенный
@@ -136,6 +154,13 @@ class DownloadList(ctk.CTkFrame):
                                            fg_color=c['bg_tertiary'], progress_color=c['accent'])
         progress_bar.set(0)
 
+        # Отдельная строка под полоской — процент/скорость/ETA. Пустой
+        # текст, пока не качается, но всегда упакована вместе с
+        # progress_bar (см. _apply_status) — держим её в том же
+        # прижатом-к-полоске месте, а не после error_label.
+        progress_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9),
+                                       text_color=c['text_muted'], anchor='w')
+
         error_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9), text_color=c['red'],
                                     anchor='w', wraplength=220, justify='left')
         error_label.pack(fill='x', anchor='w')
@@ -165,6 +190,7 @@ class DownloadList(ctk.CTkFrame):
         self.row_widgets[download_id] = {
             'row': row, 'thumb_label': thumb_label, 'label_name': label_name, 'badge': badge,
             'status_dot': status_dot, 'error_label': error_label, 'progress_bar': progress_bar,
+            'progress_label': progress_label,
             'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'item': item,
             'thumbnail_loaded': False, 'progress_shown': False,
         }
@@ -201,11 +227,21 @@ class DownloadList(ctk.CTkFrame):
         show_progress = status == 'downloading' and progress is not None
         if show_progress:
             widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
+            parts = [f"{progress:.0f}%"]
+            speed_text = _format_speed(item.get('speed_bps'))
+            if speed_text:
+                parts.append(speed_text)
+            eta_text = _format_eta(item.get('eta_seconds'))
+            if eta_text:
+                parts.append(eta_text)
+            widgets['progress_label'].configure(text=" · ".join(parts))
             if not widgets['progress_shown']:
                 widgets['progress_bar'].pack(fill='x', anchor='w', pady=(4, 0))
+                widgets['progress_label'].pack(fill='x', anchor='w', pady=(1, 0))
                 widgets['progress_shown'] = True
         elif widgets['progress_shown']:
             widgets['progress_bar'].pack_forget()
+            widgets['progress_label'].pack_forget()
             widgets['progress_shown'] = False
 
         widgets['btn_folder'].configure(state='normal' if status == 'done' else 'disabled')
