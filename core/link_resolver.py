@@ -23,6 +23,7 @@ JS каждого такого сайта — не масштабируется.
 просто вернёт ok=False с понятной причиной ("HTTP 403…" от ffmpeg/
 проверки потока выше по стеку), а не будет тихо ломаться.
 """
+import concurrent.futures
 import re
 import select
 import shutil
@@ -256,10 +257,11 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
                 proc.kill()
 
     if iframe_url and 'webcaster.pro' in iframe_url:
-        # min(...) — _resolve_webcaster_player сам повторяет каждый запрос
-        # несколько раз (см. _webcaster_get), поэтому таймаут ОДНОЙ попытки
-        # должен быть коротким, а не растягиваться на весь бюджет sniff'а.
-        webcaster_stream = _resolve_webcaster_player(iframe_url, referer, min(timeout, 5))
+        # min(...) — _resolve_webcaster_player гоняет попытки параллельно
+        # (см. _webcaster_get), так что общее время ближе к ОДНОЙ попытке,
+        # а не к их сумме — можно позволить каждой попытке чуть больше
+        # времени, не растягивая при этом весь бюджет sniff'а.
+        webcaster_stream = _resolve_webcaster_player(iframe_url, referer, min(timeout, 7))
         if webcaster_stream:
             logger.info(f"LinkResolver: довели iframe '{iframe_url}' (найден браузером) до потока через webcaster.pro")
             stream_url = webcaster_stream
@@ -378,19 +380,43 @@ def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
                      headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
 
 
-def _webcaster_get(url: str, headers: dict, timeout: int, retries: int = 4) -> Optional[requests.Response]:
+# Общий пул для гонки параллельных попыток в _webcaster_get — так все
+# запросы одного шага стартуют одновременно, а не ждут по очереди, пока
+# предыдущий провалится по своему таймауту (см. докстринг ниже).
+_webcaster_pool = concurrent.futures.ThreadPoolExecutor(max_workers=24, thread_name_prefix='webcaster-get')
+
+
+def _webcaster_get(url: str, headers: dict, timeout: int, attempts: int = 8) -> Optional[requests.Response]:
     """otr.webcaster.pro/bl.webcaster.pro регулярно молча не отвечают —
     проверено вручную: 2 из 3 запросов подряд к ОДНОМУ И ТОМУ ЖЕ URL висят
     до истечения таймаута, а третий отвечает меньше чем за секунду. Не
     перегрузка (была бы медленной, но стабильной), а будто соединение
-    иногда просто роняется — раз так, несколько быстрых повторов надёжнее
-    одной попытки с длинным таймаутом."""
-    for _ in range(retries):
+    иногда просто роняется. Раз так, N параллельных попыток надёжнее и
+    БЫСТРЕЕ, чем N последовательных: если сервер отвечает хоть на одну
+    почти мгновенно (обычная картина), не приходится сначала высидеть
+    полный таймаут на каждой из предыдущих проваленных попыток — берём
+    первый пришедший 200, остальные попытки просто дожидаются своего
+    таймаута в фоне и тихо игнорируются."""
+    def attempt():
         try:
             return requests.get(url, headers=headers, timeout=timeout)
         except requests.exceptions.RequestException:
-            continue
-    return None
+            return None
+
+    futures = [_webcaster_pool.submit(attempt) for _ in range(attempts)]
+    best = None
+    try:
+        for future in concurrent.futures.as_completed(futures, timeout=timeout + 3):
+            result = future.result()
+            if result is None:
+                continue
+            if result.status_code == 200:
+                return result
+            if best is None:
+                best = result
+    except concurrent.futures.TimeoutError:
+        pass
+    return best
 
 
 def _resolve_webcaster_player(player_url: str, referer: str, timeout: int) -> Optional[str]:
@@ -585,11 +611,12 @@ def _resolve_via_html_scrape(url: str, timeout: int, target_height: int = TARGET
     # его собственную XML-цепочку конфигов, вместо того чтобы сразу сдаться.
     if player_url and 'webcaster.pro' in player_url:
         # У этой цепочки бывают реальные сетевые подвисания на стороне
-        # webcaster.pro (замечены TLS-таймауты) — держим таймаут ОДНОЙ
-        # попытки коротким; устойчивость к самим зависаниям обеспечивают
-        # повторы внутри _resolve_webcaster_player (см. _webcaster_get),
-        # а не один длинный таймаут.
-        webcaster_timeout = min(timeout, 4)
+        # webcaster.pro (замечены TLS-таймауты) — устойчивость к ним
+        # обеспечивают параллельные попытки внутри _resolve_webcaster_player
+        # (см. _webcaster_get), а не длинный таймаут одной попытки; раз они
+        # гоняются одновременно, а не по очереди, можно позволить себе
+        # чуть больше времени на попытку без риска раздуть общий бюджет.
+        webcaster_timeout = min(timeout, 6)
         webcaster_stream = _resolve_webcaster_player(player_url, url, webcaster_timeout)
         webcaster_body = _probe_stream(webcaster_stream, url, webcaster_timeout) if webcaster_stream else None
         if webcaster_body is not None:
