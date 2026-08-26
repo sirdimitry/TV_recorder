@@ -18,6 +18,7 @@ from gui.preview_panel import PreviewPanel
 from gui.schedule_panel import SchedulePanel, TimeEntry
 from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
+from gui.tab_strip import TabStrip
 from core.link_resolver import resolve_link, guess_type
 from core.storage import Storage
 from core.scheduler import RecordingScheduler
@@ -293,29 +294,38 @@ class AppWindow:
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
 
         # === ОСНОВНАЯ ОБЛАСТЬ: 2 КОЛОНКИ ===
-        paned = ttk.PanedWindow(self.root, orient='horizontal')
-        paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
+        self.paned = ttk.PanedWindow(self.root, orient='horizontal')
+        self.paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
+        paned = self.paned
 
         left_frame = ctk.CTkFrame(paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
 
         self.preview_panel = PreviewPanel(left_frame)
         self.preview_panel.pack(fill='x', padx=4, pady=(4, 0))
 
-        self.left_tabview = ctk.CTkTabview(
-            left_frame, fg_color='transparent', corner_radius=Config.RADIUS,
-            segmented_button_fg_color=c['bg_tertiary'], segmented_button_selected_color=c['accent'],
-            segmented_button_selected_hover_color=c['accent_hover'], segmented_button_unselected_color=c['bg_tertiary'],
-            segmented_button_unselected_hover_color=c['bg_hover'], text_color=c['text_primary'],
-            command=self._on_left_tab_changed)
-        self.left_tabview.pack(fill='both', expand=True, padx=4, pady=(4, 0))
+        # Иконки вместо текстовых вкладок — встроенный CTkTabview этого не
+        # умеет (его CTkSegmentedButton без слота под картинку), поэтому
+        # свой компактный переключатель (gui/tab_strip.py) + страницы,
+        # уложенные в одну ячейку grid и переключаемые через .tkraise() —
+        # обычный tkinter-приём для "вкладок" без стороннего виджета.
+        self.tab_strip = TabStrip(
+            left_frame,
+            tabs=[
+                ('channels', 'Каналы', 'tv'),
+                ('links', 'Мои ссылки', 'link'),
+                ('browser', 'Браузер', 'globe'),
+                ('downloads', 'Загрузки', 'download'),
+            ],
+            command=self._on_left_tab_changed, colors=c)
+        self.tab_strip.pack(fill='x', padx=4, pady=(8, 6))
 
-        tab_channels = self.left_tabview.add("Каналы")
-        tab_links = self.left_tabview.add("Мои ссылки")
-        tab_browser = self.left_tabview.add("Браузер")
-        tab_downloads = self.left_tabview.add("Загрузки")
+        self.tab_pages = ctk.CTkFrame(left_frame, fg_color='transparent')
+        self.tab_pages.pack(fill='both', expand=True, padx=4, pady=(0, 4))
+        self.tab_pages.grid_rowconfigure(0, weight=1)
+        self.tab_pages.grid_columnconfigure(0, weight=1)
 
         self.channel_list = ChannelList(
-            tab_channels,
+            self.tab_pages,
             recorder=self.recorder,
             on_select=self._on_channel_select,
             on_edit=self._edit_channel_dialog,
@@ -324,10 +334,10 @@ class AppWindow:
             on_preview=self._show_channel_preview,
             on_add=self._add_channel_dialog,
         )
-        self.channel_list.pack(fill='both', expand=True)
+        self.channel_list.grid(row=0, column=0, sticky='nsew')
 
         self.link_list = LinkList(
-            tab_links,
+            self.tab_pages,
             recorder=self.recorder,
             on_select=self._on_channel_select,
             on_edit=self._edit_link_dialog,
@@ -336,10 +346,10 @@ class AppWindow:
             on_add=self._add_link_dialog,
             on_preview=self._show_channel_preview,
         )
-        self.link_list.pack(fill='both', expand=True)
+        self.link_list.grid(row=0, column=0, sticky='nsew')
 
         self.browser_link_list = BrowserLinkList(
-            tab_browser,
+            self.tab_pages,
             recorder=self.recorder,
             on_select=self._on_channel_select,
             on_edit=self._edit_browser_link_dialog,
@@ -347,19 +357,28 @@ class AppWindow:
             on_delete=self._delete_browser_link,
             on_add=self._add_browser_link_dialog,
         )
-        self.browser_link_list.pack(fill='both', expand=True)
+        self.browser_link_list.grid(row=0, column=0, sticky='nsew')
 
         self.download_list = DownloadList(
-            tab_downloads,
+            self.tab_pages,
             downloader=self.downloader,
             storage=self.storage,
             on_add=self._add_download_dialog,
         )
-        self.download_list.pack(fill='both', expand=True)
+        self.download_list.grid(row=0, column=0, sticky='nsew')
+
+        self._tab_pages = {
+            'channels': self.channel_list,
+            'links': self.link_list,
+            'browser': self.browser_link_list,
+            'downloads': self.download_list,
+        }
+        self.channel_list.tkraise()
 
         paned.add(left_frame, weight=1)
 
-        right_paned = ttk.PanedWindow(paned, orient='vertical')
+        self.right_paned = ttk.PanedWindow(paned, orient='vertical')
+        right_paned = self.right_paned
 
         schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
         self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed,
@@ -386,23 +405,38 @@ class AppWindow:
 
     def _add_download_dialog(self):
         show_add_download_dialog(self.root, self.colors, self.storage, self.downloader,
-                                  on_added=lambda: self.left_tabview.set("Загрузки"))
+                                  on_added=lambda: self.tab_strip.set('downloads'))
 
     def _check_all_channels(self):
         self.channel_list.check_all()
 
     def _toolbar_check_all(self):
-        tab = self.left_tabview.get()
-        if tab == "Мои ссылки":
+        key = self.tab_strip.get()
+        if key == 'links':
             self.link_list.load_links(self.storage.get_links())
-        elif tab == "Браузер":
+        elif key == 'browser':
             self.browser_link_list.load_links(self.storage.get_browser_links())
         else:
             self.channel_list.check_all()
 
-    def _on_left_tab_changed(self):
-        tab = self.left_tabview.get()
-        self.btn_toolbar_check.configure(text="Обновить статус" if tab == "Мои ссылки" else "Проверить все")
+    def _on_left_tab_changed(self, key: str):
+        page = self._tab_pages.get(key)
+        if page is not None:
+            page.tkraise()
+        self.btn_toolbar_check.configure(text="Обновить статус" if key == 'links' else "Проверить все")
+
+        # "Загрузки" архитектурно не связаны ни с планировщиком, ни с
+        # активными записями (core/downloader.py не пересекается с
+        # core/scheduler.py/core/recorder.py) — на этой вкладке правая
+        # панель просто отъедала бы ширину у строк загрузок без всякой
+        # пользы. На остальных трёх вкладках (Каналы/Мои ссылки/Браузер)
+        # планировщик реально работает — они равноправные source_type
+        # в core/scheduler.py, панель там уместна и остаётся.
+        right_visible = str(self.right_paned) in self.paned.panes()
+        if key == 'downloads' and right_visible:
+            self.paned.forget(self.right_paned)
+        elif key != 'downloads' and not right_visible:
+            self.paned.add(self.right_paned, weight=1)
 
     def _on_channel_select(self, name: str):
         logger.info(f"Выбран канал: {name}")

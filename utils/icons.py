@@ -75,6 +75,17 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
         d.line([px*0.5, px*0.68, px*0.5, px*0.80], fill=color, width=stroke)
         d.line([px*0.32, px*0.80, px*0.68, px*0.80], fill=color, width=stroke)
 
+    elif name == 'link':
+        d.rounded_rectangle([px*0.14, px*0.30, px*0.62, px*0.50], radius=px*0.10,
+                             outline=color, width=stroke)
+        d.rounded_rectangle([px*0.38, px*0.44, px*0.86, px*0.64], radius=px*0.10,
+                             outline=color, width=stroke)
+
+    elif name == 'globe':
+        d.ellipse([px*0.14, px*0.14, px*0.86, px*0.86], outline=color, width=stroke)
+        d.ellipse([px*0.14, px*0.30, px*0.86, px*0.70], outline=color, width=stroke)
+        d.line([px*0.5, px*0.14, px*0.5, px*0.86], fill=color, width=stroke)
+
     elif name == 'chevron_down':
         d.line([px*0.22, px*0.38, px*0.5, px*0.66], fill=color, width=stroke)
         d.line([px*0.5, px*0.66, px*0.78, px*0.38], fill=color, width=stroke)

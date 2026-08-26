@@ -1,5 +1,8 @@
 #!/bin/sh
-# Automatically increases the patch version before every commit.
+# Automatically increases the version before every commit.
+# Default bump is patch (X.Y.Z -> X.Y.Z+1). For a deliberate bigger jump on a
+# commit, set BUMP=minor (X.Y.Z -> X.Y+1.0) or BUMP=major (X.Y.Z -> X+1.0.0):
+#   BUMP=minor git commit -m "..."
 
 set -eu
 
@@ -12,7 +15,23 @@ major=${current%%.*}
 remaining=${current#*.}
 minor=${remaining%%.*}
 patch=${remaining#*.}
-next_version="$major.$minor.$(( patch + 1 ))"
+
+level=${BUMP:-patch}
+case "$level" in
+    major)
+        next_version="$(( major + 1 )).0.0"
+        ;;
+    minor)
+        next_version="$major.$(( minor + 1 )).0"
+        ;;
+    patch)
+        next_version="$major.$minor.$(( patch + 1 ))"
+        ;;
+    *)
+        echo "pre-commit: unknown BUMP='$level' (expected patch/minor/major), defaulting to patch" >&2
+        next_version="$major.$minor.$(( patch + 1 ))"
+        ;;
+esac
 today=$(date +%F)
 
 printf '%s\n' "$next_version" > "$version_file"

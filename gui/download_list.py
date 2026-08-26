@@ -67,9 +67,6 @@ class DownloadList(ctk.CTkFrame):
         c = self.colors
         header_row = ctk.CTkFrame(self, fg_color='transparent')
         header_row.pack(fill='x', padx=14, pady=(12, 6))
-        header = ctk.CTkLabel(header_row, text="ЗАГРУЗКИ", font=ctk.CTkFont(size=12, weight='bold'),
-                               text_color=c['text_secondary'])
-        header.pack(side='left', anchor='w')
         if self.on_add:
             ctk.CTkButton(header_row, text="", image=get_icon('plus', c['accent_text'], 14), width=26, height=26,
                           corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
