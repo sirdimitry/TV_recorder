@@ -190,8 +190,14 @@ class LinkList(ctk.CTkFrame):
                     status_badge.configure(text="В ЭФИРЕ" if info.is_live else "ЗАПИСЬ",
                                            text_color=c['red'] if info.is_live else c['text_secondary'])
                 else:
-                    live_dot.configure(image=get_icon('record', c['text_muted'], 10))
-                    status_badge.configure(text="НЕДОСТУПНО", text_color=c['text_muted'])
+                    # Прямой поток не нашёлся автоматически — но это больше
+                    # не тупик: запись всё равно можно начать, просто она
+                    # пойдёт через видимое окно браузера с захватом экрана
+                    # вместо копирования потока (см. AppWindow._record_link_now).
+                    # Раньше для этого нужно было вручную дублировать ссылку
+                    # во вкладку "Браузер" — теперь это происходит само.
+                    live_dot.configure(image=get_icon('record', c['accent'], 10))
+                    status_badge.configure(text="ЧЕРЕЗ БРАУЗЕР", text_color=c['accent'])
 
             self.after(0, apply)
 

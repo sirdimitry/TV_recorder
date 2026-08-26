@@ -57,7 +57,11 @@ class PreviewPanel(ctk.CTkFrame):
         self._stream = LiveThumbnailStream(url, headers, fps=FPS, on_frame=lambda jb: self._on_frame(jb, generation),
                                             width=IMG_SIZE[0] * 2)
         self._stream.start()
-        self.after(8000, lambda: self._check_connected(generation))
+        # 8с исторически давали ложные "Нет сигнала" на медленных, но рабочих
+        # потоках (та же проблема уже ловили в core/snapshot.py — там таймаут
+        # пришлось поднять с 6 до 10с). Тут поток ещё и идёт в -re темпе
+        # реального эфира, так что запас нужен больше.
+        self.after(15000, lambda: self._check_connected(generation))
 
     def _check_connected(self, generation: int):
         if generation == self._generation and self._frame_count == 0:

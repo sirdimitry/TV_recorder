@@ -14,13 +14,13 @@ simultaneous multi-channel recording via `ffmpeg`.
 RuTube, Twitch, or a plain news-site article with an embedded player) and
 record it. Resolution runs through a fallback chain: `yt-dlp` first, then a
 direct HTML/JS scrape for sites `yt-dlp` doesn't know, then — as a last
-resort — a real embedded browser that watches its own network traffic for
-the stream. When video and audio arrive as separate tracks (common on VK),
-they're muxed into one file with `ffmpeg -c copy` — no re-encoding.
-
-**Браузер (Browser)** — for sites where no direct stream can be found at
-all: records the page itself via screen-capture of an embedded browser
-window.
+resort — a real (invisible) embedded browser that watches its own network
+traffic for the stream. When video and audio arrive as separate tracks
+(common on VK), they're muxed into one file with `ffmpeg -c copy` — no
+re-encoding. If nothing in that chain finds a direct stream, recording
+falls back automatically to screen-capturing a real, visible browser
+window — no separate tab or manual step needed, it just happens at record
+time.
 
 **Загрузки (Downloads)** — a one-shot universal downloader. Paste any link,
 pick a target quality (360p–1080p, when the source actually offers more than
@@ -29,9 +29,9 @@ progress bar, download speed and ETA — reusing the same resolver chain as
 "Мои ссылки".
 
 **Расписание (Schedule)** — schedule recordings by time range and weekdays
-for any of Каналы / Мои ссылки / Браузер, with automatic stop at the
-selected end time and a live panel of active recordings (pause, stop,
-remove, reveal in Finder, grid monitor view).
+for either Каналы or Мои ссылки, with automatic stop at the selected end
+time and a live panel of active recordings (pause, stop, remove, reveal in
+Finder, grid monitor view).
 
 Also: VPN and real internet-connectivity monitoring in the status bar,
 native macOS notifications, and a compact icon-led dark UI.
@@ -67,8 +67,9 @@ python3 main.py
 
 1. Wait for the splash screen to sync the channel list.
 2. **Каналы**: click record next to a channel for a manual recording.
-3. **Мои ссылки** / **Браузер**: add a link, then record it manually or
-   schedule it.
+3. **Мои ссылки**: add a link, then record it manually or schedule it — if
+   no direct stream is found, recording falls back to browser screen-capture
+   automatically.
 4. **Загрузки**: add a link, pick quality and folder, and it downloads in
    the background — no scheduling involved, it's a one-shot job.
 5. **Расписание**: pick a source, a start/end time, and weekdays; it repeats

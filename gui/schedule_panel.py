@@ -64,7 +64,6 @@ class SchedulePanel(ctk.CTkFrame):
         self.on_record_now = on_record_now
         self._channel_names: List[str] = []
         self._link_names: List[str] = []
-        self._browser_names: List[str] = []
         self._duration_detect_generation = 0
         self.run_status: Dict[int, str] = {}
 
@@ -92,7 +91,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.source_type_var = tk.StringVar(value='channel')
         self.source_segmented = ctk.CTkSegmentedButton(
-            source_frame, values=['Канал', 'Ссылка', 'Браузер'],
+            source_frame, values=['Канал', 'Ссылка'],
             command=self._on_source_type_changed,
             fg_color=c['bg_secondary'], selected_color=c['accent'], selected_hover_color=c['accent_hover'],
             unselected_color=c['bg_secondary'], unselected_hover_color=c['bg_hover'],
@@ -225,14 +224,12 @@ class SchedulePanel(ctk.CTkFrame):
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         self.tree.bind('<Button-1>', self._on_tree_click, add='+')
 
-    LABEL_TO_TYPE = {'Канал': 'channel', 'Ссылка': 'link', 'Браузер': 'browser'}
-    TYPE_TO_LABEL = {'channel': 'Канал', 'link': 'Ссылка', 'browser': 'Браузер'}
+    LABEL_TO_TYPE = {'Канал': 'channel', 'Ссылка': 'link'}
+    TYPE_TO_LABEL = {'channel': 'Канал', 'link': 'Ссылка'}
 
     def _names_for(self, source_type: str) -> List[str]:
         if source_type == 'link':
             return self._link_names
-        if source_type == 'browser':
-            return self._browser_names
         return self._channel_names
 
     def _on_source_type_changed(self, label: str):
@@ -253,7 +250,6 @@ class SchedulePanel(ctk.CTkFrame):
         """Обновляет таблицу и списки источников"""
         self._channel_names = [ch['name'] for ch in self.storage.get_channels()]
         self._link_names = [l['name'] for l in self.storage.get_links()]
-        self._browser_names = [l['name'] for l in self.storage.get_browser_links()]
         self._refresh_source_dropdown()
 
         for item in self.tree.get_children():
@@ -608,8 +604,6 @@ class SchedulePanel(ctk.CTkFrame):
 
         if source_type == 'link':
             target = next((l for l in self.storage.get_links() if l.get('name') == name), None)
-        elif source_type == 'browser':
-            target = next((l for l in self.storage.get_browser_links() if l.get('name') == name), None)
         else:
             target = next((ch for ch in self.storage.get_channels() if ch.get('name') == name), None)
 

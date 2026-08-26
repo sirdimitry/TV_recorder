@@ -12,9 +12,23 @@ class M3UParser:
     
     # РУЧНЫЕ ФИКСЫ: Ссылки и логотипы, которые точно работают
     MANUAL_FIXES = {
+        # vgtrkregion-reg.cdnvideo.ru отдаёт TLS-обрыв (Error in the pull
+        # function / End of file) на все каналы ВГТРК независимо от VPN —
+        # CDN мёртв, а не заблокирован локально (проверено curl+ffmpeg
+        # с VPN включённым и выключенным — результат одинаковый). Заменено
+        # на официальный источник ВГТРК stream.smotrim.ru — проверено вживую,
+        # ffmpeg реально получает кадр за ~1с.
+        "Россия 1": {
+            "url": "https://stream.smotrim.ru/hls2/russia_hd/playlist_6.m3u8",
+            "logo": "https://iptvx.one/picons/rossia1.png"
+        },
         "Россия 24": {
-            "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-hd/720p.m3u8",
+            "url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_5.m3u8",
             "logo": "https://iptvx.one/picons/rossia-24.png"
+        },
+        "Россия К": {
+            "url": "https://stream.smotrim.ru/hls2/russia_k/playlist_5.m3u8",
+            "logo": "https://iptvx.one/picons/kultura.png"
         },
         "Известия": {
             "url": "http://hls-igi.cdnvideo.ru/igi/igi_sq/playlist.m3u8",

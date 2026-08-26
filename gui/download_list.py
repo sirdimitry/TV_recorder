@@ -38,6 +38,38 @@ def _format_eta(seconds: Optional[float]) -> str:
     return "осталось ~" + _format_duration(seconds)
 
 
+def _format_size(num_bytes: Optional[int]) -> str:
+    if not num_bytes or num_bytes <= 0:
+        return ''
+    units = ['Б', 'КБ', 'МБ', 'ГБ']
+    value = float(num_bytes)
+    i = 0
+    while value >= 1024 and i < len(units) - 1:
+        value /= 1024
+        i += 1
+    return f"{value:.1f} {units[i]}"
+
+
+def _elide_text(font, text: str, max_width: int) -> str:
+    """Обрезает text с многоточием, чтобы уместиться в max_width пикселей
+    заданного шрифта — в отличие от обрезки по числу символов (было:
+    NAME_MAX), учитывает реальную ширину букв и реальную ширину строки,
+    поэтому остаётся корректным при любом размере окна. Только имя ролика
+    имеет право сокращаться (см. _update_row_widths) — вся индикация
+    статуса/прогресса всегда занимает своё место первой, имени достаётся
+    то, что осталось."""
+    if max_width <= 0 or font.measure(text) <= max_width:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if font.measure(text[:mid] + '…') <= max_width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (text[:lo] + '…') if lo > 0 else '…'
+
+
 class DownloadList(ctk.CTkFrame):
     """Список загрузок ("Загрузки") — присланная ссылка ищется универсально
     (core/link_resolver.py: yt-dlp -> HTML-скрейп -> sniff через встроенный
@@ -46,8 +78,14 @@ class DownloadList(ctk.CTkFrame):
     без перекодирования — тот же принцип, что уже работает в "Мои ссылки"."""
 
     LOGO_SIZE = 44
-    ROW_HEIGHT = 64
-    NAME_MAX = 50
+    # Высота карточки — фиксированная (grid_propagate(False) ниже), поэтому
+    # должна вмещать самое насыщенное состояние с запасом: имя + бейдж/точка
+    # статуса + тонкая полоска прогресса с процентом под ней. 64px (старое
+    # значение) реально хватало только на имя+бейдж — полоска и подпись
+    # прогресса рисовались уже НИЖЕ видимой границы карточки и были
+    # обрезаны grid_propagate начисто (подтверждено замером виджетов:
+    # progress_bar оказывался на y=91 при высоте строки 64).
+    ROW_HEIGHT = 86
 
     def __init__(self, parent, downloader=None, storage=None, on_add: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
@@ -57,6 +95,13 @@ class DownloadList(ctk.CTkFrame):
         self.storage = storage
         self.on_add = on_add
         self.row_widgets: Dict[str, dict] = {}
+        self._empty_label: Optional[ctk.CTkLabel] = None
+        # Общие шрифты для имени и текста ошибки — измеряются тем же
+        # инстансом, которым рисуется текст (см. _elide_text/
+        # _update_row_widths), чтобы обрезка по ширине была
+        # пиксель-в-пиксель точной, а не приблизительной.
+        self._name_font = ctk.CTkFont(size=13, weight='bold')
+        self._error_font = ctk.CTkFont(size=9)
 
         self._setup_ui()
 
@@ -85,6 +130,7 @@ class DownloadList(ctk.CTkFrame):
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
         self.row_widgets.clear()
+        self._empty_label = None
 
         # 'downloading' в данных с диска — это либо реально идущая сейчас
         # задача (тогда в self.downloader есть живая DownloadTask с тем же
@@ -100,36 +146,65 @@ class DownloadList(ctk.CTkFrame):
                 item['error_message'] = item.get('error_message') or 'Прервано закрытием приложения'
 
         if not items:
-            ctk.CTkLabel(self.scroll_frame, text="Пока нет ни одной загрузки",
-                         font=ctk.CTkFont(size=11), text_color=self.colors['text_muted']).pack(pady=18)
+            self._show_empty_placeholder()
             return
 
         for item in items:
             self._add_row(item)
 
+    def _show_empty_placeholder(self):
+        if self._empty_label is not None and self._empty_label.winfo_exists():
+            return
+        self._empty_label = ctk.CTkLabel(self.scroll_frame, text="Пока нет ни одной загрузки",
+                                          font=ctk.CTkFont(size=11), text_color=self.colors['text_muted'])
+        self._empty_label.pack(pady=18)
+
+    def _clear_empty_placeholder(self):
+        # Раньше "Пока нет ни одной загрузки" ставился только в
+        # load_downloads([]) и НИКОГДА не убирался, когда первая же
+        # загрузка добавлялась поверх уже нарисованного списка через
+        # _refresh_from_downloader() -> _add_row() (а не через повторный
+        # load_downloads) — плашка "пусто" так и оставалась висеть над
+        # настоящей строкой загрузки.
+        if self._empty_label is not None:
+            if self._empty_label.winfo_exists():
+                self._empty_label.destroy()
+            self._empty_label = None
+
     def _add_row(self, item: Dict):
         c = self.colors
+        self._clear_empty_placeholder()
         download_id = item.get('id', '')
         name = item.get('name') or item.get('url', 'Unknown')
-        display_name = name if len(name) <= self.NAME_MAX else name[:self.NAME_MAX] + '…'
 
         row = ctk.CTkFrame(self.scroll_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
                            height=self.ROW_HEIGHT)
         row.pack(fill='x', padx=4, pady=3)
         row.grid_propagate(False)
+        row.columnconfigure(1, weight=1)
+        # Строка 0 — основное содержимое (иконка/имя/бейдж/кнопки), тянется;
+        # строка 1 — тонкая полоска прогресса, прижатая к самому НИЗУ карточки
+        # (весь смысл "снизу ссылки" из формулировки задачи) фиксированной
+        # высоты, не зависящей от содержимого строки 0.
+        row.grid_rowconfigure(0, weight=1)
+        row.grid_rowconfigure(1, weight=0)
 
         thumb_label = ctk.CTkLabel(row, text="", width=self.LOGO_SIZE, height=self.LOGO_SIZE,
                                     corner_radius=8, fg_color=c['bg_tertiary'],
                                     image=get_icon('download', c['text_muted'], 22))
-        thumb_label.grid(row=0, column=0, padx=(10, 10), pady=8, sticky='ns')
+        thumb_label.grid(row=0, column=0, padx=(10, 10), pady=(10, 4), sticky='n')
 
         info_frame = ctk.CTkFrame(row, fg_color='transparent')
-        info_frame.grid(row=0, column=1, sticky='nsew', pady=8)
-        row.columnconfigure(1, weight=1)
+        info_frame.grid(row=0, column=1, sticky='nsew', pady=(10, 0))
 
-        label_name = ctk.CTkLabel(info_frame, text=display_name, font=ctk.CTkFont(size=13, weight='bold'),
+        label_name = ctk.CTkLabel(info_frame, text=name, font=self._name_font,
                                    text_color=c['text_primary'], anchor='w')
         label_name.pack(fill='x', anchor='w')
+        # Единственное, что здесь имеет право сокращаться под размер окна —
+        # см. _elide_text/_update_row_widths: бейдж/точка статуса/полоска
+        # прогресса всегда рисуются целиком, а имени достаётся, что
+        # осталось от реальной ширины карточки на момент показа.
+        info_frame.bind('<Configure>', lambda e, d=download_id: self._update_row_widths(d, e.width))
 
         badge_row = ctk.CTkFrame(info_frame, fg_color='transparent')
         badge_row.pack(anchor='w', pady=(3, 0))
@@ -147,23 +222,36 @@ class DownloadList(ctk.CTkFrame):
         status_dot = ctk.CTkLabel(badge_row, text="", image=get_icon('record', c['text_muted'], 10))
         status_dot.pack(side='left', padx=(6, 0))
 
-        progress_bar = ctk.CTkProgressBar(info_frame, height=4, corner_radius=2,
+        # error_label пакуется только когда есть реальный текст ошибки (см.
+        # _apply_status) — раньше была упакована всегда (даже пустая) и
+        # тихо съедала место, которого потом не хватало полоске прогресса.
+        # Без wraplength: сообщения об ошибке часто содержат длинный URL без
+        # пробелов, а Tk перено́сит текст только по пробелам — сплошная
+        # строка без них просто вылезает за пределы карточки вбок, вместо
+        # переноса (это и было на скриншоте с webcaster.pro-ссылкой).
+        # Вместо переноса — обрезаем по реальной ширине, как и имя ролика.
+        error_label = ctk.CTkLabel(info_frame, text="", font=self._error_font, text_color=c['red'], anchor='w')
+
+        # Тонкая полоска прогресса во всю ширину карточки (columnspan=3, а
+        # не только под именем) — заполняется слева направо через
+        # CTkProgressBar.set(). Процент/скорость/ETA — одной строкой
+        # прижаты к правому краю той же полосы ("в углу"), а не отдельной
+        # растущей строкой снизу, которая раньше и вылезала за пределы
+        # фиксированной высоты карточки.
+        progress_strip = ctk.CTkFrame(row, fg_color='transparent')
+        progress_strip.columnconfigure(0, weight=1)
+
+        progress_bar = ctk.CTkProgressBar(progress_strip, height=4, corner_radius=2,
                                            fg_color=c['bg_tertiary'], progress_color=c['accent'])
         progress_bar.set(0)
+        progress_bar.grid(row=0, column=0, sticky='ew')
 
-        # Отдельная строка под полоской — процент/скорость/ETA. Пустой
-        # текст, пока не качается, но всегда упакована вместе с
-        # progress_bar (см. _apply_status) — держим её в том же
-        # прижатом-к-полоске месте, а не после error_label.
-        progress_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9),
-                                       text_color=c['text_muted'], anchor='w')
-
-        error_label = ctk.CTkLabel(info_frame, text="", font=ctk.CTkFont(size=9), text_color=c['red'],
-                                    anchor='w', wraplength=220, justify='left')
-        error_label.pack(fill='x', anchor='w')
+        progress_label = ctk.CTkLabel(progress_strip, text="", font=ctk.CTkFont(size=9),
+                                       text_color=c['text_muted'], anchor='e')
+        progress_label.grid(row=1, column=0, sticky='e', pady=(1, 0))
 
         actions = ctk.CTkFrame(row, fg_color='transparent')
-        actions.grid(row=0, column=2, padx=(4, 8), pady=8)
+        actions.grid(row=0, column=2, padx=(4, 8), pady=(8, 0))
 
         def icon_btn(parent, icon_name, color, command):
             return ctk.CTkButton(parent, text="", image=get_icon(icon_name, color, 18), width=34, height=34,
@@ -187,11 +275,27 @@ class DownloadList(ctk.CTkFrame):
         self.row_widgets[download_id] = {
             'row': row, 'thumb_label': thumb_label, 'label_name': label_name, 'badge': badge,
             'status_dot': status_dot, 'error_label': error_label, 'progress_bar': progress_bar,
-            'progress_label': progress_label,
+            'progress_label': progress_label, 'progress_strip': progress_strip,
             'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'item': item,
-            'thumbnail_loaded': False, 'progress_shown': False,
+            'thumbnail_loaded': False, 'progress_shown': False, 'error_shown': False,
+            'full_name': name, 'full_error': '', 'bar_mode': 'determinate',
         }
         self._apply_status(download_id, item)
+        self._update_row_widths(download_id, info_frame.winfo_width())
+
+    def _update_row_widths(self, download_id: str, available_width: int):
+        """Обрезает имя (всегда) и текст ошибки (когда она показана) под
+        текущую реальную ширину карточки — единственное, что здесь может
+        сокращаться; бейдж/точка статуса/полоска прогресса ширину не
+        уступают (см. _elide_text)."""
+        widgets = self.row_widgets.get(download_id)
+        if not widgets or available_width <= 1:
+            return
+        widgets['label_name'].configure(
+            text=_elide_text(self._name_font, widgets['full_name'], available_width))
+        if widgets['error_shown']:
+            widgets['error_label'].configure(
+                text=_elide_text(self._error_font, widgets['full_error'], available_width))
 
     def _apply_status(self, download_id: str, item: Dict):
         widgets = self.row_widgets.get(download_id)
@@ -201,8 +305,9 @@ class DownloadList(ctk.CTkFrame):
         widgets['item'] = item
 
         name = item.get('name') or item.get('url', 'Unknown')
-        display_name = name if len(name) <= self.NAME_MAX else name[:self.NAME_MAX] + '…'
-        widgets['label_name'].configure(text=display_name)
+        if name != widgets.get('full_name'):
+            widgets['full_name'] = name
+            self._update_row_widths(download_id, widgets['label_name'].master.winfo_width())
 
         duration_label = _format_duration(item.get('duration'))
         widgets['badge'].configure(text="MP4" + (f" · {duration_label}" if duration_label else ""))
@@ -214,8 +319,18 @@ class DownloadList(ctk.CTkFrame):
         }
         dot_color = colors_by_status.get(status, c['text_muted'])
         widgets['status_dot'].configure(image=get_icon('record', dot_color, 10))
+
         error_message = item.get('error_message') if status == 'error' else ''
-        widgets['error_label'].configure(text=error_message or '')
+        if error_message:
+            widgets['full_error'] = error_message
+            info_width = widgets['label_name'].master.winfo_width()
+            widgets['error_label'].configure(text=_elide_text(self._error_font, error_message, info_width))
+            if not widgets['error_shown']:
+                widgets['error_label'].pack(fill='x', anchor='w', pady=(2, 0))
+                widgets['error_shown'] = True
+        elif widgets['error_shown']:
+            widgets['error_label'].pack_forget()
+            widgets['error_shown'] = False
 
         # Полоска прогресса — с самого начала статуса 'downloading', даже
         # пока процент ещё не из чего посчитать (медленный источник вроде
@@ -223,13 +338,37 @@ class DownloadList(ctk.CTkFrame):
         # тянется самый первый сегмент — раньше это выглядело так, будто
         # ничего не происходит вообще; теперь хотя бы "подключение…" сразу
         # показывает, что задача жива, а не зависла).
+        #
+        # Процент считается только когда известна duration ролика (см.
+        # core/downloader.py: _watch_progress) — у части источников (обычный
+        # HTML-скрейп без метаданных, некоторые встроенные плееры) duration
+        # никогда не появляется, хотя байты реально льются (speed_bps есть).
+        # В этом случае процент навсегда останется None — полоска на 0%
+        # выглядела бы намертво зависшей, хотя скачивание идёт. Вместо этого
+        # переключаем полоску в неопределённый (бегущий) режим и показываем
+        # реальный счётчик скачанных байт вместо статичного "подключение…".
         progress = item.get('progress')
         show_progress = status == 'downloading'
         if show_progress:
+            downloaded = item.get('downloaded_bytes')
             if progress is not None:
+                if widgets['bar_mode'] != 'determinate':
+                    widgets['progress_bar'].stop()
+                    widgets['progress_bar'].configure(mode='determinate')
+                    widgets['bar_mode'] = 'determinate'
                 widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
                 parts = [f"{progress:.0f}%"]
+            elif downloaded:
+                if widgets['bar_mode'] != 'indeterminate':
+                    widgets['progress_bar'].configure(mode='indeterminate')
+                    widgets['progress_bar'].start()
+                    widgets['bar_mode'] = 'indeterminate'
+                parts = [_format_size(downloaded)]
             else:
+                if widgets['bar_mode'] != 'determinate':
+                    widgets['progress_bar'].stop()
+                    widgets['progress_bar'].configure(mode='determinate')
+                    widgets['bar_mode'] = 'determinate'
                 widgets['progress_bar'].set(0)
                 parts = ["подключение…"]
             speed_text = _format_speed(item.get('speed_bps'))
@@ -240,12 +379,14 @@ class DownloadList(ctk.CTkFrame):
                 parts.append(eta_text)
             widgets['progress_label'].configure(text=" · ".join(parts))
             if not widgets['progress_shown']:
-                widgets['progress_bar'].pack(fill='x', anchor='w', pady=(4, 0))
-                widgets['progress_label'].pack(fill='x', anchor='w', pady=(1, 0))
+                widgets['progress_strip'].grid(row=1, column=0, columnspan=3, sticky='sew', padx=10, pady=(0, 6))
                 widgets['progress_shown'] = True
         elif widgets['progress_shown']:
-            widgets['progress_bar'].pack_forget()
-            widgets['progress_label'].pack_forget()
+            if widgets['bar_mode'] != 'determinate':
+                widgets['progress_bar'].stop()
+                widgets['progress_bar'].configure(mode='determinate')
+                widgets['bar_mode'] = 'determinate'
+            widgets['progress_strip'].grid_forget()
             widgets['progress_shown'] = False
 
         widgets['btn_folder'].configure(state='normal' if status == 'done' else 'disabled')

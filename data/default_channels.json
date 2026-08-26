@@ -9,7 +9,7 @@
   },
   {
     "name": "Россия 1",
-    "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia1-hd/index.m3u8",
+    "url": "https://stream.smotrim.ru/hls2/russia_hd/playlist_6.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/rossia1.png",
@@ -41,7 +41,7 @@
   },
   {
     "name": "Россия К",
-    "url": "http://vgtrkregion-reg.cdnvideo.ru/vgtrk/4/kultura-hd/index.m3u8",
+    "url": "https://stream.smotrim.ru/hls2/russia_k/playlist_5.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/kultura.png",
@@ -49,7 +49,7 @@
   },
   {
     "name": "Россия 24",
-    "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-hd/720p.m3u8",
+    "url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_5.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/rossia-24.png",

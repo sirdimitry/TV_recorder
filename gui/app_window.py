@@ -9,7 +9,6 @@ from queue import Empty, Queue
 
 import customtkinter as ctk
 
-from gui.browser_link_list import BrowserLinkList
 from gui.channel_list import ChannelList
 from gui.download_dialog import show_add_download_dialog
 from gui.download_list import DownloadList
@@ -313,7 +312,6 @@ class AppWindow:
             tabs=[
                 ('channels', 'Каналы', 'tv'),
                 ('links', 'Мои ссылки', 'link'),
-                ('browser', 'Браузер', 'globe'),
                 ('downloads', 'Загрузки', 'download'),
             ],
             command=self._on_left_tab_changed, colors=c)
@@ -348,17 +346,6 @@ class AppWindow:
         )
         self.link_list.grid(row=0, column=0, sticky='nsew')
 
-        self.browser_link_list = BrowserLinkList(
-            self.tab_pages,
-            recorder=self.recorder,
-            on_select=self._on_channel_select,
-            on_edit=self._edit_browser_link_dialog,
-            on_record=self._record_browser_link_now,
-            on_delete=self._delete_browser_link,
-            on_add=self._add_browser_link_dialog,
-        )
-        self.browser_link_list.grid(row=0, column=0, sticky='nsew')
-
         self.download_list = DownloadList(
             self.tab_pages,
             downloader=self.downloader,
@@ -370,7 +357,6 @@ class AppWindow:
         self._tab_pages = {
             'channels': self.channel_list,
             'links': self.link_list,
-            'browser': self.browser_link_list,
             'downloads': self.download_list,
         }
         self.channel_list.tkraise()
@@ -399,7 +385,6 @@ class AppWindow:
     def _refresh_data(self):
         self.channel_list.load_channels(self.storage.get_channels())
         self.link_list.load_links(self.storage.get_links())
-        self.browser_link_list.load_links(self.storage.get_browser_links())
         self.download_list.load_downloads(self.storage.get_downloads())
         self.schedule_panel.refresh()
 
@@ -414,8 +399,6 @@ class AppWindow:
         key = self.tab_strip.get()
         if key == 'links':
             self.link_list.load_links(self.storage.get_links())
-        elif key == 'browser':
-            self.browser_link_list.load_links(self.storage.get_browser_links())
         else:
             self.channel_list.check_all()
 
@@ -429,9 +412,9 @@ class AppWindow:
         # активными записями (core/downloader.py не пересекается с
         # core/scheduler.py/core/recorder.py) — на этой вкладке правая
         # панель просто отъедала бы ширину у строк загрузок без всякой
-        # пользы. На остальных трёх вкладках (Каналы/Мои ссылки/Браузер)
-        # планировщик реально работает — они равноправные source_type
-        # в core/scheduler.py, панель там уместна и остаётся.
+        # пользы. На Каналах и Ссылках планировщик реально работает — оба
+        # равноправные source_type в core/scheduler.py, панель там уместна
+        # и остаётся.
         right_visible = str(self.right_paned) in self.paned.panes()
         if key == 'downloads' and right_visible:
             self.paned.forget(self.right_paned)
@@ -467,7 +450,13 @@ class AppWindow:
 
     def _record_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None):
         """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
-        через yt-dlp (страница -> прямой поток), потом как обычно.
+        через yt-dlp/HTML-скрейп/скрытый браузер-снифф (core/link_resolver.py)
+        в поисках прямого потока — если находится, копируем его как обычно.
+        Если нет (link_resolver уже перепробовал всё автоматическое) —
+        последний рубеж: настоящее видимое окно браузера и запись самого
+        экрана под ним (core/screen_capture.py), тем же способом, что раньше
+        требовал отдельно добавлять ссылку во вкладку "Браузер" — теперь это
+        происходит само, без второй ручной попытки.
         stop_after — секунды, через сколько остановить запись самим (длина
         ролика из диалога добавления, а не время по часам); None — не
         останавливать, ждать ручной остановки."""
@@ -475,48 +464,31 @@ class AppWindow:
 
         def start():
             info = resolve_link(link.get('url', ''))
-            if not info.ok:
-                logger.error(f"Не удалось разобрать ссылку '{name}': {info.error}")
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Ошибка", f"Не удалось получить поток «{name}»:\n{info.error}"))
-                return
-            task_id = self.recorder.start_recording(
-                name, info.video_url, output, source="manual",
-                on_complete=self._on_record_complete, audio_url=info.audio_url,
-                extra_headers=info.headers,
-            )
-            if task_id:
-                logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
-                if stop_after:
-                    timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
-                    timer.daemon = True
-                    timer.start()
-
-        threading.Thread(target=start, daemon=True).start()
-
-    def _record_browser_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None):
-        """Мгновенная запись ссылки из вкладки "Браузер": открывает окно-браузер
-        и параллельно пишет экран (core/screen_capture.py) — для сайтов, чью
-        прямую ссылку на поток получить не удалось.
-        stop_after — необязательное ограничение длительности в секундах
-        (из диалога добавления); None — писать до ручной остановки."""
-        output = str(self.recorder.build_output_path(name))
-        open_url = link.get('player_url') or link.get('url', '')
-
-        def start():
-            task_id = self.recorder.start_browser_recording(
-                name, open_url, output, source="manual",
-                on_complete=self._on_record_complete,
-            )
-            if task_id:
-                logger.info(f"Начата запись экрана (браузер): {name} (task: {task_id})")
-                if stop_after:
-                    timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
-                    timer.daemon = True
-                    timer.start()
+            if info.ok:
+                task_id = self.recorder.start_recording(
+                    name, info.video_url, output, source="manual",
+                    on_complete=self._on_record_complete, audio_url=info.audio_url,
+                    extra_headers=info.headers,
+                )
+                if task_id:
+                    logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
             else:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Ошибка", f"Не удалось начать запись экрана «{name}».\nПроверьте лог."))
+                logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
+                open_url = info.player_url or link.get('player_url') or link.get('url', '')
+                task_id = self.recorder.start_browser_recording(
+                    name, open_url, output, source="manual",
+                    on_complete=self._on_record_complete,
+                )
+                if task_id:
+                    logger.info(f"Начата запись экрана (браузер) для ссылки: {name} (task: {task_id})")
+                else:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Ошибка", f"Не удалось начать запись «{name}» ни напрямую, ни через браузер.\nПроверьте лог."))
+                    return
+            if task_id and stop_after:
+                timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
+                timer.daemon = True
+                timer.start()
 
         threading.Thread(target=start, daemon=True).start()
 
@@ -525,8 +497,6 @@ class AppWindow:
         времени, а сразу, вручную."""
         if source_type == 'link':
             self._record_link_now(name, target)
-        elif source_type == 'browser':
-            self._record_browser_link_now(name, target)
         else:
             self._record_channel_now(name, target)
 
@@ -548,12 +518,6 @@ class AppWindow:
         if messagebox.askyesno("Удалить ссылку", f"Удалить «{name}» из списка?\nЭто не затронет уже сделанные записи.",
                                 parent=self.root):
             self.storage.delete_link(name)
-            self._refresh_data()
-
-    def _delete_browser_link(self, name: str):
-        if messagebox.askyesno("Удалить ссылку", f"Удалить «{name}» из списка?\nЭто не затронет уже сделанные записи.",
-                                parent=self.root):
-            self.storage.delete_browser_link(name)
             self._refresh_data()
 
     def _create_dialog(self, title: str, geo: str) -> ctk.CTkToplevel:
@@ -722,12 +686,6 @@ class AppWindow:
         # сайтов — режим "Браузер" (открывается настоящий движок и
         # пишется экран), поэтому вместо тихого "недоступно" сразу
         # предлагаем переключиться, не заставляя вбивать ссылку заново.
-        switch_btn = ctk.CTkButton(
-            hint_frame, text="Открыть эту ссылку в режиме браузера", height=26,
-            corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
-            text_color=c['text_primary'], font=ctk.CTkFont(size=11),
-            command=lambda: switch_to_browser())
-
         # --- Запись сразу по хронометражу ролика: это не расписание по
         # часам (ссылка не привязана к календарной дате/времени эфира) —
         # "С:"/"До:" здесь означают положение в САМОМ ролике (00:00 — его
@@ -776,12 +734,6 @@ class AppWindow:
         end_entry.bind('<Key>', lambda e: end_touched.__setitem__('value', True))
         resolved_duration = {'value': None}
 
-        def switch_to_browser():
-            prefill_url = url_var.get().strip()
-            prefill_name = name_var.get().strip()
-            dialog.destroy()
-            self._add_browser_link_dialog(prefill_url=prefill_url, prefill_name=prefill_name)
-
         detect_generation = {'id': 0}
         debounce = {'after_id': None}
 
@@ -794,7 +746,6 @@ class AppWindow:
 
         def start_detection():
             url = url_var.get().strip()
-            switch_btn.pack_forget()
             if not url:
                 hint.configure(text="")
                 return
@@ -818,18 +769,17 @@ class AppWindow:
                         # Прямую ссылку получить не удалось — обычно потому,
                         # что видео рисуется JS-ом или сайт отдаёт анти-бот
                         # заглушку, а это HTTP-запросом принципиально не
-                        # обойти. Ссылка всё равно сохранится в "Мои ссылки"
-                        # (просто пометится недоступной), но предлагаем
-                        # сразу переключиться на режим "Браузер" — там
-                        # реальный движок, который такое проходит.
+                        # обойти. Ссылка всё равно сохранится и запись всё
+                        # равно сработает — просто вместо копирования потока
+                        # автоматически откроется настоящее окно браузера и
+                        # запишется сам экран под ним (см. _record_link_now).
                         if not name_touched['value'] and info.title:
                             name_var.set(info.title)
                         resolved_duration['value'] = None
                         if not end_touched['value']:
                             end_entry.set_time('')
                         hint.configure(text=f"Не удалось получить прямую ссылку: {info.error}\n"
-                                             f"Ссылка всё равно сохранится, но помечена как недоступная.")
-                        switch_btn.pack(anchor='w', pady=(4, 0))
+                                             f"Запись всё равно сработает — автоматически через окно браузера.")
                         return
                     if not name_touched['value'] and info.title:
                         name_var.set(info.title)
@@ -889,10 +839,9 @@ class AppWindow:
 
             def finish(display_name: str):
                 # Сохраняем в "Мои ссылки" независимо от того, удалось ли
-                # получить прямой поток — неудачные просто помечаются
-                # недоступными в списке (см. LinkList._resolve_row). Если
-                # нужен режим браузера — та же ссылка добавляется отдельно
-                # через вкладку "Браузер".
+                # получить прямой поток — неудачные просто помечаются как
+                # идущие через браузер в списке (см. LinkList._resolve_row);
+                # запись сама разберётся с этим при старте (см. _record_link_now).
                 link = {'name': display_name, 'url': url, 'type': link_type}
                 self.storage.save_link(link)
                 self.root.after(0, self._refresh_data)
@@ -902,19 +851,30 @@ class AppWindow:
                     # длительность.
                     self.root.after(0, lambda: self._record_link_now(display_name, link, stop_after=duration_seconds))
 
-            if name:
-                finish(name)
-                dialog.destroy()
-            else:
-                # Название не задано и автоопределение ещё не подоспело —
-                # пробуем сами, не блокируя интерфейс диалогом ожидания.
-                dialog.destroy()
+            # Сохраняем СРАЗУ, даже если название ещё не определилось (тогда
+            # временно используем саму ссылку как имя) — раньше при пустом
+            # названии диалог закрывался мгновенно, а сама запись в "Мои
+            # ссылки" появлялась только после ОТДЕЛЬНОГО повторного
+            # resolve_link в фоне, который для некоторых сайтов (например
+            # otr-online.ru) может идти почти минуту — с точки зрения
+            # пользователя ссылка будто "пропадала в никуда" без всякой
+            # обратной связи. Теперь строка появляется в списке мгновенно,
+            # а название уточняется на месте (переименованием), когда
+            # (и если) домоется настоящее — так же, как уже устроено в
+            # "Загрузки" (строка сразу же в статусе "resolving").
+            initial_name = name or url
+            finish(initial_name)
+            dialog.destroy()
 
-                def resolve_name():
+            if not name:
+                def resolve_and_rename():
                     info = resolve_link(url)
-                    finish(info.title if info.ok and info.title else url)
+                    if info.ok and info.title and info.title != initial_name:
+                        self.storage.delete_link(initial_name)
+                        self.storage.save_link({'name': info.title, 'url': url, 'type': link_type})
+                        self.root.after(0, self._refresh_data)
 
-                threading.Thread(target=resolve_name, daemon=True).start()
+                threading.Thread(target=resolve_and_rename, daemon=True).start()
 
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
@@ -973,164 +933,6 @@ class AppWindow:
         ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
                       fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
                       ).grid(row=3, column=0, columnspan=2, pady=(16, 0), sticky='ew')
-
-    def _add_browser_link_dialog(self, prefill_url: str = '', prefill_name: str = ''):
-        """Ссылка для вкладки "Браузер": сайт, чью прямую ссылку на поток
-        получить не удалось — при записи откроется окно-браузер, fullscreen
-        в плеере включает сам пользователь, пишется экран."""
-        c = self.colors
-        dialog = self._create_dialog("Добавить (браузер)", "480x330")
-
-        body = ctk.CTkFrame(dialog, fg_color='transparent')
-        body.pack(fill='both', expand=True, padx=20, pady=20)
-        body.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
-            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
-        url_var = tk.StringVar(value=prefill_url)
-        url_entry = ctk.CTkEntry(body, textvariable=url_var, height=32, corner_radius=Config.RADIUS_SM,
-                                  placeholder_text="https://…", fg_color=c['bg_primary'],
-                                  border_color=c['border'], text_color=c['text_primary'])
-        url_entry.grid(row=0, column=1, pady=8, sticky='ew')
-        bind_cyrillic_layout_shortcuts(url_entry)
-
-        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
-            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
-        name_var = tk.StringVar(value=prefill_name)
-        name_entry = ctk.CTkEntry(body, textvariable=name_var, height=32, corner_radius=Config.RADIUS_SM,
-                                   placeholder_text="Например: ОТР — прямой эфир", fg_color=c['bg_primary'],
-                                   border_color=c['border'], text_color=c['text_primary'])
-        name_entry.grid(row=1, column=1, pady=8, sticky='ew')
-        bind_cyrillic_layout_shortcuts(name_entry)
-
-        ctk.CTkLabel(body, text="При записи откроется окно-браузер с этой страницей — fullscreen в плеере "
-                                 "включаете сами, экран запишется автоматически.",
-                     font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=430, justify='left'
-                     ).grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 8))
-
-        # Экран-запись, а не расписание по часам: у неё нет "хронометража
-        # ролика" (это живой захват экрана), поэтому вместо "С:"/"До:" —
-        # необязательное ограничение длительности. Пусто = писать, пока не
-        # остановят вручную.
-        schedule_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(body, text="Начать запись сразу же", variable=schedule_var,
-                         fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['text_primary'],
-                         border_color=c['border'], command=lambda: toggle_schedule_fields()
-                         ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(6, 4))
-
-        duration_frame = ctk.CTkFrame(body, fg_color='transparent')
-        duration_frame.grid(row=4, column=0, columnspan=2, sticky='w', pady=4)
-        ctk.CTkLabel(duration_frame, text="Длительность:", text_color=c['text_secondary']).pack(side='left')
-        duration_entry = TimeEntry(duration_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
-                                    fg_color=c['bg_primary'], border_color=c['border'],
-                                    text_color=c['text_primary'])
-        duration_entry.pack(side='left', padx=6)
-        ctk.CTkLabel(duration_frame, text="ЧЧ:ММ, необязательно — иначе до ручной остановки",
-                     font=ctk.CTkFont(size=10), text_color=c['text_muted']).pack(side='left', padx=(4, 0))
-        duration_entry.set_time('')
-
-        def toggle_schedule_fields():
-            duration_entry.configure(state='normal' if schedule_var.get() else 'disabled')
-
-        def save():
-            url = url_var.get().strip()
-            name = name_var.get().strip() or url
-            if not url:
-                messagebox.showwarning("Внимание", "Вставьте ссылку", parent=dialog)
-                return
-
-            do_schedule = schedule_var.get()
-            duration_seconds = None
-            if do_schedule:
-                duration_text = duration_entry.get().strip()
-                if duration_text:
-                    duration_seconds = _parse_duration_seconds('00:00', duration_text)
-                    if duration_seconds is None:
-                        messagebox.showwarning("Внимание", "Длительность — в формате ЧЧ:ММ, либо оставьте "
-                                                            "поле пустым", parent=dialog)
-                        return
-
-            link = {'name': name, 'url': url}
-            self.storage.save_browser_link(link)
-            self._refresh_data()
-            dialog.destroy()
-
-            if do_schedule:
-                self._record_browser_link_now(name, link, stop_after=duration_seconds)
-
-            # Некоторые страницы не рисуют видео в нашем встроенном браузере
-            # (WKWebView), но публикуют og:video — прямую ссылку на сам
-            # плеер, которая обычно открывается нормально. Ищем её в фоне
-            # и, если найдётся, дописываем в уже сохранённую ссылку.
-            def enrich_player_url():
-                info = resolve_link(url)
-                if info.player_url:
-                    self.storage.save_browser_link({'name': name, 'url': url, 'player_url': info.player_url})
-                    self.root.after(0, self._refresh_data)
-
-            threading.Thread(target=enrich_player_url, daemon=True).start()
-
-        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
-                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=5, column=0, columnspan=2, pady=(16, 0), sticky='ew')
-
-    def _edit_browser_link_dialog(self, name: str, link: Dict):
-        c = self.colors
-        dialog = self._create_dialog(f"Редактировать: {name}", "480x220")
-
-        body = ctk.CTkFrame(dialog, fg_color='transparent')
-        body.pack(fill='both', expand=True, padx=20, pady=20)
-        body.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(body, text="Название:", text_color=c['text_secondary']).grid(
-            row=0, column=0, padx=(0, 12), pady=8, sticky='w')
-        name_entry = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
-                                   fg_color=c['bg_primary'], border_color=c['border'],
-                                   text_color=c['text_primary'])
-        name_entry.insert(0, link.get('name', ''))
-        name_entry.grid(row=0, column=1, pady=8, sticky='ew')
-        bind_cyrillic_layout_shortcuts(name_entry)
-
-        ctk.CTkLabel(body, text="Ссылка:", text_color=c['text_secondary']).grid(
-            row=1, column=0, padx=(0, 12), pady=8, sticky='w')
-        url_entry = ctk.CTkEntry(body, height=32, corner_radius=Config.RADIUS_SM,
-                                  fg_color=c['bg_primary'], border_color=c['border'],
-                                  text_color=c['text_primary'])
-        url_entry.insert(0, link.get('url', ''))
-        url_entry.grid(row=1, column=1, pady=8, sticky='ew')
-        bind_cyrillic_layout_shortcuts(url_entry)
-
-        def save():
-            new_name = name_entry.get().strip()
-            new_url = url_entry.get().strip()
-            if not (new_name and new_url):
-                messagebox.showwarning("Внимание", "Заполните название и ссылку", parent=dialog)
-                return
-
-            url_changed = new_url != link.get('url', '')
-            updated = {'name': new_name, 'url': new_url}
-            if not url_changed and link.get('player_url'):
-                updated['player_url'] = link['player_url']
-            if new_name != name:
-                self.storage.delete_browser_link(name)
-            self.storage.save_browser_link(updated)
-            self._refresh_data()
-            dialog.destroy()
-
-            if url_changed:
-                # Ссылка сменилась — старый player_url (если был) больше не
-                # актуален, ищем заново в фоне, как и при добавлении.
-                def enrich_player_url():
-                    info = resolve_link(new_url)
-                    if info.player_url:
-                        self.storage.save_browser_link({'name': new_name, 'url': new_url, 'player_url': info.player_url})
-                        self.root.after(0, self._refresh_data)
-
-                threading.Thread(target=enrich_player_url, daemon=True).start()
-
-        ctk.CTkButton(body, text="Сохранить", command=save, height=36, corner_radius=Config.RADIUS_SM,
-                      fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                      ).grid(row=2, column=0, columnspan=2, pady=(16, 0), sticky='ew')
 
     def _show_settings(self):
         c = self.colors

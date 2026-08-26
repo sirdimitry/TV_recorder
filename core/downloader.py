@@ -40,6 +40,7 @@ class DownloadTask:
         self.progress: Optional[float] = None  # 0-100, None пока неизвестно (не тот же duration или ещё не начали)
         self.elapsed_seconds: float = 0.0
         self.speed_bps: Optional[float] = None  # байт/сек, сглаженная скорость записи файла
+        self.downloaded_bytes: Optional[int] = None  # сколько уже записано — единственный индикатор, когда duration неизвестен
         self.eta_seconds: Optional[float] = None  # оценка по реальному времени, None пока не из чего считать
         self.created_at = datetime.now()
         self.finished_at: Optional[datetime] = None
@@ -66,6 +67,7 @@ class DownloadTask:
             'error_message': self.error_message,
             'progress': self.progress,
             'speed_bps': self.speed_bps,
+            'downloaded_bytes': self.downloaded_bytes,
             'eta_seconds': self.eta_seconds,
         }
 
@@ -310,6 +312,7 @@ class Downloader:
                                            else 0.6 * task.speed_bps + 0.4 * instant_speed)
                     last_size = total_size
                     last_size_time = now
+                    task.downloaded_bytes = total_size
                 elif line.startswith('progress='):
                     now = time.time()
                     if now - last_notify >= 0.5 or line.endswith('end'):

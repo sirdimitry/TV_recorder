@@ -24,12 +24,21 @@ class TabStrip(ctk.CTkFrame):
         self._buttons = {}
         self._active = tabs[0][0] if tabs else None
 
-        for key, label, icon in tabs:
+        # Один ряд на 4 иконки+подписи не помещается в левую панель при
+        # дефолтном (и тем более при минимальном) размере окна — 4-я
+        # вкладка визуально обрезалась паном и была недостижима (проверено
+        # скриншотом собранного .app). 2x2-сетка с растягивающимися по
+        # ширине колонками гарантированно влезает в любую разумную ширину
+        # панели, а не только в ту, что была под рукой при разработке.
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+
+        for i, (key, label, icon) in enumerate(tabs):
             btn = ctk.CTkButton(
                 self, text=label, image=get_icon(icon, c['text_secondary'], 15), compound='left',
                 height=32, corner_radius=16, font=ctk.CTkFont(size=12),
                 command=lambda k=key: self.set(k))
-            btn.pack(side='left', padx=3, pady=3)
+            btn.grid(row=i // 2, column=i % 2, padx=3, pady=3, sticky='ew')
             self._buttons[key] = (btn, icon)
 
         self._refresh()

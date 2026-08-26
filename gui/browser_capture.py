@@ -23,8 +23,9 @@ macOS-fullscreen (Cmd+Ctrl+F/toggle_fullscreen) — тогда окно займ
 
 Второй режим — не для просмотра/записи, а для core/link_resolver.py:
 когда сайт рисует плеер через JS и обычный HTTP-скрейп HTML ничего не
-находит, открываем страницу здесь (окно скрыто, hidden=True) и слушаем
-её же собственные сетевые запросы — почти любой JS-плеер (hls.js и т.п.)
+находит, открываем страницу здесь (окно рендерится по-настоящему, но за
+пределами экрана — см. _run_sniff) и слушаем её же собственные сетевые
+запросы — почти любой JS-плеер (hls.js и т.п.)
 всё равно тянет .m3u8/.mpd/.mp4 через fetch/XHR или обычный <video src>,
 просто это не видно в исходном HTML. Первая подходящая ссылка печатается
 в stdout как "STREAM:<url>" (та же stdout-IPC схема, что и GEOMETRY:
@@ -61,6 +62,7 @@ _nudge_relayout.
 переключаемся на настоящий адрес отдельным шагом, а не грузим его сразу."""
 import sys
 import threading
+import time
 
 # Побольше дефолтного 1280x800 — окно всё равно не идёт в fullscreen,
 # а от размера окна напрямую зависит резкость исходного кадра для записи
@@ -320,18 +322,69 @@ def _hide_from_dock():
         print(f"Не удалось скрыть окно поиска потока из Dock: {e}", file=sys.stderr)
 
 
+def _make_invisible(window):
+    """Настоящее (не hidden/minimized) окно нужно ради корректного viewport
+    для сайтов с ленивой подгрузкой по видимости (IntersectionObserver —
+    см. историю ниже), но пользователь не должен иметь физической
+    возможности его увидеть или кликнуть по нему.
+
+    Сначала пробовали просто отодвинуть окно координатами далеко за
+    пределы экрана — оказалось, что Cocoa-бэкенд pywebview там падает:
+    NSWindow.screen() возвращает nil, если точка не принадлежит ни одному
+    реальному дисплею, а внутренний обработчик перемещения окна этого не
+    ожидает (AttributeError на screen().frame()). Поэтому вместо геометрии
+    прячем через сам Cocoa API, уже открытый в этом файле для
+    fullScreenEnabled (см. main(): BrowserView.instances.get(window.uid)):
+    нулевая прозрачность делает окно невидимым, а ignoresMouseEvents —
+    некликабельным, оставляя саму отрисовку страницы (и её реальный
+    размер) нетронутыми.
+
+    Вызывается из func= у webview.start() — тот запускает эту функцию в
+    отдельном потоке ПАРАЛЛЕЛЬНО с самим созданием окна (см. webview/
+    __init__.py: сначала стартует поток с func, потом уже
+    guilib.create_window(...)), а не после него — поэтому в момент вызова
+    self.window нативного BrowserView может ещё не быть выставлен.
+    Короткий retry-цикл вместо однократной попытки."""
+    if sys.platform != 'darwin':
+        return
+    try:
+        from webview.platforms.cocoa import BrowserView
+        deadline = time.time() + 3.0
+        instance = None
+        while time.time() < deadline:
+            instance = BrowserView.instances.get(window.uid)
+            if instance is not None and getattr(instance, 'window', None) is not None:
+                break
+            instance = None
+            time.sleep(0.02)
+        if instance is not None:
+            instance.window.setAlphaValue_(0.0)
+            instance.window.setIgnoresMouseEvents_(True)
+    except Exception as e:
+        print(f"Не удалось спрятать sniff-окно: {e}", file=sys.stderr)
+
+
 def _run_sniff(url: str, timeout: float = 40.0):
     import webview
     api = _SnifferApi()
-    # hidden=True, а не minimized — казалось безопаснее (никогда не мелькнёт
-    # на экране), но оказалось, что по-настоящему скрытое окно на macOS не
-    # получает нормальный viewport: у сайтов, которые подгружают плеер лениво
-    # по видимости (IntersectionObserver — частый паттерн, замечено на
-    # otr-online.ru: страница рендерится, а iframe с плеером — не вставляется
-    # вовсе), sniff молчал все 18с впустую. minimized=True рендерит страницу
-    # по-настоящему (просто окно тут же уходит в Dock, не мелькая на экране)
-    # — и та же страница находится сразу.
-    window = webview.create_window("TV Recorder — sniff", url=url, minimized=True,
+    # hidden=True казалось безопаснее (никогда не мелькнёт на экране), но
+    # по-настоящему скрытое окно на macOS не получает нормальный viewport: у
+    # сайтов, которые подгружают плеер лениво по видимости
+    # (IntersectionObserver — частый паттерн, замечено на otr-online.ru:
+    # страница рендерится, а iframe с плеером — не вставляется вовсе), sniff
+    # молчал все 18с впустую. minimized=True вместо этого какое-то время
+    # использовался как компромисс (страница рендерится по-настоящему,
+    # окно должно уходить сразу в Dock) — но на практике минимизированное
+    # окно иногда всё же оказывалось видимым на экране, а его системная
+    # кнопка закрытия в таком состоянии не реагирует на клик (известная
+    # особенность macOS-бэкенда pywebview для окон, созданных сразу
+    # свёрнутыми — у них не до конца настраивается обработчик закрытия),
+    # так что пользователь видел зависшее окно, которое не закрывалось
+    # руками и пропадало только по сторожевому таймеру ниже. Теперь окно
+    # рендерится как обычное (полноценный viewport), а прячем его уже
+    # после появления через _make_invisible — см. её docstring, почему не
+    # просто офсетом координат.
+    window = webview.create_window("TV Recorder — sniff", url=url,
                                     width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, js_api=api)
     api.window = window
 
@@ -353,7 +406,12 @@ def _run_sniff(url: str, timeout: float = 40.0):
                 pass
 
     threading.Thread(target=watchdog, daemon=True).start()
-    webview.start(func=_hide_from_dock, user_agent=_USER_AGENT)
+
+    def on_started():
+        _hide_from_dock()
+        _make_invisible(window)
+
+    webview.start(func=on_started, user_agent=_USER_AGENT)
 
 
 def main():

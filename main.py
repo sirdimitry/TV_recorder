@@ -28,9 +28,9 @@ if __name__ == '__main__':
     multiprocessing.freeze_support()
 
     # Встроенный браузер (pywebview) не может делить run loop с остальным
-    # приложением — core/link_resolver.py, core/recorder.py и
-    # gui/browser_link_list.py перезапускают текущий процесс отдельным
-    # воркером для sniff/screen-capture/preview. В dev-режиме это
+    # приложением — core/link_resolver.py и core/recorder.py перезапускают
+    # текущий процесс отдельным воркером для sniff/screen-capture/preview.
+    # В dev-режиме это
     # `python3 gui/browser_capture.py <args>`; в собранном .app
     # sys.executable — сам этот бинарник (не интерпретатор python, и файла
     # gui/browser_capture.py на диске у пользователя нет), поэтому там

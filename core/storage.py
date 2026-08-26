@@ -33,6 +33,51 @@ class Storage:
             
         # Автозагрузка дефолтных каналов, если список пуст
         self._load_default_channels_if_empty()
+        # "Мои ссылки" и "Браузер" были объединены в одну вкладку — старые
+        # ссылки режима браузера переносим в общий список один раз при
+        # первом запуске после обновления (см. _migrate_browser_links).
+        self._migrate_browser_links()
+
+    def _migrate_browser_links(self):
+        """Раньше это были две вкладки с двумя разными хранилищами —
+        "Мои ссылки" (прямой поток) и "Браузер" (захват экрана для сайтов,
+        чью прямую ссылку получить не удалось). Теперь это одна вкладка:
+        запись сама пробует прямой поток и, если не вышло, автоматически
+        переключается на захват экрана (см. AppWindow._record_link_now) —
+        отдельное хранилище для этого больше не нужно. Переносим то, что
+        накопилось в старом browser_links.json, в links.json под тем же
+        именем (если такого имени там ещё нет — иначе ссылка уже была
+        добавлена вручную и трогать её не нужно), и заодно обновляем
+        source_type в уже сохранённом расписании: 'browser' -> 'link', это
+        то же самое хранилище. Идемпотентно — второй и последующие запуски
+        просто не находят новых имён для переноса."""
+        browser_links = self._load_json(self.browser_links_file)
+        if browser_links:
+            links = self.get_links()
+            existing_names = {l.get('name') for l in links}
+            changed = False
+            for bl in browser_links:
+                name = bl.get('name')
+                if name and name not in existing_names:
+                    links.append({
+                        'name': name, 'url': bl.get('url', ''), 'type': 'other',
+                        'player_url': bl.get('player_url', ''),
+                    })
+                    existing_names.add(name)
+                    changed = True
+            if changed:
+                self._save_json(self.links_file, links)
+                logger.info(f"Перенесено {sum(1 for bl in browser_links if bl.get('name') in existing_names)} "
+                            f"ссылок режима «Браузер» в общий список")
+
+        schedule = self.get_schedule()
+        schedule_changed = False
+        for item in schedule:
+            if item.get('source_type') == 'browser':
+                item['source_type'] = 'link'
+                schedule_changed = True
+        if schedule_changed:
+            self._save_json(self.schedule_file, schedule)
     
     def _load_json(self, filepath: Path) -> list:
         try:
@@ -104,30 +149,6 @@ class Storage:
         links = [l for l in links if l.get('name') != name]
         self._save_json(self.links_file, links)
         logger.info(f"Ссылка удалена: {name}")
-
-    # === Ссылки в режиме браузера (захват экрана — для сайтов, чью прямую
-    # ссылку на поток получить не удалось, см. core/link_resolver.py) ===
-    def get_browser_links(self) -> List[Dict]:
-        return self._load_json(self.browser_links_file)
-
-    def save_browser_link(self, link: Dict):
-        links = self.get_browser_links()
-        found = False
-        for i, l in enumerate(links):
-            if l.get('name') == link.get('name'):
-                links[i] = link
-                found = True
-                break
-        if not found:
-            links.append(link)
-        self._save_json(self.browser_links_file, links)
-        logger.info(f"Ссылка (браузер) сохранена: {link.get('name')}")
-
-    def delete_browser_link(self, name: str):
-        links = self.get_browser_links()
-        links = [l for l in links if l.get('name') != name]
-        self._save_json(self.browser_links_file, links)
-        logger.info(f"Ссылка (браузер) удалена: {name}")
 
     # === Расписание ===
     def get_schedule(self) -> List[Dict]:

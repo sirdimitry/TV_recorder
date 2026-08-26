@@ -71,7 +71,6 @@ class RecordingScheduler:
         schedule_items = self.storage.get_schedule()
         channels = {channel['name']: channel for channel in self.storage.get_channels()}
         links = {link['name']: link for link in self.storage.get_links()}
-        browser_links = {link['name']: link for link in self.storage.get_browser_links()}
 
         for index, item in enumerate(schedule_items):
             if not item.get('enabled', True):
@@ -79,15 +78,10 @@ class RecordingScheduler:
 
             name = item.get('channel_name')
             source_type = item.get('source_type', 'channel')
-            if source_type == 'browser':
-                source_map = browser_links
-            elif source_type == 'link':
-                source_map = links
-            else:
-                source_map = channels
+            source_map = links if source_type == 'link' else channels
             target = source_map.get(name)
             if not target:
-                kind = {'link': 'Ссылка', 'browser': 'Ссылка (браузер)'}.get(source_type, 'Канал')
+                kind = 'Ссылка' if source_type == 'link' else 'Канал'
                 logger.warning(f"{kind} '{name}' не найден(а) для расписания #{index}")
                 continue
 
@@ -126,34 +120,34 @@ class RecordingScheduler:
         self._notify_status(index, 'checking')
 
         extra_headers = None
-        if source_type == 'browser':
-            # Ссылка из вкладки "Браузер" (link_resolver не смог получить
-            # прямую ссылку на поток при добавлении) — вместо обычной
-            # pre-record проверки сразу запускаем захват экрана.
-            output_path = self.recorder.build_output_path(name)
-            self._notify_status(index, 'recording')
-            task_id = self.recorder.start_browser_recording(
-                channel_name=name,
-                url=target.get('player_url') or target.get('url', ''),
-                output_path=str(output_path),
-                source='schedule',
-                on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
-            )
-            if not task_id:
-                self._on_recording_error(name, 'Не удалось начать запись экрана')
-                self._notify_status(index, 'failed')
-                return
-            timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
-            timer.daemon = True
-            timer.start()
-            return
-
         if source_type == 'link':
             info = resolve_link(target.get('url', ''))
             if not info.ok:
-                logger.error(f"Запись отменена: {name} — {info.error}")
-                self.notifier.send("❌ Запись отменена", f"{name}\n{info.error}")
-                self._notify_status(index, 'failed')
+                # Прямую ссылку получить не удалось никаким автоматическим
+                # способом (link_resolver уже перепробовал yt-dlp/HTML-скрейп/
+                # скрытый браузер-снифф) — последний рубеж: настоящее видимое
+                # окно браузера и запись самого экрана под ним, тот же
+                # переход, что и при ручной записи из "Мои ссылки"
+                # (см. AppWindow._record_link_now). Раньше это была отдельная
+                # вкладка "Браузер" с отдельным source_type — теперь один и
+                # тот же пункт расписания сам решает по факту резолва.
+                logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
+                output_path = self.recorder.build_output_path(name)
+                self._notify_status(index, 'recording')
+                task_id = self.recorder.start_browser_recording(
+                    channel_name=name,
+                    url=info.player_url or target.get('player_url') or target.get('url', ''),
+                    output_path=str(output_path),
+                    source='schedule',
+                    on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
+                )
+                if not task_id:
+                    self._on_recording_error(name, 'Не удалось начать запись экрана')
+                    self._notify_status(index, 'failed')
+                    return
+                timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
+                timer.daemon = True
+                timer.start()
                 return
             video_url, audio_url, extra_headers = info.video_url, info.audio_url, info.headers
         else:
