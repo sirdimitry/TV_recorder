@@ -1,6 +1,5 @@
 # core/recorder.py
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
@@ -239,10 +238,9 @@ class Recorder:
 
         task_id = f"{channel_name}_{int(time.time())}"
 
-        browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
         try:
             browser_proc = subprocess.Popen(
-                [sys.executable, str(browser_script), url, channel_name],
+                Config.browser_capture_command(url, channel_name),
                 stdout=subprocess.PIPE, text=True, bufsize=1)
         except Exception as e:
             logger.error(f"Recorder: не удалось открыть окно-браузер: {e}")

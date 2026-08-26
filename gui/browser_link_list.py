@@ -1,7 +1,5 @@
 # gui/browser_link_list.py
 import subprocess
-import sys
-from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
@@ -182,6 +180,5 @@ class BrowserLinkList(ctk.CTkFrame):
         url = link.get('player_url') or link.get('url', '')
         if not url:
             return
-        browser_script = Path(__file__).resolve().parent / 'browser_capture.py'
-        subprocess.Popen([sys.executable, str(browser_script), url, name])
+        subprocess.Popen(Config.browser_capture_command(url, name))
         logger.info(f"Открыто окно-браузер (просмотр без записи): {name}")

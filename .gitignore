@@ -73,3 +73,9 @@ data/logos/
 .vscode/
 .idea/
 *.sw
+
+# Сборка .app/.dmg (packaging/build.sh, packaging/make_dmg.sh) — build/ и
+# dist/ уже покрыты общим правилом Python выше (ловит packaging/build,
+# packaging/dist); тут только то, что не покрыто.
+*.dmg
+packaging/ffmpeg/

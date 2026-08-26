@@ -28,10 +28,8 @@ import re
 import select
 import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urljoin
 
@@ -43,6 +41,7 @@ try:
 except ImportError:
     YTDLP_AVAILABLE = False
 
+from utils.config import Config
 from utils.logger import logger
 
 # Голое "Mozilla/5.0" читается частью сайтов (замечено на tass.ru) как явный
@@ -217,10 +216,9 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
     вместо STREAM: печатает IFRAME:<url его src> — тут пробуем довести ЕГО
     до потока через уже готовую цепочку webcaster.pro, тот же путь, что и
     для og:video-ссылок, найденных прямо в статическом HTML."""
-    browser_script = Path(__file__).resolve().parent.parent / 'gui' / 'browser_capture.py'
     try:
         proc = subprocess.Popen(
-            [sys.executable, str(browser_script), sniff_url, '--sniff'],
+            Config.browser_capture_command(sniff_url, '--sniff'),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
     except Exception as e:
         logger.warning(f"LinkResolver: не удалось запустить sniff-браузер: {e}")
