@@ -1,14 +1,16 @@
 # TV Recorder
 
-A native-feeling macOS desktop app for watching and recording Russian federal
-TV channels — and, more generally, for pulling video off almost any link.
-Built with Python, Tkinter and CustomTkinter.
+A native-feeling macOS desktop app for watching and recording live TV
+channels — from any country's IPTV playlist, not just one — plus a
+universal downloader for pulling video off almost any link. Built with
+Python, Tkinter and CustomTkinter.
 
 ## What it does
 
-**Каналы (Channels)** — auto-updated IPTV playlist of Russian federal
-channels (with a bundled local fallback), live preview via `ffplay`, and
-simultaneous multi-channel recording via `ffmpeg`.
+**Каналы (Channels)** — auto-updated IPTV playlist of live channels (ships
+with a Russian federal-channel playlist and local fallback by default, but
+works with any M3U source), live preview via `ffplay`, and simultaneous
+multi-channel recording via `ffmpeg`.
 
 **Мои ссылки (My Links)** — paste a link to almost anything (YouTube, VK,
 RuTube, Twitch, or a plain news-site article with an embedded player) and
