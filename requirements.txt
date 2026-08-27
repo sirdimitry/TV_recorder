@@ -11,3 +11,7 @@ Pillow>=10.0.0
 # Окно встроенного браузера для "режима браузера" (core/screen_capture.py) —
 # на macOS тянет за собой pyobjc и использует системный WKWebView.
 pywebview>=5.0
+# core/tass_provider.py — запускает собственный (не системный) Chromium
+# для tass.ru, куда обычный HTTP-запрос не пускает антибот-защита. После
+# установки пакета один раз выполнить: playwright install chromium
+playwright>=1.50.0

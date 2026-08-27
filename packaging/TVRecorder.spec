@@ -15,19 +15,28 @@ sys.path.insert(0, str(REPO_ROOT))
 
 pywebview_datas, pywebview_binaries, pywebview_hidden = collect_all('pywebview')
 customtkinter_datas = collect_data_files('customtkinter')
+# playwright (core/tass_provider.py) — collect_all нужен, чтобы подхватить
+# его собственный Node-бинарник и JS-драйвер (playwright/driver/**), они не
+# .py/.so и PyInstaller их без явного collect_all не найдёт. Сам браузер
+# (Chrome/Chromium) НЕ бандлится — provider сам находит системный Chrome
+# или при необходимости скачивает Chromium при первом использовании этой
+# функции (см. TassProvider._ensure_bundled_chromium), а не при сборке.
+playwright_datas, playwright_binaries, playwright_hidden = collect_all('playwright')
 
 a = Analysis(
     [str(REPO_ROOT / 'main.py')],
     pathex=[str(REPO_ROOT)],
-    binaries=pywebview_binaries,
+    binaries=[*pywebview_binaries, *playwright_binaries],
     datas=[
         (str(REPO_ROOT / 'VERSION'), '.'),
         (str(REPO_ROOT / 'data' / 'default_channels.json'), 'data'),
         *pywebview_datas,
         *customtkinter_datas,
+        *playwright_datas,
     ],
     hiddenimports=[
         *pywebview_hidden,
+        *playwright_hidden,
         'AppKit', 'Quartz', 'Security', 'UniformTypeIdentifiers', 'WebKit', 'objc',
     ],
     hookspath=[],

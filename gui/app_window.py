@@ -551,6 +551,17 @@ class AppWindow:
                     )
                     if task_id:
                         logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
+                elif info.skip_browser_fallback:
+                    # Источник заведомо не отдаст ничего полезного и через
+                    # screen-capture (например tass.ru — тот же антибот
+                    # экран, что и на прямом запросе, см.
+                    # core/link_resolver.py:_resolve_tass) — показываем
+                    # причину как есть, вместо того чтобы тратить время на
+                    # открытие браузерного окна ради заведомо пустой записи.
+                    logger.warning(f"'{name}': {info.error}")
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Не удалось записать", f"«{name}»:\n\n{info.error}", parent=self.root))
+                    return
                 else:
                     logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
                     used_browser_fallback = True

@@ -208,6 +208,14 @@ class LinkList(ctk.CTkFrame):
                     live_dot.configure(image=get_icon('record', dot_color, 10))
                     status_badge.configure(text="В ЭФИРЕ" if info.is_live else "ЗАПИСЬ",
                                            text_color=c['red'] if info.is_live else c['text_secondary'])
+                elif info.skip_browser_fallback:
+                    # tass.ru и подобные — антибот-страница одинакова что
+                    # для прямого запроса, что для screen-capture, обычный
+                    # браузерный фолбэк тут бесполезен (см.
+                    # core/link_resolver.py:_resolve_tass) — нужен Chrome
+                    # с --remote-debugging-port, подробности по клику.
+                    live_dot.configure(image=get_icon('record', c['text_muted'], 10))
+                    status_badge.configure(text="НУЖЕН CHROME", text_color=c['text_muted'])
                 else:
                     # Прямой поток не нашёлся автоматически — но это больше
                     # не тупик: запись всё равно можно начать, просто она

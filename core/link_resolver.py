@@ -135,6 +135,12 @@ class LinkInfo:
     headers: Optional[dict] = None  # заголовки (в первую очередь User-Agent), нужные именно ДЛЯ ЭТОЙ ссылки
     player_url: Optional[str] = None  # og:video страницы — для режима браузера открываем его вместо самой страницы
     error: str = ''
+    # True только для источников, где даже screen-capture фолбэк заведомо
+    # бесполезен (см. _resolve_tass: сайт отдаёт страницу антибот-защиты,
+    # и запись экрана такой страницы результата не даст) — тогда вызывающая
+    # сторона (gui/app_window.py) должна показать error как есть, а не
+    # тратить время на открытие браузерного окна.
+    skip_browser_fallback: bool = False
 
 
 def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT) -> LinkInfo:
@@ -164,6 +170,16 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
         if ytdlp_result is not None:
             logger.info(f"LinkResolver: yt-dlp не знает '{url}', нашли поток напрямую в HTML")
         return fallback
+
+    # tass.ru отдаёт открытую страницу антибот-защиты (ServicePipe) даже
+    # настоящему WebKit-движку (проверено вручную) — ни yt-dlp, ни HTML-
+    # скрейп, ни sniff ниже до статьи не доберутся, так что не тратим на
+    # sniff ещё ~80с впустую. См. core/tass_provider.py про то, как читаем
+    # поток из уже открытого пользователем Chrome вместо обхода защиты.
+    if 'tass.ru' in url.lower():
+        tass_result = _resolve_tass(url)
+        if tass_result is not None:
+            return tass_result
 
     # 1tv.ru рисует плеер через JS (iframe на static.1tv.ru появляется уже
     # после гидратации React) — ни у yt-dlp, ни в сыром HTML ссылки нет.
@@ -211,6 +227,60 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
             return fallback
         return ytdlp_result  # иначе исходная ошибка yt-dlp обычно информативнее
     return fallback
+
+
+_TASS_BROWSER_TIMEOUT = 90.0
+
+
+def _resolve_tass(url: str) -> Optional[LinkInfo]:
+    """См. core/tass_provider.py — отдельный, изолированный от остального
+    резолвера путь для tass.ru: сайт отдаёт открытую антибот-страницу
+    (ServicePipe) обычному HTTP-запросу, поэтому вместо попытки её обойти
+    запускаем настоящий браузерный движок (Playwright + его собственный
+    Chromium — не системный Chrome, работает даже если Chrome вообще не
+    установлен) и читаем то, что он сам находит на странице. Возвращает
+    None только если сама попытка не удалась технически (Playwright/
+    Chromium не установлены) — иначе (видео не нашлось) возвращает
+    ok=False с понятной причиной, а не молча проваливается дальше по
+    цепочке (skip_browser_fallback=True — наш screen-capture фолбэк той же
+    антибот-страницы всё равно ничего полезного не запишет)."""
+    from core.tass_provider import TassProvider
+
+    logger.info(f"[TASS] URL detected: {url}")
+    logger.info("[TASS] Trying HTTP extraction")
+    try:
+        resp = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=8)
+        logger.info(f"[TASS] HTTP status: {resp.status_code}")
+    except Exception as e:
+        logger.info(f"[TASS] HTTP extraction failed: {e}")
+    logger.info("[TASS] Browser fallback")
+
+    provider = TassProvider()
+    if not provider.is_available():
+        # Реально должно случаться только в dev-окружении без `pip install
+        # playwright` — в собранном приложении пакет всегда есть, а сам
+        # браузер (Chrome или Chromium) provider.resolve() при необходимости
+        # находит/скачивает сам, без участия пользователя (см.
+        # core/tass_provider.py:_launch_browser).
+        logger.warning("[TASS] Пакет playwright не установлен в этой среде")
+        return LinkInfo(
+            ok=False, skip_browser_fallback=True,
+            error="Не удалось запустить встроенный браузер для скачивания с TASS "
+                  "(модуль playwright не установлен). В терминале проекта: pip install playwright",
+        )
+
+    result = provider.resolve(url, timeout=_TASS_CDP_TIMEOUT)
+    if not result:
+        return LinkInfo(
+            ok=False, skip_browser_fallback=True,
+            error=(
+                "TASS блокирует автоматический доступ (антибот ServicePipe), а видео на странице "
+                "не нашлось даже через встроенный браузер за отведённое время. Подробности — в логе "
+                "(строки [TASS])."
+            ),
+        )
+    return LinkInfo(ok=True, title=result.get('title') or url, video_url=result['video_url'],
+                     headers=result['headers'], is_live=False)
 
 
 def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Optional[tuple]:
