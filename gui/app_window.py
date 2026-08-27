@@ -494,9 +494,32 @@ class AppWindow:
             end_label = _format_mmss(clip_end_seconds) if clip_end_seconds else '…'
             clip_range_text = f"{_format_mmss(seek_seconds)}–{end_label}"
 
+        # Скорость ускоренного воспроизведения для резервной записи экрана
+        # (когда не помог ни прямой поток, ни sniff — см. ниже) — реальное
+        # экранное время короче содержимого ролика в это же число раз,
+        # ffmpeg потом растягивает файл обратно (core/screen_capture.py:
+        # build_timestretch_cmd). Смысла ускорять короткие фрагменты нет
+        # (запас на открытие окна/старт плеера тот же, а качество только
+        # хуже) — включаем только когда реально стоит недёшево прождать:
+        # цель — уложиться примерно в 75 секунд экранного времени, но не
+        # больше x8 (на такой скорости звук/картинка у части плееров уже
+        # разваливаются).
+        browser_speed_factor = None
+        if stop_after and stop_after > 90:
+            browser_speed_factor = min(8, max(1, round(stop_after / 75)))
+            if browser_speed_factor <= 1:
+                browser_speed_factor = None
+
         def start():
             record_started = time.time()
             used_browser_fallback = False
+            used_speed_factor = None
+            # Пока resolve_link() (ниже) ищет прямой поток, строка ссылки
+            # молчит — на тяжёлых сайтах (otr-online.ru, tass.ru) это может
+            # занять до минуты, и непонятно, работает приложение или зависло.
+            # Снимаем индикатор в finally — то есть как только определится
+            # итог (прямая запись, браузер или ошибка), а не раньше.
+            self.root.after(0, lambda: self.link_list.set_row_resolving(name, True))
 
             def on_task_complete(success, channel_name, output_path, ended_early=False):
                 # Раньше по завершении мгновенной записи ссылки не было
@@ -511,48 +534,71 @@ class AppWindow:
                     body = f"Длительность записи: {_format_human_duration(elapsed)}"
                     if clip_range_text and not used_browser_fallback:
                         body = f"Фрагмент {clip_range_text}\n{body}"
+                    if used_speed_factor:
+                        body += f"\nЗапись экрана x{used_speed_factor:.0f} (резервный способ)"
                     self.notifier.send("✅ Запись завершена", f"{channel_name}\n{body}")
                 else:
                     self.notifier.send("❌ Ошибка записи", channel_name)
 
-            info = resolve_link(link.get('url', ''))
-            if info.ok:
-                task_id = self.recorder.start_recording(
-                    name, info.video_url, output, source="manual",
-                    on_complete=on_task_complete, audio_url=info.audio_url,
-                    extra_headers=info.headers, seek_seconds=seek_seconds,
-                    clip_end_seconds=clip_end_seconds, duration_limit_seconds=stop_after,
-                )
-                if task_id:
-                    logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
-            else:
-                logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
-                used_browser_fallback = True
-                if seek_seconds:
-                    logger.warning(f"Позиция С:{seek_seconds:.0f}с для '{name}' не будет учтена — "
-                                    f"запись через браузер не умеет перематывать ролик")
-                open_url = info.player_url or link.get('player_url') or link.get('url', '')
-                task_id = self.recorder.start_browser_recording(
-                    name, open_url, output, source="manual",
-                    on_complete=on_task_complete,
-                )
-                if task_id:
-                    logger.info(f"Начата запись экрана (браузер) для ссылки: {name} (task: {task_id})")
-                    if seek_seconds:
-                        self.root.after(0, lambda: messagebox.showwarning(
-                            "Внимание",
-                            f"Прямую ссылку на поток для «{name}» получить не удалось — запись пошла через "
-                            f"окно браузера.\nПеремотка на {_format_mmss(seek_seconds)} в этом режиме не "
-                            f"поддерживается — пишется с той позиции, с которой сама начнёт воспроизведение "
-                            f"страница.", parent=self.root))
+            try:
+                info = resolve_link(link.get('url', ''))
+                if info.ok:
+                    task_id = self.recorder.start_recording(
+                        name, info.video_url, output, source="manual",
+                        on_complete=on_task_complete, audio_url=info.audio_url,
+                        extra_headers=info.headers, seek_seconds=seek_seconds,
+                        clip_end_seconds=clip_end_seconds, duration_limit_seconds=stop_after,
+                    )
+                    if task_id:
+                        logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
                 else:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Ошибка", f"Не удалось начать запись «{name}» ни напрямую, ни через браузер.\nПроверьте лог."))
-                    return
-            if task_id and stop_after:
-                timer = threading.Timer(stop_after, self.recorder.stop_recording, args=[task_id])
-                timer.daemon = True
-                timer.start()
+                    logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
+                    used_browser_fallback = True
+                    if seek_seconds:
+                        logger.warning(f"Позиция С:{seek_seconds:.0f}с для '{name}' не будет учтена — "
+                                        f"запись через браузер не умеет перематывать ролик")
+                    open_url = info.player_url or link.get('player_url') or link.get('url', '')
+                    task_id = self.recorder.start_browser_recording(
+                        name, open_url, output, source="manual",
+                        on_complete=on_task_complete, speed_factor=browser_speed_factor,
+                    )
+                    if task_id:
+                        # start_browser_recording уже дождался (синхронно)
+                        # подтверждения от страницы, что ускорение реально
+                        # применилось (см. core/recorder.py:
+                        # _wait_for_speed_confirmation) — если видео не
+                        # нашлось (например, чужой iframe), task.speed_factor
+                        # там уже сброшен в None. Берём АКТУАЛЬНОЕ значение
+                        # оттуда, а не свою исходную заявку browser_speed_factor —
+                        # иначе таймер остановки ниже посчитал бы неправильную
+                        # (заниженную в browser_speed_factor раз) паузу для
+                        # записи, которая на самом деле идёт в обычном темпе.
+                        confirmed_task = self.recorder.tasks.get(task_id)
+                        used_speed_factor = confirmed_task.speed_factor if confirmed_task else None
+                        logger.info(f"Начата запись экрана (браузер) для ссылки: {name} (task: {task_id})"
+                                    + (f", ускорено x{used_speed_factor:.0f}" if used_speed_factor else ""))
+                        if seek_seconds:
+                            self.root.after(0, lambda: messagebox.showwarning(
+                                "Внимание",
+                                f"Прямую ссылку на поток для «{name}» получить не удалось — запись пошла через "
+                                f"окно браузера.\nПеремотка на {_format_mmss(seek_seconds)} в этом режиме не "
+                                f"поддерживается — пишется с той позиции, с которой сама начнёт воспроизведение "
+                                f"страница.", parent=self.root))
+                    else:
+                        self.root.after(0, lambda: messagebox.showerror(
+                            "Ошибка", f"Не удалось начать запись «{name}» ни напрямую, ни через браузер.\nПроверьте лог."))
+                        return
+                if task_id and stop_after:
+                    # На ускоренном воспроизведении экранное время короче
+                    # содержимого в browser_speed_factor раз — ждать полный
+                    # stop_after по часам означало бы записать в
+                    # browser_speed_factor раз БОЛЬШЕ содержимого, чем просили.
+                    wall_clock_stop = stop_after / used_speed_factor if used_speed_factor else stop_after
+                    timer = threading.Timer(wall_clock_stop, self.recorder.stop_recording, args=[task_id])
+                    timer.daemon = True
+                    timer.start()
+            finally:
+                self.root.after(0, lambda: self.link_list.set_row_resolving(name, False))
 
         threading.Thread(target=start, daemon=True).start()
 

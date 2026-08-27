@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
-from core.screen_capture import (build_screen_capture_cmd, find_loopback_audio_index,
+from core.screen_capture import (build_screen_capture_cmd, build_timestretch_cmd, find_loopback_audio_index,
                                   find_screen_device_index, get_retina_scale_factor)
 from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.config import Config
@@ -61,6 +61,11 @@ class RecordingTask:
         # (format_recording_period), а не эти поля.
         self.clip_start_seconds: Optional[float] = None
         self.clip_end_seconds: Optional[float] = None
+        # Ускоренная запись экрана (см. Recorder.start_browser_recording) —
+        # во сколько раз плеер играл быстрее реального времени; None/1 —
+        # обычная запись без ускорения, растяжку по времени делать не надо.
+        self.speed_factor: Optional[float] = None
+        self.screen_capture_has_audio: bool = True
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -301,13 +306,24 @@ class Recorder:
             return ""
 
     def start_browser_recording(self, channel_name: str, url: str, output_path: str,
-                                 source: str = "manual", on_complete: Optional[Callable] = None) -> str:
+                                 source: str = "manual", on_complete: Optional[Callable] = None,
+                                 speed_factor: Optional[float] = None) -> str:
         """Запись через захват экрана: открывает ссылку в отдельном окне-браузере
         и параллельно пишет экран через ffmpeg/avfoundation — для сайтов, чью
         прямую ссылку на поток получить не удалось (core/link_resolver.py).
         Окно никогда не уходит в macOS-fullscreen — пишется именно область
         под окном (см. gui/browser_capture.py), а fullscreen окна сдвинул бы
-        его границы и рассинхронизировал их с уже посчитанной обрезкой."""
+        его границы и рассинхронизировал их с уже посчитанной обрезкой.
+
+        speed_factor — тот самый "резервный" фолбэк для сайтов, где не
+        помогает даже sniff (JS-плеер рисует ролик так, что ни прямая
+        ссылка на поток, ни сетевые запросы её не выдают): страница играет
+        ролик на ускоренной скорости (gui/browser_capture.py: SPEED_CONTROL_JS,
+        playbackRate), экранное время записи короче реальной длины ролика
+        во столько же раз, а после записи core/screen_capture.py:
+        build_timestretch_cmd растягивает файл обратно до нормальной
+        скорости. Кадровая частота исходного захвата поднимается
+        пропорционально — иначе после растяжки видео будет дёрганым."""
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -323,9 +339,15 @@ class Recorder:
 
         task_id = f"{channel_name}_{int(time.time())}"
 
+        browser_args = [url, channel_name]
+        if speed_factor and speed_factor > 1:
+            browser_args += ['--speed', str(speed_factor)]
+            logger.info(f"Recorder: запись '{channel_name}' на ускоренном воспроизведении x{speed_factor:.0f} "
+                        f"(последний резервный способ — растянем обратно по времени после записи)")
+
         try:
             browser_proc = subprocess.Popen(
-                Config.browser_capture_command(url, channel_name),
+                Config.browser_capture_command(*browser_args),
                 stdout=subprocess.PIPE, text=True, bufsize=1)
         except Exception as e:
             logger.error(f"Recorder: не удалось открыть окно-браузер: {e}")
@@ -339,12 +361,40 @@ class Recorder:
             logger.warning(f"Recorder: не удалось получить границы окна-браузера '{channel_name}' — "
                             f"придётся писать весь экран целиком")
 
-        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index, crop=crop)
+        speed_confirmed = False
+        if speed_factor and speed_factor > 1:
+            # Ускорение реально применяется только если на странице
+            # физически нашёлся <video> (SPEED_CONTROL_JS в
+            # gui/browser_capture.py) — на части сайтов сам ролик живёт в
+            # чужом (cross-origin) iframe, куда со страницы принципиально
+            # не залезть, и подтверждение просто не придёт. Ждём отдельно
+            # от геометрии (та печатается сразу при появлении окна, а
+            # подтверждение — уже после реальной загрузки страницы и
+            # плеера, которая на части сайтов занимает 15-20с).
+            speed_confirmed = self._wait_for_speed_confirmation(browser_proc)
+            if not speed_confirmed:
+                logger.warning(f"Recorder: не удалось включить ускоренное воспроизведение для '{channel_name}' "
+                                f"(видео не нашлось на странице — возможно, в чужом iframe) — "
+                                f"пишем как обычно, без ускорения и без растяжки по времени")
+
+        # При ускорении картинка на экране реально меняется быстрее — без
+        # поднятия кадровой частоты захвата после обратной растяжки
+        # (setpts) видео получится дёрганым (мало исходных кадров на
+        # растянутый интервал времени).
+        capture_framerate = 60 if speed_confirmed else 30
+        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index, crop=crop,
+                                        framerate=capture_framerate)
 
         task = RecordingTask(task_id, channel_name, url, str(output_file), source)
         task.on_complete = on_complete
         task.is_screen_capture = True
         task.browser_proc = browser_proc
+        # Растяжку по времени (см. _timestretch_task_output) включаем
+        # ТОЛЬКО если ускорение подтверждено — иначе запись, реально
+        # шедшая в нормальном темпе, была бы ошибочно замедлена в
+        # speed_factor раз при "восстановлении".
+        task.speed_factor = speed_factor if speed_confirmed else None
+        task.screen_capture_has_audio = audio_index is not None
 
         try:
             task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -400,6 +450,34 @@ class Recorder:
             scale = get_retina_scale_factor()
             return (round(x * scale), round(y * scale), round(w * scale), round(h * scale))
         return None
+
+    def _wait_for_speed_confirmation(self, browser_proc: subprocess.Popen, timeout: float = 20.0) -> bool:
+        """Читает строку "SPEED_ACTIVE" из того же stdout (после GEOMETRY,
+        см. _read_browser_geometry — тот же поток, ничего не теряется между
+        двумя последовательными чтениями). Печатается из
+        _RelayoutApi.report_speed_active() в gui/browser_capture.py, только
+        когда SPEED_CONTROL_JS реально нашла <video> на странице и
+        выставила playbackRate. Таймаут больше, чем у геометрии — тут ждём
+        уже настоящую загрузку страницы и инициализацию плеера, которая на
+        части сайтов (см. gui/browser_capture.py: LOADING_HTML) занимает
+        15-20с."""
+        import select
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if browser_proc.poll() is not None:
+                return False
+            try:
+                ready, _, _ = select.select([browser_proc.stdout], [], [], 0.5)
+            except Exception:
+                ready = [browser_proc.stdout]
+            if not ready:
+                continue
+            line = browser_proc.stdout.readline()
+            if not line:
+                continue
+            if line.strip() == 'SPEED_ACTIVE':
+                return True
+        return False
 
     def _watch_browser_proc(self, task: RecordingTask):
         """Если пользователь закрыл окно-браузер вручную, не нажимая Стоп —
@@ -489,6 +567,8 @@ class Recorder:
         output_file = Path(task.output_path)
         has_usable_file = output_file.is_file() and output_file.stat().st_size > 1024
         success = success and has_usable_file
+        if success and task.speed_factor:
+            self._timestretch_task_output(task)
         task.success = success
         # Если ffmpeg сам дошёл до конца потока (и мы его об этом не просили) —
         # значит источник закончился раньше, чем длилось окно записи: эфир
@@ -510,6 +590,36 @@ class Recorder:
             task.on_complete(success, task.channel_name, task.output_path, task.ended_early)
 
         self._notify_ui()
+
+    def _timestretch_task_output(self, task: RecordingTask):
+        """Растягивает файл, записанный на ускоренном playbackRate, обратно
+        до нормальной скорости (см. start_browser_recording). Идёт СИНХРОННО
+        в потоке _wait_for_task — этот поток и так уже фоновый и больше
+        ничего не делает, on_complete всё равно должен получить финальный,
+        уже поправленный файл, а не сырой быстрый. Если растяжка почему-то
+        не удалась — оставляем исходный (ускоренный) файл как есть, чтобы
+        человек хотя бы не остался совсем без записи."""
+        output_file = Path(task.output_path)
+        temp_file = output_file.with_name(output_file.stem + '_stretch_tmp' + output_file.suffix)
+        cmd = build_timestretch_cmd(str(output_file), str(temp_file), task.speed_factor,
+                                     has_audio=task.screen_capture_has_audio)
+        try:
+            timeout = max(300.0, task.get_elapsed_time() * 3)
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            if result.returncode == 0 and temp_file.is_file() and temp_file.stat().st_size > 1024:
+                output_file.unlink()
+                temp_file.rename(output_file)
+                logger.info(f"Recorder: '{task.channel_name}' — запись растянута обратно по времени "
+                            f"(записывалась на x{task.speed_factor:.0f})")
+            else:
+                temp_file.unlink(missing_ok=True)
+                err = result.stderr.decode('utf-8', errors='ignore')[-300:] if result.stderr else ''
+                logger.error(f"Recorder: не удалось растянуть по времени '{task.channel_name}' — "
+                             f"файл остался ускоренным ({task.speed_factor:.0f}x): {err}")
+        except Exception as e:
+            temp_file.unlink(missing_ok=True)
+            logger.error(f"Recorder: ошибка растяжки по времени '{task.channel_name}' — "
+                         f"файл остался ускоренным ({task.speed_factor:.0f}x): {e}")
 
     def _start_snapshot_stream(self, task: RecordingTask):
         """Непрерывный поток кадров (~4 fps) на саму задачу — централизованно,

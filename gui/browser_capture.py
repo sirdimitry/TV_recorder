@@ -86,6 +86,37 @@ font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;">
 </body></html>
 """
 
+# Обнаружено вживую на otr-online.ru: баннер согласия на cookie перекрывает
+# страницу И плеер вообще не инициализируется (не рисуется, не тянет
+# поток), пока баннер не закрыт — значит из-за него молчал не только режим
+# ускоренной записи (нечего искать через FIND_VIDEO_JS), но и обычный
+# sniff тоже (SNIFF_JS ничего не перехватывал, потому что плеер не успевал
+# даже начать грузиться). Ищем и жмём кнопку по тексту — эвристика, но
+# покрывает подавляющее большинство баннеров (рус./англ. форм). Как и
+# SPEED_CONTROL_JS, перепроверяем раз в секунду — баннер может появиться
+# не сразу (не на первый evaluate_js после 'loaded').
+COOKIE_DISMISS_JS = r"""
+(function() {
+    if (window.__tvrecorder_cookie_dismiss_bound) return;
+    window.__tvrecorder_cookie_dismiss_bound = true;
+    var PATTERN = /^(принять(\s+все)?|согласен|согласна|хорошо|ок|понятно|accept(\s+all)?|i\s+agree|agree|got it|allow all)\s*$/i;
+    function tryDismiss() {
+        try {
+            var candidates = document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]');
+            for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                var text = (el.value || el.textContent || '').trim();
+                if (PATTERN.test(text)) {
+                    try { el.click(); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    }
+    tryDismiss();
+    setInterval(tryDismiss, 1000);
+})();
+"""
+
 # Раз нативный Fullscreen API у WKWebView отключён (fullScreenEnabled=False,
 # см. on_gui_started — иначе видео раздувается на весь физический экран, а
 # не в пределах этого окна), у страницы часто ПРОПАДАЕТ и собственная
@@ -108,6 +139,78 @@ font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;">
 # вызовах evaluate_js на той же странице). Помимо CSS-трюка дёргаем и
 # старый resize-wobble (nudge_relayout через Python) — лишний толчок к
 # перерисовке некоторым плеерам всё ещё не помешает.
+# Общий поиск <video> — рекурсивно внутри shadow root-ов тоже (иначе на
+# части сайтов document.querySelectorAll вообще ничего не находит), и с
+# тем же выбором "главного" ролика среди нескольких кандидатов (превью
+# похожих роликов в сайдбаре и т.п.): либо единственный сейчас
+# проигрываемый, либо (если ничего не запущено) визуально самый крупный.
+# Общая функция для RELAYOUT_HOTKEY_JS (Cmd+Enter) и SPEED_CONTROL_JS
+# (ускоренное воспроизведение для быстрой записи, см. ниже) — раньше была
+# продублирована, теперь одна реализация на обоих потребителей.
+FIND_VIDEO_JS = """
+(function() {
+    if (window.__tvrecorder_find_video_bound) return;
+    window.__tvrecorder_find_video_bound = true;
+
+    window.__tvrecorder_findVideo = function() {
+        function collectVideos(root, out) {
+            out = out || [];
+            root.querySelectorAll('video').forEach(function(v) { out.push(v); });
+            root.querySelectorAll('*').forEach(function(el) {
+                if (el.shadowRoot) collectVideos(el.shadowRoot, out);
+            });
+            return out;
+        }
+        var videos = collectVideos(document);
+        if (!videos.length) return null;
+        var video = videos.find(function(v) { return !v.paused; });
+        if (!video) {
+            video = videos.reduce(function(best, v) {
+                if (!best) return v;
+                var r = v.getBoundingClientRect(), br = best.getBoundingClientRect();
+                return (r.width * r.height) > (br.width * br.height) ? v : best;
+            }, null);
+        }
+        return video;
+    };
+})();
+"""
+
+# Ускоренное воспроизведение для быстрой записи ("резервный" фолбэк, когда
+# ни прямой поток, ни sniff не нашли ссылку — core/recorder.py:
+# start_browser_recording(speed_factor=...)): реальное экранное время
+# записи меньше в SPEED раз, чем длительность самого ролика — после записи
+# core/screen_capture.py:build_timestretch_cmd растягивает файл обратно.
+# video.playbackRate — стандартный DOM API, работает независимо от того,
+# рисует ли сам плеер сайта видимый регулятор скорости в своём UI.
+# Переустанавливаем раз в секунду: некоторые плееры сами сбрасывают
+# playbackRate на 1 при смене качества/рекламной вставке и т.п.
+SPEED_CONTROL_JS = """
+(function(speed) {
+    function apply() {
+        try {
+            var v = window.__tvrecorder_findVideo && window.__tvrecorder_findVideo();
+            if (!v) return;
+            if (v.playbackRate !== speed) v.playbackRate = speed;
+            if (v.paused) v.play().catch(function() {});
+            // Сообщаем Python-стороне, что ускорение реально применилось к
+            // настоящему <video> — если плеер живёт в чужом (cross-origin)
+            // iframe, window.__tvrecorder_findVideo() ничего не найдёт
+            // (в главном документе видео просто нет физически), apply()
+            // тихо ничего не сделает, и это сообщение не придёт вовсе —
+            // core/recorder.py тогда НЕ будет растягивать запись обратно
+            // по времени, раз реального ускорения не произошло.
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.report_speed_active) {
+                window.pywebview.api.report_speed_active();
+            }
+        } catch (e) {}
+    }
+    apply();
+    setInterval(apply, 1000);
+})(%s);
+"""
+
+
 RELAYOUT_HOTKEY_JS = """
 (function() {
     if (window.__tvrecorder_relayout_bound) return;
@@ -129,30 +232,8 @@ RELAYOUT_HOTKEY_JS = """
             window.__tvrecorder_fs_video = null;
             return;
         }
-        // Ищем <video> не только в обычном DOM, но и рекурсивно внутри
-        // shadow root-ов — иначе на таких сайтах вообще ничего не найдём
-        // (document.querySelectorAll их не видит в принципе).
-        function collectVideos(root, out) {
-            out = out || [];
-            root.querySelectorAll('video').forEach(function(v) { out.push(v); });
-            root.querySelectorAll('*').forEach(function(el) {
-                if (el.shadowRoot) collectVideos(el.shadowRoot, out);
-            });
-            return out;
-        }
-        var videos = collectVideos(document);
-        if (!videos.length) return;
-        // Среди нескольких <video> (превью похожих роликов в сайдбаре и
-        // т.п.) реальный плеер почти всегда либо единственный проигрываемый
-        // сейчас, либо (если ничего не запущено) визуально самый крупный.
-        var video = videos.find(function(v) { return !v.paused; });
-        if (!video) {
-            video = videos.reduce(function(best, v) {
-                if (!best) return v;
-                var r = v.getBoundingClientRect(), br = best.getBoundingClientRect();
-                return (r.width * r.height) > (br.width * br.height) ? v : best;
-            }, null);
-        }
+        var video = window.__tvrecorder_findVideo && window.__tvrecorder_findVideo();
+        if (!video) return;
         window.__tvrecorder_fs_video = video;
         window.__tvrecorder_fs_prev_style = video.style.cssText;
         window.__tvrecorder_fs_prev_controls = video.controls;
@@ -205,10 +286,29 @@ class _RelayoutApi:
 
     def __init__(self):
         self.window = None
+        self._speed_reported = False
 
     def nudge_relayout(self):
         if self.window is not None:
             _nudge_relayout(self.window)
+
+    def report_speed_active(self):
+        # SPEED_CONTROL_JS зовёт это, только когда реально нашла <video> и
+        # выставила playbackRate — на сайтах, где сам плеер живёт в чужом
+        # (cross-origin) iframe, найти его со страницы принципиально нельзя
+        # (замечено на otr-online.ru: статья — Vue, ролик — отдельный
+        # otr.webcaster.pro внутри iframe), и это сообщение просто не
+        # придёт. core/recorder.py ждёт его с таймаутом именно поэтому —
+        # если не подтвердилось, запись идёт обычным темпом БЕЗ обратной
+        # растяжки, иначе нормальную по скорости запись растянули бы
+        # заведомо неправильно.
+        if self._speed_reported:
+            return
+        self._speed_reported = True
+        try:
+            print("SPEED_ACTIVE", flush=True)
+        except Exception as e:
+            print(f"Не удалось сообщить об активном ускорении: {e}", file=sys.stderr)
 
 
 # Перехватываем fetch/XHR (там уходит подавляющее большинство запросов
@@ -390,6 +490,7 @@ def _run_sniff(url: str, timeout: float = 40.0):
 
     def on_loaded():
         try:
+            window.evaluate_js(COOKIE_DISMISS_JS)
             window.evaluate_js(SNIFF_JS)
         except Exception as e:
             print(f"Не удалось привязать sniff: {e}", file=sys.stderr)
@@ -415,10 +516,20 @@ def _run_sniff(url: str, timeout: float = 40.0):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != '--sniff']
-    sniff = '--sniff' in sys.argv[1:]
+    raw_args = sys.argv[1:]
+    sniff = '--sniff' in raw_args
+    speed = None
+    if '--speed' in raw_args:
+        i = raw_args.index('--speed')
+        try:
+            speed = float(raw_args[i + 1])
+        except (IndexError, ValueError):
+            print("--speed требует числовой аргумент", file=sys.stderr)
+        raw_args = raw_args[:i] + raw_args[i + 2:]
+    args = [a for a in raw_args if a != '--sniff']
     if not args:
-        print("Usage: browser_capture.py <url> [title] | browser_capture.py <url> --sniff", file=sys.stderr)
+        print("Usage: browser_capture.py <url> [title] [--speed N] | browser_capture.py <url> --sniff",
+              file=sys.stderr)
         sys.exit(1)
     url = args[0]
 
@@ -436,9 +547,13 @@ def main():
 
     def on_page_loaded():
         try:
+            window.evaluate_js(COOKIE_DISMISS_JS)
+            window.evaluate_js(FIND_VIDEO_JS)
             window.evaluate_js(RELAYOUT_HOTKEY_JS)
+            if speed:
+                window.evaluate_js(SPEED_CONTROL_JS % speed)
         except Exception as e:
-            print(f"Не удалось привязать Cmd+Enter: {e}", file=sys.stderr)
+            print(f"Не удалось привязать Cmd+Enter/ускорение: {e}", file=sys.stderr)
         # Даём плееру время инициализироваться, потом форсируем перерисовку
         # даже без нажатия Cmd+Enter — часто именно первый рендер после
         # загрузки и оказывается тем самым "застрявшим" кадром.
@@ -475,6 +590,23 @@ def main():
                     y = screen_height - content_rect.origin.y - content_rect.size.height
                     w = content_rect.size.width
                     h = content_rect.size.height
+                    # Запись экрана обрезает по ЭТИМ координатам с холста
+                    # всего дисплея, не по конкретному окну — если поверх
+                    # окажется любое чужое окно (пользователь переключился,
+                    # всплыло уведомление и т.п.), запишется ОНО, а не
+                    # страница, безо всякой ошибки. Живьём поймали именно
+                    # так: во время фонового теста поверх оказалось совсем
+                    # другое окно, и запись ушла в него. Явно поднимаем окно
+                    # и активируем всё приложение перед тем, как печатать
+                    # геометрию для записи — не гарантия (пользователь может
+                    # переключиться позже сам), но закрывает самый частый
+                    # случай ("окно открылось не поверх остального").
+                    try:
+                        import AppKit
+                        AppKit.NSApp.activateIgnoringOtherApps_(True)
+                    except Exception:
+                        pass
+                    native_window.makeKeyAndOrderFront_(None)
             except Exception as e:
                 print(f"Не удалось включить fullScreenEnabled / вычислить область содержимого: {e}",
                       file=sys.stderr)

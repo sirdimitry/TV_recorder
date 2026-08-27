@@ -248,6 +248,30 @@ class LinkList(ctk.CTkFrame):
         else:
             logger.info(f"Запрос записи ссылки: {name}")
 
+    def set_row_resolving(self, name: str, resolving: bool):
+        """Пока идёт resolve_link() перед стартом записи (может занимать до
+        минуты на тяжёлых сайтах — otr-online.ru, tass.ru и т.п.), без этого
+        индикатора непонятно, работает ли приложение или зависло: строка
+        просто молчала до появления записи или окна с ошибкой. Показываем
+        "ИЩЕМ ПОТОК…" на бейдже статуса и блокируем повторный клик по
+        записи, пока не определится результат (прямой поток / браузер /
+        ошибка) — см. gui/app_window.py:_record_link_now."""
+        widgets = self.link_widgets.get(name)
+        if not widgets:
+            return
+        badge = widgets['status_badge']
+        c = self.colors
+        if resolving:
+            if '_prev_badge' not in widgets:
+                widgets['_prev_badge'] = (badge.cget('text'), badge.cget('text_color'))
+            badge.configure(text="ИЩЕМ ПОТОК…", text_color=c['accent'])
+            widgets['btn_record'].configure(state='disabled')
+        else:
+            widgets['btn_record'].configure(state='normal')
+            prev = widgets.pop('_prev_badge', None)
+            if prev:
+                badge.configure(text=prev[0], text_color=prev[1])
+
     def _on_recorder_update(self):
         self.after(0, self._refresh_record_buttons)
 
