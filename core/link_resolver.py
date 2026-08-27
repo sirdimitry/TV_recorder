@@ -178,7 +178,19 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     # есть своя embed-страница (og:video), сначала пробуем прогнать через
     # браузер именно её (там меньше постороннего шума в сетевых запросах,
     # чем на всей статье), иначе — саму страницу.
-    sniffed = _resolve_via_browser_sniff(fallback.player_url or url, url, timeout)
+    sniff_target = fallback.player_url or url
+    sniffed = _resolve_via_browser_sniff(sniff_target, url, timeout)
+    if not sniffed:
+        # На практике этот шаг реально нестабилен (прямые замеры на
+        # smotrim.ru: около трети попыток срываются без явной причины —
+        # окно браузера просто не успевает поймать нужный сетевой запрос
+        # с первого раза), а это последний рубеж распознавания — если он
+        # не сработал, ссылка целиком уходит в "недоступно". Одна повторная
+        # попытка почти всегда решает дело и стоит времени только в уже и
+        # так самом медленном/редком случае — на быстрый успешный путь
+        # никак не влияет.
+        logger.info(f"LinkResolver: sniff-браузер не нашёл поток с первой попытки для '{url}', пробуем ещё раз")
+        sniffed = _resolve_via_browser_sniff(sniff_target, url, timeout)
     if sniffed:
         stream_url, body = sniffed
         if stream_url.split('?', 1)[0].lower().endswith('.mp4'):

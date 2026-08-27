@@ -85,7 +85,7 @@ class DownloadList(ctk.CTkFrame):
     # прогресса рисовались уже НИЖЕ видимой границы карточки и были
     # обрезаны grid_propagate начисто (подтверждено замером виджетов:
     # progress_bar оказывался на y=91 при высоте строки 64).
-    ROW_HEIGHT = 86
+    ROW_HEIGHT = 108
 
     def __init__(self, parent, downloader=None, storage=None, on_add: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')

@@ -32,17 +32,24 @@ class TimeEntry(ctk.CTkEntry):
         except tk.TclError:
             cursor_position = len(raw_value)
         digits_before_cursor = sum(char.isdigit() for char in raw_value[:cursor_position])
-        digits = ''.join(char for char in raw_value if char.isdigit())[:4]
+        # Последние 2 введённые цифры — минуты/секунды (второй сегмент),
+        # всё, что перед ними — часы/минуты (первый сегмент), без
+        # ограничения в 2 цифры: полю нужно показывать и "10:05" (время на
+        # часах), и "200:44" (позиция в 3-часовом ролике для "Мои ссылки" —
+        # см. gui/app_window.py: _add_link_dialog). Раньше первый сегмент
+        # был жёстко зафиксирован в 2 цифры ("93:0" при вводе "930"), из-за
+        # чего длинные позиции физически нельзя было ввести.
+        digits = ''.join(char for char in raw_value if char.isdigit())[:6]
         if len(digits) <= 2:
             formatted = digits
         else:
-            formatted = f"{digits[:2]}:{digits[2:]}"
+            formatted = f"{digits[:-2]}:{digits[-2:]}"
         if formatted != raw_value:
             self._formatting = True
             self.value.set(formatted)
             self._formatting = False
             new_cursor_position = digits_before_cursor
-            if digits_before_cursor > 2:
+            if len(digits) > 2 and digits_before_cursor > len(digits) - 2:
                 new_cursor_position += 1
             self.after_idle(lambda: self.icursor(min(new_cursor_position, len(formatted))))
 

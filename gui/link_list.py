@@ -7,6 +7,7 @@ import customtkinter as ctk
 from PIL import Image
 
 from core.link_resolver import resolve_link
+from gui.download_list import _elide_text
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
@@ -40,6 +41,11 @@ class LinkList(ctk.CTkFrame):
         self.on_add = on_add
         self.on_preview = on_preview
         self.link_widgets: Dict[str, dict] = {}
+        # Общий инстанс шрифта, которым реально измеряется и рисуется текст —
+        # см. _elide_text/_update_row_width (тот же приём, что и в
+        # gui/download_list.py: без общего инстанса измерение было бы
+        # приблизительным, а не пиксель-в-пиксель точным).
+        self._name_font = ctk.CTkFont(size=13, weight='bold')
 
         self._setup_ui()
 
@@ -106,9 +112,14 @@ class LinkList(ctk.CTkFrame):
         info_frame.grid(row=0, column=1, sticky='nsew', pady=8)
         row.columnconfigure(1, weight=1)
 
-        label_name = ctk.CTkLabel(info_frame, text=name, font=ctk.CTkFont(size=13, weight='bold'),
+        label_name = ctk.CTkLabel(info_frame, text=name, font=self._name_font,
                                    text_color=c['text_primary'], anchor='w')
         label_name.pack(fill='x', anchor='w')
+        # Без обрезки по реальной ширине длинное название просто вылезало
+        # за пределы узкой боковой панели (или отображалось Tk обрубленным
+        # без многоточия) — та же проблема и то же решение, что уже
+        # починили в gui/download_list.py (_elide_text/_update_row_widths).
+        info_frame.bind('<Configure>', lambda e, n=name: self._update_row_width(n, e.width))
 
         badge_row = ctk.CTkFrame(info_frame, fg_color='transparent')
         badge_row.pack(anchor='w', pady=(3, 0))
@@ -142,6 +153,7 @@ class LinkList(ctk.CTkFrame):
         self.link_widgets[name] = {
             'row': row, 'thumb_label': thumb_label, 'live_dot': live_dot,
             'status_badge': status_badge, 'btn_record': btn_record, 'link': link,
+            'label_name': label_name, 'full_name': name,
         }
 
         for widget in (row, info_frame, label_name, badge_row):
@@ -152,6 +164,13 @@ class LinkList(ctk.CTkFrame):
         row.bind('<Leave>', on_leave)
 
         self._resolve_row(name, link, thumb_label, live_dot, status_badge)
+
+    def _update_row_width(self, name: str, available_width: int):
+        widgets = self.link_widgets.get(name)
+        if not widgets or available_width <= 1:
+            return
+        widgets['label_name'].configure(
+            text=_elide_text(self._name_font, widgets['full_name'], available_width))
 
     def _resolve_row(self, name: str, link: Dict, thumb_label, live_dot, status_badge):
         """Тянет превью и live/VOD статус через yt-dlp в фоне, не блокируя UI."""

@@ -15,16 +15,10 @@ from core.link_resolver import resolve_link
 from core.recorder import Recorder, RecordingTask
 from core.snapshot import to_ctk_image
 from core.storage import Storage
+from gui.download_list import _elide_text
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
-
-MAX_NAME_CHARS = 42  # длинные названия (особенно вставленные ссылки) обрезаем,
-                      # чтобы не выталкивать кнопки управления за край строки
-
-
-def _truncate_name(name: str, max_len: int = MAX_NAME_CHARS) -> str:
-    return name if len(name) <= max_len else name[:max_len - 1].rstrip() + '…'
 
 
 STATE_ACCENT = {
@@ -50,6 +44,10 @@ class RecordingPanel(ctk.CTkFrame):
 
         self.task_widgets: Dict[str, dict] = {}
         self.empty_label: Optional[ctk.CTkLabel] = None
+        # Общий инстанс шрифта имени — измеряется тем же инстансом, которым
+        # реально рисуется текст (см. _elide_text/_update_name_width), для
+        # пиксель-в-пиксель точной обрезки под реальную ширину строки.
+        self._name_font = ctk.CTkFont(size=12, weight='bold')
 
         self._setup_ui()
         self.refresh()
@@ -144,7 +142,7 @@ class RecordingPanel(ctk.CTkFrame):
                 continue
 
             widgets['timer'].configure(text=task.format_elapsed_time())
-            widgets['period'].configure(text=task.format_recording_period())
+            widgets['period'].configure(text=task.format_clip_range() or task.format_recording_period())
             self._apply_snapshot_if_changed(task, widgets)
 
             state = self._task_state(task)
@@ -172,6 +170,13 @@ class RecordingPanel(ctk.CTkFrame):
                 btn_open = self._icon_button(widgets['actions'], 'folder', lambda t=task: self._open_file(t))
                 btn_open.pack(side='left', padx=1, before=widgets['btn_del'])
                 widgets['btn_open'] = btn_open
+
+            # Текст статуса ("Recording"/"Ended early"/...) и набор кнопок
+            # (folder-кнопка появляется только тут, чуть выше) меняют
+            # ширину — пересчитываем, сколько реально осталось имени,
+            # каждый тик, а не только при ресайзе окна (row.bind('<Configure>')
+            # в _add_task_row не видит изменение контента дочерних виджетов).
+            self._update_name_width(tid)
 
     def _icon_button(self, parent, icon_name, command, color=None):
         c = self.colors
@@ -295,7 +300,7 @@ class RecordingPanel(ctk.CTkFrame):
         status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 16))
         status_icon.pack(side='left', padx=(0, 6), pady=8)
 
-        name_lbl = ctk.CTkLabel(row, text=_truncate_name(task.channel_name), font=ctk.CTkFont(size=12, weight='bold'),
+        name_lbl = ctk.CTkLabel(row, text=task.channel_name, font=self._name_font,
                                  text_color=c['text_primary'])
         name_lbl.pack(side='left', padx=(0, 10), pady=8)
 
@@ -303,8 +308,12 @@ class RecordingPanel(ctk.CTkFrame):
                                   text_color=c['accent'], width=64, anchor='w')
         timer_lbl.pack(side='left', padx=(0, 10), pady=8)
 
-        period_lbl = ctk.CTkLabel(row, text=task.format_recording_period(), font=ctk.CTkFont(size=11),
-                                   text_color=c['text_secondary'])
+        # Для "Мои ссылки" с заданным "С:" показываем позицию В РОЛИКЕ
+        # ("38:30–42:30"), а не время на часах начала/конца записи — час
+        # начала сам по себе ничего не говорит про то, какой фрагмент
+        # ролика пишется (см. core/recorder.py: format_clip_range).
+        period_lbl = ctk.CTkLabel(row, text=task.format_clip_range() or task.format_recording_period(),
+                                   font=ctk.CTkFont(size=11), text_color=c['text_secondary'])
         period_lbl.pack(side='left', padx=(0, 8), pady=8)
 
         result_lbl = ctk.CTkLabel(row, text="Recording", font=ctk.CTkFont(size=11),
@@ -317,6 +326,8 @@ class RecordingPanel(ctk.CTkFrame):
             'snapshot_seq': 0,
             'accent_bar': accent_bar,
             'status_icon': status_icon,
+            'name_lbl': name_lbl,
+            'full_name': task.channel_name,
             'timer': timer_lbl,
             'period': period_lbl,
             'result': result_lbl,
@@ -326,7 +337,40 @@ class RecordingPanel(ctk.CTkFrame):
             'btn_del': btn_del,
         }
 
+        # "Recording"/итоговый статус — последнее, что пакуется слева, и
+        # раньше первым же обрезалось краем строки на длинных названиях
+        # (имя обрезалось по фиксированному числу символов, не по реальной
+        # ширине — на широких мониторах оставался запас, на уже собранном
+        # приложении с более узким окном текст статуса просто вылезал под
+        # кнопки управления). Теперь имя подстраивается под то, что реально
+        # осталось от ширины строки, а не наоборот.
+        row.bind('<Configure>', lambda e, tid=task.task_id: self._update_name_width(tid))
+
         self._reveal_new_row(row)
+
+    def _update_name_width(self, task_id: str):
+        widgets = self.task_widgets.get(task_id)
+        if not widgets:
+            return
+        row = widgets['row']
+        row.update_idletasks()
+        row_width = row.winfo_width()
+        if row_width <= 1:
+            return
+        # Всё, что в строке НЕ имя — фиксированного размера и всегда должно
+        # уместиться целиком; имени достаётся то, что осталось.
+        fixed_width = (
+            widgets['accent_bar'].winfo_reqwidth() + widgets['logo_lbl'].winfo_reqwidth()
+            + widgets['status_icon'].winfo_reqwidth() + widgets['timer'].winfo_reqwidth()
+            + widgets['period'].winfo_reqwidth() + widgets['result'].winfo_reqwidth()
+            + widgets['actions'].winfo_reqwidth()
+        )
+        # Суммарные padx вокруг перечисленных виджетов + запас на бортики
+        # самой карточки (см. pack(...) выше: 8+10+6+10+8+0 между виджетами,
+        # плюс 6 у actions с обеих сторон и небольшой общий запас).
+        padding_budget = 8 + 10 + 6 + 10 + 8 + 12 + 16
+        available = row_width - fixed_width - padding_budget
+        widgets['name_lbl'].configure(text=_elide_text(self._name_font, widgets['full_name'], available))
 
     def _reveal_new_row(self, row: ctk.CTkFrame):
         """Прокручивает список к только что появившейся строке и на секунду

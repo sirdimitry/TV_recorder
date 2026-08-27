@@ -1,4 +1,5 @@
 # core/recorder.py
+import signal
 import subprocess
 import threading
 import time
@@ -14,6 +15,15 @@ from utils.filenames import safe_filename
 from utils.logger import logger
 
 SNAPSHOT_FPS = 4  # активных записей может быть много одновременно (1-16+) — держим частоту скромной
+
+
+def _format_clip_mmss(total_seconds: float) -> str:
+    """Секунды -> "мм:сс" — та же семантика, что и gui/app_window.py:
+    _format_mmss (позиция в ролике), задублирована здесь, чтобы core/ не
+    тянул зависимость от gui/."""
+    total = round(total_seconds)
+    minutes, seconds = divmod(total, 60)
+    return f"{minutes}:{seconds:02d}"
 
 
 class RecordingTask:
@@ -44,6 +54,13 @@ class RecordingTask:
         self.snapshot_stream: Optional[LiveThumbnailStream] = None
         self.is_screen_capture = False  # запись через захват экрана (core/screen_capture.py), а не -c copy потока
         self.browser_proc: Optional[subprocess.Popen] = None  # окно-браузер (gui/browser_capture.py) для screen_capture
+        # Позиция в САМОМ ролике ("С:"/"До:" из диалога добавления ссылки,
+        # см. gui/app_window.py: _add_link_dialog) — не время на часах.
+        # Только для "Мои ссылки" с заданным seek; для каналов/эфира остаётся
+        # None, и интерфейс показывает обычный час:минута диапазон записи
+        # (format_recording_period), а не эти поля.
+        self.clip_start_seconds: Optional[float] = None
+        self.clip_end_seconds: Optional[float] = None
     
     def get_elapsed_time(self) -> int:
         if not self.is_recording and self.final_duration > 0:
@@ -68,6 +85,17 @@ class RecordingTask:
         start_label = started_at.strftime('%H:%M')
         end_label = ended_at.strftime('%H:%M') if ended_at else 'now'
         return f"{start_label} – {end_label}"
+
+    def format_clip_range(self) -> Optional[str]:
+        """Диапазон позиций В САМОМ РОЛИКЕ ("38:30–42:30"), а не время на
+        часах — для "Мои ссылки" с заданным "С:"/"До:". None, если это не
+        такая запись (обычный канал/эфир — тогда в интерфейсе используется
+        format_recording_period)."""
+        if self.clip_start_seconds is None:
+            return None
+        start_label = _format_clip_mmss(self.clip_start_seconds)
+        end_label = _format_clip_mmss(self.clip_end_seconds) if self.clip_end_seconds else '…'
+        return f"{start_label}–{end_label}"
 
 
 class Recorder:
@@ -125,7 +153,10 @@ class Recorder:
                        output_path: str, source: str = "manual",
                        on_complete: Optional[Callable] = None,
                        audio_url: Optional[str] = None,
-                       extra_headers: Optional[dict] = None) -> str:
+                       extra_headers: Optional[dict] = None,
+                       seek_seconds: Optional[float] = None,
+                       clip_end_seconds: Optional[float] = None,
+                       duration_limit_seconds: Optional[float] = None) -> str:
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -148,16 +179,66 @@ class Recorder:
             headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
             headers_dict = {"User-Agent": ua, "Referer": ref, "Origin": ref}
 
+        # -ss ПЕРЕД -i — это seek на уровне демуксера (быстрый, к ближайшему
+        # keyframe), а не перекодирование с обрезкой после -i (то было бы
+        # медленным decode+encode, а тут везде -c copy). Имеет смысл только
+        # для готовых VOD-ссылок с известной длительностью ("Мои ссылки" —
+        # позиция в самом ролике, см. gui/app_window.py: _add_link_dialog);
+        # для живого эфира seek_seconds не передаётся вовсе.
+        seek_opts = ['-ss', str(seek_seconds)] if seek_seconds else []
+        if seek_seconds:
+            logger.info(f"Recorder: запись '{channel_name}' с позиции {seek_seconds:.0f}с ролика")
+
+        # Раздельные видео/аудио-дорожки (audio_url) с независимым -ss перед
+        # каждым -i дают рассинхрон: видео демуксер снапает seek НАЗАД к
+        # ближайшему опорному кадру (может занести на несколько секунд
+        # раньше цели — нормальное поведение GOP), а звук перематывается
+        # точно. -avoid_negative_ts make_zero потом сдвигает ОБА потока на
+        # одну и ту же (видео-)величину, чтобы избежать отрицательных
+        # меток — и именно поэтому звук оказывается сдвинут ВПЕРЁД на весь
+        # этот зазор: первые несколько секунд видео идут без звука. Замерено
+        # напрямую на реальном VK-потоке: зазор доходил до ~6с.
+        #
+        # Фикс — двухступенчатый seek, стандартный приём именно для этого
+        # случая: сначала грубо перематываем ОБА потока на SEEK_MARGIN
+        # секунд РАНЬШЕ цели (одинаково для видео и звука — раз оба гарантированно
+        # покрывают запас в SEEK_MARGIN секунд ДО цели, где бы видео реально
+        # не снапнулось внутри этого окна), затем один точный -ss ПОСЛЕ -map
+        # обрезает оба уже смикшированных потока в ту же самую точку разом —
+        # рассинхрона между ними больше нет, обрезка идёт по общему таймлайну
+        # вывода, а не по двум независимым.
+        SEEK_MARGIN = 15.0
+        rough_seek_seconds = max(0.0, seek_seconds - SEEK_MARGIN) if seek_seconds else None
+        precise_trim_seconds = (seek_seconds - rough_seek_seconds) if seek_seconds else None
+        dual_track_seek_opts = ['-ss', str(rough_seek_seconds)] if rough_seek_seconds else []
+        dual_track_trim_opts = ['-ss', str(precise_trim_seconds)] if precise_trim_seconds else []
+
+        # -t ПОСЛЕ -i — ограничение по длительности САМОГО КОНТЕНТА (сколько
+        # секунд видео попадёт в файл), а не по часам. Без -re (реального
+        # временного темпа) -c copy читает VOD настолько быстро, насколько
+        # отдаёт CDN — практика показала под 60x реального времени, то есть
+        # "запиши 30 секунд" по одному только таймеру на потоке (см.
+        # gui/app_window.py: _record_link_now) успевало бы скачать многие
+        # МИНУТЫ контента раньше, чем таймер вообще сработает. -t считает
+        # по временным меткам самого потока и остановит запись куда точнее
+        # и быстрее — таймер на стороне приложения остаётся просто
+        # подстраховкой на случай, если -t почему-то не сработает.
+        duration_opts = ['-t', str(duration_limit_seconds)] if duration_limit_seconds else []
+        if duration_limit_seconds:
+            logger.info(f"Recorder: запись '{channel_name}' ограничена {duration_limit_seconds:.0f}с контента (-t)")
+
         if audio_url:
             # Видео и звук — уже отдельные закодированные дорожки (типично
             # для YouTube на 720p+): просто мультиплексируем их в один файл,
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
             cmd = [
                 'ffmpeg', '-y',
-                *RECONNECT_OPTS, *hls_opts(stream_url), '-headers', headers, '-i', stream_url,
-                *RECONNECT_OPTS, *hls_opts(audio_url), '-headers', headers, '-i', audio_url,
+                *RECONNECT_OPTS, *hls_opts(stream_url), *dual_track_seek_opts, '-headers', headers, '-i', stream_url,
+                *RECONNECT_OPTS, *hls_opts(audio_url), *dual_track_seek_opts, '-headers', headers, '-i', audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
+                *dual_track_trim_opts,
                 '-c', 'copy',
+                *duration_opts,
                 '-err_detect', 'ignore_err',
                 '-fflags', '+genpts+discardcorrupt',
                 '-avoid_negative_ts', 'make_zero',
@@ -174,9 +255,11 @@ class Recorder:
             cmd = [
                 'ffmpeg', '-y',
                 *RECONNECT_OPTS, *hls_opts(stream_url),
+                *seek_opts,
                 '-headers', headers,
                 '-i', stream_url,
                 '-c', 'copy',
+                *duration_opts,
                 '-err_detect', 'ignore_err',
                 '-max_error_rate', '100',
                 '-fflags', '+genpts+discardcorrupt',
@@ -188,7 +271,9 @@ class Recorder:
         task = RecordingTask(task_id, channel_name, stream_url, str(output_file), source)
         task.on_complete = on_complete
         task.headers = headers_dict
-        
+        task.clip_start_seconds = seek_seconds
+        task.clip_end_seconds = clip_end_seconds
+
         try:
             task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             task.is_recording = True
@@ -326,6 +411,22 @@ class Recorder:
             logger.info(f"Recorder: окно-браузер '{task.channel_name}' закрыто — останавливаем запись экрана")
             self.stop_recording(task.task_id)
 
+    @staticmethod
+    def _terminate_task_process(task: 'RecordingTask'):
+        """SIGTERM надёжно останавливает обычный -c copy ffmpeg (стрим
+        каналов/ссылок), но запись экрана (-f avfoundation, см.
+        core/screen_capture.py) на macOS по SIGTERM может просто зависнуть
+        или не записать корректный файл — известная особенность
+        avfoundation-захвата. SIGINT ffmpeg сам обрабатывает как штатную
+        "мягкую" остановку (как Ctrl+C/клавиша q в интерактивном режиме):
+        дописывает корректный трейлер и выходит. Раньше отправлялся
+        SIGTERM всегда — судя по всему, именно это давало запись экрана,
+        которая не останавливалась таймером "До:" вовремя."""
+        if task.is_screen_capture:
+            task.process.send_signal(signal.SIGINT)
+        else:
+            task.process.terminate()
+
     def stop_recording(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
@@ -334,7 +435,7 @@ class Recorder:
             logger.info(f"Recorder: Остановка записи '{task.channel_name}' (task: {task_id})")
             task.final_duration = task.get_elapsed_time()
             task.stop_requested = True
-            task.process.terminate()
+            self._terminate_task_process(task)
             task.is_recording = False
             self._stop_snapshot_stream(task)
             if task.browser_proc and task.browser_proc.poll() is None:
@@ -455,7 +556,7 @@ class Recorder:
                 if task.process and task.is_recording:
                     task.final_duration = task.get_elapsed_time()
                     task.stop_requested = True
-                    task.process.terminate()
+                    self._terminate_task_process(task)
                     task.is_recording = False
                     self._stop_snapshot_stream(task)
                     if task.browser_proc and task.browser_proc.poll() is None:

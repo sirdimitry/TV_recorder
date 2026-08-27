@@ -23,6 +23,7 @@ from core.storage import Storage
 from core.scheduler import RecordingScheduler
 from core.recorder import Recorder
 from core.downloader import Downloader
+from core.notifier import Notifier
 from utils.config import Config
 from utils.icons import get_icon
 from utils.vpn_manager import VPNManager
@@ -83,28 +84,46 @@ class SplashScreen(ctk.CTkToplevel):
         self.destroy()
 
 
-def _format_hhmm(total_seconds: float) -> str:
-    """Секунды -> "ЧЧ:ММ", как длительность ролика, а не время на часах.
-    Часы не ограничены 23 (клипы длиннее суток на практике не встречаются,
-    но переполнение TimeEntry просто даст странное число, а не сломается)."""
-    total_minutes = round(total_seconds / 60)
-    return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+def _format_mmss(total_seconds: float) -> str:
+    """Секунды -> "мм:сс" — позиция/длительность внутри самого ролика, не
+    время на часах. Минуты не ограничены двумя цифрами (см. TimeEntry в
+    gui/schedule_panel.py — виджет сам разрешает вводить больше цифр,
+    трёхчасовой ролик — это "200:44", а не переполнение)."""
+    total = round(total_seconds)
+    minutes, seconds = divmod(total, 60)
+    return f"{minutes}:{seconds:02d}"
 
 
-def _parse_duration_seconds(start: str, end: str) -> Optional[float]:
-    """"С:"/"До:" здесь — положение в самом ролике (00:00 = его начало),
-    не время на часах — поэтому длительность считаем прямым вычитанием, а
-    не через datetime.strptime(). None — если "До:" не заполнено (значит,
-    без автоматической остановки — пишем, пока не остановят вручную)."""
-    if not end:
+def _format_human_duration(total_seconds: float) -> str:
+    """Секунды -> "6 мин 13 сек" — для итогового уведомления по завершении
+    записи (не путать с _format_mmss — та обозначает позицию в ролике)."""
+    total = round(total_seconds)
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} ч")
+    if hours or minutes:
+        parts.append(f"{minutes} мин")
+    parts.append(f"{seconds} сек")
+    return " ".join(parts)
+
+
+def _parse_mmss_seconds(text: str) -> Optional[int]:
+    """"мм:сс" -> секунды, либо None если пусто/невалидно. Секунды должны
+    быть 0-59 (минуты не ограничены — см. _format_mmss)."""
+    if not text:
+        return None
+    parts = text.split(':')
+    if len(parts) != 2:
         return None
     try:
-        sh, sm = (int(p) for p in start.split(':'))
-        eh, em = (int(p) for p in end.split(':'))
+        minutes, seconds = int(parts[0]), int(parts[1])
     except ValueError:
         return None
-    seconds = (eh * 60 + em) * 60 - (sh * 60 + sm) * 60
-    return seconds if seconds > 0 else None
+    if seconds >= 60 or minutes < 0 or seconds < 0:
+        return None
+    return minutes * 60 + seconds
 
 
 class AppWindow:
@@ -119,6 +138,7 @@ class AppWindow:
         self.recorder = Recorder()
         self.downloader = Downloader()
         self.scheduler = RecordingScheduler(recorder=self.recorder)
+        self.notifier = Notifier()
         self._network_results = Queue(maxsize=1)
         self._network_monitor_running = False
 
@@ -448,7 +468,8 @@ class AppWindow:
 
         threading.Thread(target=start, daemon=True).start()
 
-    def _record_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None):
+    def _record_link_now(self, name: str, link: Dict, stop_after: Optional[float] = None,
+                          seek_seconds: Optional[float] = None):
         """Мгновенная запись вручную добавленной ссылки: сперва разбираем её
         через yt-dlp/HTML-скрейп/скрытый браузер-снифф (core/link_resolver.py)
         в поисках прямого потока — если находится, копируем его как обычно.
@@ -458,29 +479,72 @@ class AppWindow:
         требовал отдельно добавлять ссылку во вкладку "Браузер" — теперь это
         происходит само, без второй ручной попытки.
         stop_after — секунды, через сколько остановить запись самим (длина
-        ролика из диалога добавления, а не время по часам); None — не
-        останавливать, ждать ручной остановки."""
+        фрагмента из диалога добавления, а не время по часам); None — не
+        останавливать, ждать ручной остановки.
+        seek_seconds — позиция в САМОМ ролике, с которой начать (поле "С:"),
+        а не задержка перед стартом — работает только для прямого потока
+        (core/recorder.py передаёт её ffmpeg как -ss перед -i); запись через
+        браузер (screen-capture фолбэк) не умеет перематывать открывшуюся
+        страницу и просто пишет с того места, с которого сама начнёт
+        воспроизведение."""
         output = str(self.recorder.build_output_path(name))
+        clip_end_seconds = (seek_seconds or 0) + stop_after if stop_after else None
+        clip_range_text = None
+        if seek_seconds:
+            end_label = _format_mmss(clip_end_seconds) if clip_end_seconds else '…'
+            clip_range_text = f"{_format_mmss(seek_seconds)}–{end_label}"
 
         def start():
+            record_started = time.time()
+            used_browser_fallback = False
+
+            def on_task_complete(success, channel_name, output_path, ended_early=False):
+                # Раньше по завершении мгновенной записи ссылки не было
+                # вообще никакой видимой пользователю обратной связи (только
+                # лог) — планировщик (core/scheduler.py) шлёт уведомления
+                # для расписания, а этот, ручной, путь — нет. По просьбе:
+                # итог (сколько реально писали, и какой фрагмент ролика,
+                # если был seek) должен быть виден, а не только в логе.
+                self._on_record_complete(success, channel_name, output_path, ended_early)
+                elapsed = time.time() - record_started
+                if success:
+                    body = f"Длительность записи: {_format_human_duration(elapsed)}"
+                    if clip_range_text and not used_browser_fallback:
+                        body = f"Фрагмент {clip_range_text}\n{body}"
+                    self.notifier.send("✅ Запись завершена", f"{channel_name}\n{body}")
+                else:
+                    self.notifier.send("❌ Ошибка записи", channel_name)
+
             info = resolve_link(link.get('url', ''))
             if info.ok:
                 task_id = self.recorder.start_recording(
                     name, info.video_url, output, source="manual",
-                    on_complete=self._on_record_complete, audio_url=info.audio_url,
-                    extra_headers=info.headers,
+                    on_complete=on_task_complete, audio_url=info.audio_url,
+                    extra_headers=info.headers, seek_seconds=seek_seconds,
+                    clip_end_seconds=clip_end_seconds, duration_limit_seconds=stop_after,
                 )
                 if task_id:
                     logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")
             else:
                 logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
+                used_browser_fallback = True
+                if seek_seconds:
+                    logger.warning(f"Позиция С:{seek_seconds:.0f}с для '{name}' не будет учтена — "
+                                    f"запись через браузер не умеет перематывать ролик")
                 open_url = info.player_url or link.get('player_url') or link.get('url', '')
                 task_id = self.recorder.start_browser_recording(
                     name, open_url, output, source="manual",
-                    on_complete=self._on_record_complete,
+                    on_complete=on_task_complete,
                 )
                 if task_id:
                     logger.info(f"Начата запись экрана (браузер) для ссылки: {name} (task: {task_id})")
+                    if seek_seconds:
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Внимание",
+                            f"Прямую ссылку на поток для «{name}» получить не удалось — запись пошла через "
+                            f"окно браузера.\nПеремотка на {_format_mmss(seek_seconds)} в этом режиме не "
+                            f"поддерживается — пишется с той позиции, с которой сама начнёт воспроизведение "
+                            f"страница.", parent=self.root))
                 else:
                     self.root.after(0, lambda: messagebox.showerror(
                         "Ошибка", f"Не удалось начать запись «{name}» ни напрямую, ни через браузер.\nПроверьте лог."))
@@ -688,12 +752,14 @@ class AppWindow:
         # предлагаем переключиться, не заставляя вбивать ссылку заново.
         # --- Запись сразу по хронометражу ролика: это не расписание по
         # часам (ссылка не привязана к календарной дате/времени эфира) —
-        # "С:"/"До:" здесь означают положение в САМОМ ролике (00:00 — его
-        # начало), а не время на часах. По умолчанию — весь ролик целиком
-        # (00:00 до его настоящей длительности, как только она определится);
-        # можно указать вручную более короткое "До:", чтобы записать не
-        # до конца. При включении запись стартует сразу же, без ожидания
-        # какого-либо расписания.
+        # "С:"/"До:" здесь означают положение в САМОМ ролике в формате
+        # мм:сс (0:00 — его начало), а не время на часах. "С:" — реальный
+        # seek (ffmpeg -ss, см. core/recorder.py), не просто вычитается для
+        # длины записи. По умолчанию — весь ролик целиком (0:00 до его
+        # настоящей длительности, как только она определится); можно
+        # указать вручную и "С:", и более короткое "До:", чтобы вырезать
+        # конкретный фрагмент. При включении запись стартует сразу же, без
+        # ожидания какого-либо расписания.
         schedule_var = tk.BooleanVar(value=True)
         schedule_check = ctk.CTkCheckBox(body, text="Начать запись сразу же", variable=schedule_var,
                                           fg_color=c['accent'], hover_color=c['accent_hover'],
@@ -711,7 +777,9 @@ class AppWindow:
         end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
                                fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
         end_entry.pack(side='left', padx=6)
-        start_entry.set_time('00:00')
+        ctk.CTkLabel(time_frame, text="мм:сс — позиция в ролике", font=ctk.CTkFont(size=10),
+                     text_color=c['text_muted']).pack(side='left', padx=(10, 0))
+        start_entry.set_time('0:00')
         end_entry.set_time('')
 
         def toggle_schedule_fields():
@@ -792,7 +860,7 @@ class AppWindow:
                     if info.duration:
                         resolved_duration['value'] = info.duration
                         if not end_touched['value']:
-                            end_entry.set_time(_format_hhmm(info.duration))
+                            end_entry.set_time(_format_mmss(info.duration))
                         minutes = int(info.duration // 60)
                         hint.configure(text=f"Определено: длительность ролика ~{minutes} мин")
                     else:
@@ -822,19 +890,32 @@ class AppWindow:
             do_schedule = schedule_var.get()
             start = start_entry.get().strip()
             end = end_entry.get().strip()
+
+            start_seconds = _parse_mmss_seconds(start) or 0
+            # Реальный seek в сам ролик (ffmpeg -ss перед -i, см.
+            # core/recorder.py) — раньше "С:" только вычиталось из "До:" для
+            # длины записи, а сама запись всегда стартовала с начала ролика.
+            seek_seconds = float(start_seconds) if do_schedule and start_seconds > 0 else None
+
             duration_seconds = None
             if do_schedule and end:
-                # Поле "До:" округлено до минуты — если пользователь его не
-                # трогал, используем точную длительность ролика (секунды),
-                # чтобы таймер остановки не обрезал запись раньше конца.
+                # Поле "До:" — если пользователь его не трогал, используем
+                # точную длительность ролика (секунды) как верхнюю границу
+                # таймера остановки; сама запись всё равно завершится раньше
+                # по концу потока, если seek_seconds > 0.
                 if not end_touched['value'] and resolved_duration['value']:
                     duration_seconds = resolved_duration['value']
                 else:
-                    duration_seconds = _parse_duration_seconds(start, end)
-                    if duration_seconds is None:
+                    end_seconds = _parse_mmss_seconds(end)
+                    if end_seconds is None:
                         messagebox.showwarning(
-                            "Внимание", "«До:» должно быть позже «С:» — введите длительность в формате ЧЧ:ММ, "
+                            "Внимание", "«До:» должно быть в формате мм:сс (позиция в ролике), "
                                          "либо оставьте поле пустым, чтобы писать до ручной остановки", parent=dialog)
+                        return
+                    duration_seconds = end_seconds - start_seconds
+                    if duration_seconds <= 0:
+                        messagebox.showwarning(
+                            "Внимание", "«До:» должно быть позже «С:»", parent=dialog)
                         return
 
             def finish(display_name: str):
@@ -848,8 +929,9 @@ class AppWindow:
                 if do_schedule:
                     # Не расписание по часам — ссылка стартует записью
                     # сразу же, "До:" (если задано) лишь ограничивает её
-                    # длительность.
-                    self.root.after(0, lambda: self._record_link_now(display_name, link, stop_after=duration_seconds))
+                    # длительность, "С:" — позиция начала в самом ролике.
+                    self.root.after(0, lambda: self._record_link_now(
+                        display_name, link, stop_after=duration_seconds, seek_seconds=seek_seconds))
 
             # Сохраняем СРАЗУ, даже если название ещё не определилось (тогда
             # временно используем саму ссылку как имя) — раньше при пустом
