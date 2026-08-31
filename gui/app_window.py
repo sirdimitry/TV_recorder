@@ -224,7 +224,8 @@ class AppWindow:
                 added += 1
             elif is_live:
                 existing = current_map[ch['name']]
-                if existing.get('url') != ch['url'] or existing.get('logo_url') != ch['logo_url']:
+                if (existing.get('url') != ch['url'] or existing.get('logo_url') != ch['logo_url']
+                        or existing.get('audio_url') != ch.get('audio_url')):
                     self.storage.save_channel(ch)
                     updated += 1
 
@@ -467,7 +468,8 @@ class AppWindow:
             # уже надёжно обновляет панель записей из любого потока.
             task_id = self.recorder.start_recording(
                 name, channel['url'], output, source="manual",
-                on_complete=self._on_record_complete
+                on_complete=self._on_record_complete,
+                audio_url=channel.get('audio_url')
             )
             if task_id:
                 logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")

@@ -22,12 +22,21 @@ class M3UParser:
             "url": "https://stream.smotrim.ru/hls2/russia_hd/playlist_6.m3u8",
             "logo": "https://iptvx.one/picons/rossia1.png"
         },
+        # У 'Россия 24' и 'Россия К' на stream.smotrim.ru видео и звук —
+        # РАЗНЫЕ HLS-рендиции (playlist_1..5 — видео разных битрейтов без
+        # звука вообще, playlist_6 — отдельно звук без видео), не как у
+        # 'Россия 1' (russia_hd), где playlist_6 — уже готовый микс обоих.
+        # Проверено напрямую ffprobe по сегментам .ts: без audio_url запись
+        # получается полностью без звука — сама дорожка отсутствует в PMT,
+        # это не баг ffmpeg/наших флагов, а структура именно этого источника.
         "Россия 24": {
             "url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_5.m3u8",
+            "audio_url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_6.m3u8",
             "logo": "https://iptvx.one/picons/rossia-24.png"
         },
         "Россия К": {
             "url": "https://stream.smotrim.ru/hls2/russia_k/playlist_5.m3u8",
+            "audio_url": "https://stream.smotrim.ru/hls2/russia_k/playlist_6.m3u8",
             "logo": "https://iptvx.one/picons/kultura.png"
         },
         "Известия": {
@@ -118,6 +127,8 @@ class M3UParser:
                 fix = self.MANUAL_FIXES[name]
                 if 'url' in fix:
                     ch['url'] = fix['url']
+                if 'audio_url' in fix:
+                    ch['audio_url'] = fix['audio_url']
                 if 'logo' in fix:
                     ch['logo_url'] = fix['logo']
                 logger.info(f"M3UParser: Применен фикс для '{name}'")

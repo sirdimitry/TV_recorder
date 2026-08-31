@@ -42,6 +42,7 @@
   {
     "name": "Россия К",
     "url": "https://stream.smotrim.ru/hls2/russia_k/playlist_5.m3u8",
+    "audio_url": "https://stream.smotrim.ru/hls2/russia_k/playlist_6.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/kultura.png",
@@ -50,6 +51,7 @@
   {
     "name": "Россия 24",
     "url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_5.m3u8",
+    "audio_url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_6.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/rossia-24.png",

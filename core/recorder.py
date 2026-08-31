@@ -49,6 +49,12 @@ class RecordingTask:
         self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
         self.ended_early = False  # True, если ffmpeg сам дошёл до конца потока раньше, чем мы попросили его остановиться
         self.headers: Optional[dict] = None  # заголовки, с которыми реально шла запись — для live-превью того же потока
+        # Если видео и звук у источника — раздельные HLS-рендиции (см.
+        # 'Россия 24'/'Россия К' в core/m3u_parser.py), stream_url отдаёт
+        # только видео — здесь адрес именно звуковой дорожки, чтобы
+        # прослушивание в мониторе (gui/recording_monitor.py) знало, что
+        # слушать, а не пыталось достать звук оттуда, где его нет.
+        self.audio_url: Optional[str] = None
         self.last_snapshot: Optional[bytes] = None  # JPEG-байты последнего пойманного кадра
         self.snapshot_seq = 0  # растёт при каждом новом кадре — по нему потребители понимают, что картинку пора перерисовать
         self.snapshot_stream: Optional[LiveThumbnailStream] = None
@@ -276,6 +282,7 @@ class Recorder:
         task = RecordingTask(task_id, channel_name, stream_url, str(output_file), source)
         task.on_complete = on_complete
         task.headers = headers_dict
+        task.audio_url = audio_url
         task.clip_start_seconds = seek_seconds
         task.clip_end_seconds = clip_end_seconds
 

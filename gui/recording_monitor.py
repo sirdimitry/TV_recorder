@@ -176,7 +176,11 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         if task is None or task.is_screen_capture:
             return
         self._stop_listening()
-        self._listener = AudioListener(task.stream_url, task.headers)
+        # Если видео и звук у источника — раздельные рендиции (см.
+        # 'Россия 24'/'Россия К'), звук лежит в task.audio_url — в
+        # task.stream_url там только видео, слушать там нечего.
+        listen_url = task.audio_url or task.stream_url
+        self._listener = AudioListener(listen_url, task.headers, label=task.channel_name)
         self._listener.start()
         self._listening_task_id = task_id
         self._muted = False  # клик по плитке — явное намерение услышать звук, снимаем mute

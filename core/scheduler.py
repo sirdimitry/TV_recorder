@@ -160,7 +160,11 @@ class RecordingScheduler:
             if status == StreamStatus.YELLOW:
                 logger.warning(f"Запись с предупреждением: {name} — {message}")
                 self.notifier.send("⚠️ Запись начата с предупреждением", f"{name}\n{message}")
-            video_url, audio_url = target.get('url', ''), None
+            # audio_url — для каналов, у которых видео и звук на CDN лежат
+            # раздельными HLS-рендициями (см. MANUAL_FIXES в m3u_parser.py:
+            # "Россия 24"/"Россия К" через stream.smotrim.ru — обычный 'url'
+            # там video-only, без этого поля запись выходит совсем без звука).
+            video_url, audio_url = target.get('url', ''), target.get('audio_url')
 
         output_path = self.recorder.build_output_path(name)
         self._notify_status(index, 'recording')
