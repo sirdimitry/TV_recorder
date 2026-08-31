@@ -345,7 +345,7 @@ class AppWindow:
         self.channel_list = ChannelList(
             self.tab_pages,
             recorder=self.recorder,
-            on_select=self._on_channel_select,
+            on_select=lambda name: self._on_source_select('channel', name),
             on_edit=self._edit_channel_dialog,
             on_record=self._record_channel_now,
             on_delete=self._delete_channel,
@@ -357,7 +357,7 @@ class AppWindow:
         self.link_list = LinkList(
             self.tab_pages,
             recorder=self.recorder,
-            on_select=self._on_channel_select,
+            on_select=lambda name: self._on_source_select('link', name),
             on_edit=self._edit_link_dialog,
             on_record=self._record_link_now,
             on_delete=self._delete_link,
@@ -441,8 +441,14 @@ class AppWindow:
         elif key != 'downloads' and not right_visible:
             self.paned.add(self.right_paned, weight=1)
 
-    def _on_channel_select(self, name: str):
-        logger.info(f"Выбран канал: {name}")
+    def _on_source_select(self, source_type: str, name: str):
+        # Клик по строке в списке слева (канал или ссылка) синхронизирует
+        # форму планировщика справа — остаётся только ввести время (см.
+        # SchedulePanel.preselect_source). Раньше клик по списку ничего не
+        # делал для планировщика, канал/ссылку приходилось выбирать заново
+        # вручную в его собственном выпадающем списке.
+        logger.info(f"Выбран {'канал' if source_type == 'channel' else 'ссылка'}: {name}")
+        self.schedule_panel.preselect_source(source_type, name)
 
     def _show_channel_preview(self, name: str, url: str, headers: Optional[Dict] = None):
         self.preview_panel.show(name, url, headers)

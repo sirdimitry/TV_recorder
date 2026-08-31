@@ -597,6 +597,32 @@ class SchedulePanel(ctk.CTkFrame):
         self.btn_delete_form.configure(state='disabled')
         self.btn_record_now.configure(state='disabled')
 
+    def preselect_source(self, source_type: str, name: str):
+        """Клик по каналу/ссылке слева (gui/app_window.py:_on_source_select) —
+        синхронизирует форму планировщика так, чтобы оставалось только ввести
+        время: раньше приходилось ЕЩЁ РАЗ выбирать тот же канал вручную в
+        выпадающем списке справа, хотя он уже выбран в списке слева.
+
+        Если в расписании была выделена строка (режим редактирования) — снимаем
+        выделение, иначе форма осталась бы в режиме "Обновить" существующей
+        записи, а не создания новой под этот клик."""
+        names = self._names_for(source_type)
+        if name not in names:
+            return  # список планировщика ещё не обновился под свежие данные — не портим форму
+
+        if self.tree.selection():
+            self.tree.selection_remove(self.tree.selection())
+
+        self.source_segmented.set(self.TYPE_TO_LABEL.get(source_type, 'Канал'))
+        self.source_type_var.set(source_type)
+        self.channel_label.configure(text="Канал:" if source_type == 'channel' else "Ссылка:")
+        self._refresh_source_dropdown()
+        self.channel_var.set(name)
+
+        self._clear_form_buttons()
+        self._apply_time_defaults()
+        self._maybe_detect_link_duration()
+
     def _record_selected_now(self):
         selected = self.tree.selection()
         if not selected or not self.on_record_now:
