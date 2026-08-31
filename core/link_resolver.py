@@ -269,7 +269,7 @@ def _resolve_tass(url: str) -> Optional[LinkInfo]:
                   "(модуль playwright не установлен). В терминале проекта: pip install playwright",
         )
 
-    result = provider.resolve(url, timeout=_TASS_CDP_TIMEOUT)
+    result = provider.resolve(url, timeout=_TASS_BROWSER_TIMEOUT)
     if not result:
         return LinkInfo(
             ok=False, skip_browser_fallback=True,

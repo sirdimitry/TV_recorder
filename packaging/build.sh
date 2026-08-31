@@ -26,13 +26,23 @@ echo "==> Статические ffmpeg/ffplay/ffprobe (обе архитект�
 # Простой список вместо ассоциативного массива — /bin/bash на macOS это
 # древний bash 3.2 (лицензионные причины Apple), declare -A там не работает.
 mkdir -p "$FFMPEG_CACHE"
+# Именно 7.1, а не более новая версия — на 9.x (arm64)/8.0 (intel), которые
+# тут были раньше, поймали реальный баг: HLS-плейлисты с байт-рейнджами одного
+# файла (#EXT-X-BYTERANGE без явного @offset у второго и следующих сегментов —
+# так отдаёт, например, ntv.ru через Shaka Packager) у них читаются только на
+# первый сегмент, дальше запись видео молча обрывается (звук при этом
+# докачивается полностью — он идёт отдельным, обычным mp4, а не байт-рейндж
+# плейлистом). Причём именно на 720p — ниже потому что вариант ниже разрешения
+# может быть не байт-рейндж плейлистом, там бага не будет. На 7.1 (и на
+# системном Homebrew ffmpeg 7.1.1, с которым сверялись) этот же плейлист
+# скачивается целиком без проблем — проверено вживую до фиксации версии здесь.
 SOURCES="
-arm64 ffmpeg https://www.osxexperts.net/ffmpeg9arm.zip
-arm64 ffprobe https://www.osxexperts.net/ffprobe9arm.zip
-arm64 ffplay https://www.osxexperts.net/ffplay9arm.zip
-x86_64 ffmpeg https://www.osxexperts.net/ffmpeg80intel.zip
-x86_64 ffprobe https://www.osxexperts.net/ffprobe80intel.zip
-x86_64 ffplay https://www.osxexperts.net/ffplay80intel.zip
+arm64 ffmpeg https://www.osxexperts.net/ffmpeg71arm.zip
+arm64 ffprobe https://www.osxexperts.net/ffprobe71arm.zip
+arm64 ffplay https://www.osxexperts.net/ffplay71arm.zip
+x86_64 ffmpeg https://www.osxexperts.net/ffmpeg71intel.zip
+x86_64 ffprobe https://www.osxexperts.net/ffprobe71intel.zip
+x86_64 ffplay https://www.osxexperts.net/ffplay71intel.zip
 "
 
 echo "$SOURCES" | while read -r arch bin_name url; do

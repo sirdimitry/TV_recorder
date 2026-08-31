@@ -47,10 +47,12 @@ class LinkList(ctk.CTkFrame):
         # приблизительным, а не пиксель-в-пиксель точным).
         self._name_font = ctk.CTkFont(size=13, weight='bold')
 
+        self._blink_on = True
         self._setup_ui()
 
         if self.recorder:
             self.recorder.set_ui_callback(self._on_recorder_update)
+            self._blink_tick()
 
     def _setup_ui(self):
         c = self.colors
@@ -294,6 +296,25 @@ class LinkList(ctk.CTkFrame):
                 btn.configure(image=get_icon('stop', c['red'], 18), fg_color=c['bg_active'])
             else:
                 btn.configure(image=get_icon('record', c['red'], 18), fg_color='transparent')
+
+    def _blink_tick(self):
+        # Кнопка записи здесь — единственный признак активной записи в
+        # строке (в отличие от gui/recording_panel.py, где слева уже есть
+        # цветная полоска-индикатор состояния — там мигать нечему, полоска
+        # и так заметна). Мигаем только кнопками активных записей, тумблер
+        # общий на все строки — так они мигают синхронно, а не вразнобой.
+        if not self.winfo_exists():
+            return
+        self._blink_on = not self._blink_on
+        if self.recorder:
+            c = self.colors
+            active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording}
+            color = c['red'] if self._blink_on else c['bg_active']
+            for name in active_names:
+                widgets = self.link_widgets.get(name)
+                if widgets:
+                    widgets['btn_record'].configure(image=get_icon('stop', color, 18))
+        self.after(600, self._blink_tick)
 
     def _open_preview(self, link: Dict):
         name = link.get('name', 'Unknown')
