@@ -126,6 +126,18 @@ def _draw_icon(name: str, color: str, size: int) -> Image.Image:
         d.line([px*0.32, px*0.14, px*0.32, px*0.28], fill=color, width=stroke)
         d.line([px*0.68, px*0.14, px*0.68, px*0.28], fill=color, width=stroke)
 
+    elif name == 'volume':
+        d.polygon([(px*0.14, px*0.38), (px*0.34, px*0.38), (px*0.52, px*0.20),
+                   (px*0.52, px*0.80), (px*0.34, px*0.62), (px*0.14, px*0.62)], fill=color)
+        d.arc([px*0.56, px*0.30, px*0.78, px*0.70], start=-50, end=50, fill=color, width=stroke)
+        d.arc([px*0.62, px*0.20, px*0.92, px*0.80], start=-50, end=50, fill=color, width=stroke)
+
+    elif name == 'volume_off':
+        d.polygon([(px*0.14, px*0.38), (px*0.34, px*0.38), (px*0.52, px*0.20),
+                   (px*0.52, px*0.80), (px*0.34, px*0.62), (px*0.14, px*0.62)], fill=color)
+        d.line([px*0.60, px*0.32, px*0.88, px*0.68], fill=color, width=stroke)
+        d.line([px*0.88, px*0.32, px*0.60, px*0.68], fill=color, width=stroke)
+
     elif name == 'shield':
         d.polygon([(px*0.5, px*0.14), (px*0.82, px*0.26), (px*0.82, px*0.52),
                     (px*0.5, px*0.86), (px*0.18, px*0.52), (px*0.18, px*0.26)],
