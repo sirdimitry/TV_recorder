@@ -29,6 +29,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._stream: Optional[LiveThumbnailStream] = None
         self._frame_count = 0
         self._generation = 0
+        self._preview_name = ''
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
@@ -49,6 +50,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._stop_stream()
         self._generation += 1
         generation = self._generation
+        self._preview_name = name
         self.name_lbl.configure(text=name)
         self.status_lbl.configure(text="Подключение…")
         self.image_lbl.configure(text="", image=get_icon('tv', Config.COLORS['text_muted'], 32))
@@ -66,6 +68,14 @@ class PreviewPanel(ctk.CTkFrame):
     def _check_connected(self, generation: int):
         if generation == self._generation and self._frame_count == 0:
             self.status_lbl.configure(text="Нет сигнала")
+            # Раньше это было видно только глазами на самой панели — в логе
+            # оставалась только строка "Открыт предпросмотр: ..." из
+            # ChannelList/LinkList, и по нему было не отличить, реально ли
+            # показалось видео или превью тихо умерло (например, ffmpeg не
+            # смог открыть поток вообще — см. историю с DASH-потоком
+            # "Первый канал"). Пишем в лог сам факт неудачи, раз кнопки для
+            # этого нет.
+            logger.warning(f"PreviewPanel: '{self._preview_name}' — нет сигнала за 15с (кадров не получено)")
 
     def _on_frame(self, jpeg_bytes: bytes, generation: int):
         if self._running:
@@ -85,6 +95,7 @@ class PreviewPanel(ctk.CTkFrame):
         # Не дёргаем текстовый лейбл на каждый кадр — просто держим отметку "в эфире".
         if self._frame_count == 1:
             self.status_lbl.configure(text="В эфире")
+            logger.info(f"PreviewPanel: '{self._preview_name}' — превью в эфире (получен первый кадр)")
 
     def _stop_stream(self):
         if self._stream is not None:
