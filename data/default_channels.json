@@ -168,5 +168,13 @@
     "type": "iptv",
     "vpn_required": null,
     "alt_urls": []
+  },
+  {
+    "name": "Доверие",
+    "url": "http://rt-mos-htlive.cdn.ngenix.net/hls/CH_R04_DOVERIE/variant.m3u8",
+    "type": "iptv",
+    "vpn_required": null,
+    "logo_url": "http://only4.tv/ch/417.png",
+    "alt_urls": []
   }
 ]
