@@ -247,6 +247,27 @@ class AppWindow:
                 self.storage.save_channel(existing)
                 updated += 1
 
+        # Добираем недостающие логотипы для уже сохранённых каналов из
+        # локальной базы (data/default_channels.json) — например, канал
+        # добавлен вручную через UI (нет URL логотипа) или добавлен в базу
+        # уже после того, как пользователь сохранил его у себя. Работает
+        # независимо от того, жив ли сейчас онлайн-плейлист: это отдельная,
+        # локальная база "известных" логотипов по имени канала, а не то же
+        # самое, что online_channels выше (тот — federal-плейлист, и не
+        # каждый сохранённый канал в нём вообще встречается).
+        defaults_path = Config.BASE_DIR / "data" / "default_channels.json"
+        if defaults_path.exists():
+            with open(defaults_path, 'r', encoding='utf-8') as f:
+                known_defaults = {ch['name']: ch for ch in json.load(f)}
+            for name, existing in current_map.items():
+                if existing.get('logo_url'):
+                    continue
+                default_logo = known_defaults.get(name, {}).get('logo_url')
+                if default_logo:
+                    existing['logo_url'] = default_logo
+                    self.storage.save_channel(existing)
+                    updated += 1
+
         msg = f"✅ Добавлено: {added}, Обновлено: {updated}"
         self.splash._log(msg)
 
@@ -688,12 +709,11 @@ class AppWindow:
         body.pack(fill='both', expand=True, padx=20, pady=20)
         body.columnconfigure(1, weight=1)
 
-        labels = ["Название:", "URL потока:", "Логотип (URL):", "Тип:", "VPN:"]
-        keys = ['name', 'url', 'logo', 'type', 'vpn']
-        types = ['entry', 'entry', 'entry', 'option', 'option']
-        values = ['', '', '', 'iptv', 'Не важно']
-        options = [None, None, None, ['iptv', 'youtube', 'vk', 'rutube', 'rtmp'],
-                   ['Не важно', 'Требуется', 'Запрещен']]
+        labels = ["Название:", "URL потока:", "Логотип (URL):", "Тип:"]
+        keys = ['name', 'url', 'logo', 'type']
+        types = ['entry', 'entry', 'entry', 'option']
+        values = ['', '', '', 'iptv']
+        options = [None, None, None, ['iptv', 'youtube', 'vk', 'rutube', 'rtmp']]
 
         for i, (label, key, t, val, opts) in enumerate(zip(labels, keys, types, values, options)):
             ctk.CTkLabel(body, text=label, text_color=c['text_secondary']).grid(
@@ -713,13 +733,11 @@ class AppWindow:
                                   text_color=c['text_primary']).grid(row=i, column=1, pady=8, sticky='ew')
 
         def save():
-            vpn_map = {'Не важно': None, 'Требуется': True, 'Запрещен': False}
             channel = {
                 'name': fields['name'].get().strip(),
                 'url': fields['url'].get().strip(),
                 'logo_url': fields['logo'].get().strip(),
                 'type': fields['type'].get(),
-                'vpn_required': vpn_map.get(fields['vpn'].get()),
                 'alt_urls': []
             }
             if channel['name'] and channel['url']:
@@ -770,7 +788,6 @@ class AppWindow:
                 'url': fields['url'].get().strip(),
                 'logo_url': fields['logo'].get().strip(),
                 'type': fields['type'].get(),
-                'vpn_required': channel.get('vpn_required'),
                 'alt_urls': channel.get('alt_urls', [])
             }
             if updated['name'] and updated['url']:

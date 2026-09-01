@@ -4,7 +4,6 @@ import subprocess
 from enum import Enum
 from typing import Tuple
 from utils.config import Config
-from utils.vpn_manager import VPNManager
 from utils.logger import logger
 
 try:
@@ -34,18 +33,12 @@ class StreamChecker:
         """
         source_type = channel.get('type', 'iptv')
         url = channel.get('url', '')
-        vpn_required = channel.get('vpn_required')
-        
-        # 1. Проверяем требования VPN
-        vpn_ok, vpn_msg = self._check_vpn_requirement(vpn_required)
-        if not vpn_ok:
-            return StreamStatus.RED, vpn_msg
-        
-        # 2. Проверяем интернет
+
+        # 1. Проверяем интернет
         if not self._check_internet():
             return StreamStatus.RED, "Нет подключения к интернету"
-        
-        # 3. Проверяем поток по типу
+
+        # 2. Проверяем поток по типу
         checkers = {
             'iptv': self._check_iptv,
             'youtube': self._check_youtube,
@@ -56,21 +49,6 @@ class StreamChecker:
         
         checker = checkers.get(source_type, self._check_iptv)
         return checker(url)
-    
-    def _check_vpn_requirement(self, vpn_required) -> Tuple[bool, str]:
-        """Проверяет соответствие VPN требованиям канала"""
-        if vpn_required is None:
-            return True, ""
-        
-        vpn_active = VPNManager.is_vpn_active()
-        
-        if vpn_required and not vpn_active:
-            return False, "Требуется VPN, но он отключен"
-        
-        if not vpn_required and vpn_active:
-            return False, "VPN нужно отключить для этого канала"
-        
-        return True, ""
     
     def _check_internet(self) -> bool:
         try:
