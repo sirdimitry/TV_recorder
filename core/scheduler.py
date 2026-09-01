@@ -176,6 +176,7 @@ class RecordingScheduler:
             on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
             audio_url=audio_url,
             extra_headers=extra_headers,
+            is_live_channel=(source_type != 'link'),
         )
         if not task_id:
             self._on_recording_error(name, 'Не удалось запустить запись')

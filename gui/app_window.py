@@ -488,7 +488,8 @@ class AppWindow:
             task_id = self.recorder.start_recording(
                 name, channel['url'], output, source="manual",
                 on_complete=self._on_record_complete,
-                audio_url=channel.get('audio_url')
+                audio_url=channel.get('audio_url'),
+                is_live_channel=True
             )
             if task_id:
                 logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")

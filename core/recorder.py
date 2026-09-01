@@ -167,7 +167,8 @@ class Recorder:
                        extra_headers: Optional[dict] = None,
                        seek_seconds: Optional[float] = None,
                        clip_end_seconds: Optional[float] = None,
-                       duration_limit_seconds: Optional[float] = None) -> str:
+                       duration_limit_seconds: Optional[float] = None,
+                       is_live_channel: bool = False) -> str:
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -263,9 +264,26 @@ class Recorder:
             # другой исходный вариант для copy-режима.
             stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
 
+            # У части "instant DVR/catch-up" HLS-источников (обнаружено на
+            # "Доверие" — rt-mos-htlive.cdn.ngenix.net) сегменты в плейлисте
+            # именованы абсолютным UTC-таймштампом и живут в узком катящемся
+            # окне (~60с). #EXT-X-MEDIA-SEQUENCE у них не растёт, из-за чего
+            # HLS-демуксер ffmpeg не опознаёт поток как живой и по умолчанию
+            # пытается начать с САМОГО СТАРОГО сегмента в списке — тот к
+            # моменту реального HTTP-запроса (плюс наши reconnect-задержки)
+            # часто уже успевает вылететь из окна: "Error when loading first
+            # segment". -live_start_index принудительно стартует НЕ с начала
+            # списка, а в −3 сегментах от конца (штатное поведение ffmpeg для
+            # уже верно опознанных live-потоков — тут просто форсируем его
+            # независимо от эвристики). Только для настоящих ТВ-каналов, не
+            # для "Мои ссылки" (там seek_seconds может означать позицию в
+            # конечном VOD-ролике, где ЛЮБОЙ сдвиг от начала — уже баг).
+            live_opts = (['-live_start_index', '-3']
+                         if is_live_channel and not seek_seconds and '.m3u8' in stream_url.lower() else [])
+
             cmd = [
                 'ffmpeg', '-y',
-                *RECONNECT_OPTS, *hls_opts(stream_url),
+                *RECONNECT_OPTS, *hls_opts(stream_url), *live_opts,
                 *seek_opts,
                 '-headers', headers,
                 '-i', stream_url,
