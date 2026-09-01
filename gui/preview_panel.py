@@ -11,6 +11,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from core.audio_listen import AudioListener
 from core.live_stream import LiveThumbnailStream
 from core.snapshot import to_ctk_image
 from utils.config import Config
@@ -30,14 +31,28 @@ class PreviewPanel(ctk.CTkFrame):
         self._frame_count = 0
         self._generation = 0
         self._preview_name = ''
+        self._url = ''
+        self._headers: Optional[dict] = None
+        self._audio_url: Optional[str] = None
+        # Прослушивание — отдельный ffplay-процесс поверх того же URL, что и
+        # превью, никак не связанный с самой записью (см. core/audio_listen.py,
+        # та же логика уже проверена в gui/recording_monitor.py).
+        self._listener: Optional[AudioListener] = None
+        self._listening = False
+        self._muted = False
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
         self.name_lbl = ctk.CTkLabel(header, text="Превью", font=ctk.CTkFont(size=12, weight='bold'),
                                       text_color=c['text_primary'])
         self.name_lbl.pack(side='left')
+        self.mute_btn = ctk.CTkButton(
+            header, text="", width=22, height=22, corner_radius=Config.RADIUS_SM,
+            fg_color='transparent', hover_color=c['bg_hover'],
+            image=get_icon('volume', c['text_secondary'], 14), command=self._toggle_mute)
+        self.mute_btn.pack(side='right')
         self.status_lbl = ctk.CTkLabel(header, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'])
-        self.status_lbl.pack(side='right')
+        self.status_lbl.pack(side='right', padx=(0, 6))
 
         self.image_lbl = ctk.CTkLabel(
             self, text="Клик по логотипу канала\nпокажет, что там сейчас",
@@ -45,12 +60,20 @@ class PreviewPanel(ctk.CTkFrame):
             fg_color=c['bg_tertiary'], text_color=c['text_muted'],
             font=ctk.CTkFont(size=11), justify='center')
         self.image_lbl.pack(padx=10, pady=(0, 10))
+        # Клик по самой картинке — послушать звук того, что сейчас показано
+        # (видео и так молча крутится в превью — тут именно про звук).
+        self.image_lbl.configure(cursor='pointinghand')
+        self.image_lbl.bind('<Button-1>', lambda e: self._toggle_listen())
 
-    def show(self, name: str, url: str, headers: Optional[dict] = None):
+    def show(self, name: str, url: str, headers: Optional[dict] = None, audio_url: Optional[str] = None):
         self._stop_stream()
+        self._stop_listening()
         self._generation += 1
         generation = self._generation
         self._preview_name = name
+        self._url = url
+        self._headers = headers
+        self._audio_url = audio_url
         self.name_lbl.configure(text=name)
         self.status_lbl.configure(text="Подключение…")
         self.image_lbl.configure(text="", image=get_icon('tv', Config.COLORS['text_muted'], 32))
@@ -102,6 +125,41 @@ class PreviewPanel(ctk.CTkFrame):
             self._stream.stop()
             self._stream = None
 
+    def _toggle_listen(self):
+        if not self._url:
+            return
+        if self._listening:
+            self._stop_listening()
+            return
+        self._stop_listening()
+        # audio_url — для каналов, у которых видео и звук на CDN лежат
+        # раздельными HLS-рендициями (см. 'Россия 24'/'Россия К' в
+        # core/m3u_parser.py) — в self._url тогда только видео, слушать
+        # там нечего.
+        listen_url = self._audio_url or self._url
+        self._listener = AudioListener(listen_url, self._headers, label=self._preview_name)
+        self._listener.start()
+        self._listening = True
+        self._muted = False  # клик — явное намерение услышать звук, снимаем mute
+        self.mute_btn.configure(image=get_icon('volume', Config.COLORS['text_secondary'], 14))
+        logger.info(f"PreviewPanel: включено прослушивание '{self._preview_name}'")
+
+    def _stop_listening(self):
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+        self._listening = False
+
+    def _toggle_mute(self):
+        c = Config.COLORS
+        self._muted = not self._muted
+        if self._muted:
+            self._stop_listening()
+            self.mute_btn.configure(image=get_icon('volume_off', c['red'], 14))
+        else:
+            self.mute_btn.configure(image=get_icon('volume', c['text_secondary'], 14))
+
     def stop(self):
         self._running = False
         self._stop_stream()
+        self._stop_listening()

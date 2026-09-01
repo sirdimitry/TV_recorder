@@ -229,6 +229,24 @@ class AppWindow:
                     self.storage.save_channel(ch)
                     updated += 1
 
+        # MANUAL_FIXES с audio_url (см. 'Россия 24'/'Россия К' — видео и звук
+        # у них раздельные HLS-рендиции) применяем НАПРЯМУЮ к уже сохранённым
+        # каналам, а не только через цикл выше — тот зависит от того, попал
+        # ли именно этот канал в federal_channels ЭТОГО конкретного онлайн-
+        # плейлиста (список из внешнего источника, порядок и состав которого
+        # не гарантирован), и на практике 'Россия К' туда не всегда попадает.
+        # Без этого прохода однажды пропущенный канал так и остаётся без
+        # звука до случайного попадания в подходящий фетч.
+        for name, fix in M3UParser.MANUAL_FIXES.items():
+            audio_fix = fix.get('audio_url')
+            if not audio_fix:
+                continue
+            existing = current_map.get(name)
+            if existing and existing.get('audio_url') != audio_fix:
+                existing['audio_url'] = audio_fix
+                self.storage.save_channel(existing)
+                updated += 1
+
         msg = f"✅ Добавлено: {added}, Обновлено: {updated}"
         self.splash._log(msg)
 
@@ -451,8 +469,9 @@ class AppWindow:
         logger.info(f"Выбран {'канал' if source_type == 'channel' else 'ссылка'}: {name}")
         self.schedule_panel.preselect_source(source_type, name)
 
-    def _show_channel_preview(self, name: str, url: str, headers: Optional[Dict] = None):
-        self.preview_panel.show(name, url, headers)
+    def _show_channel_preview(self, name: str, url: str, headers: Optional[Dict] = None,
+                               audio_url: Optional[str] = None):
+        self.preview_panel.show(name, url, headers, audio_url)
 
     def _on_schedule_changed(self):
         self.scheduler.reload_schedules()

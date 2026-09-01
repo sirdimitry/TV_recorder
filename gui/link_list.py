@@ -239,7 +239,7 @@ class LinkList(ctk.CTkFrame):
             widgets = self.link_widgets.get(name)
             info = widgets.get('resolved_info') if widgets else None
             if info and info.ok and info.video_url:
-                self.on_preview(name, info.video_url, info.headers)
+                self.on_preview(name, info.video_url, info.headers, info.audio_url)
 
     def _on_edit(self, name: str, link: Dict):
         if self.on_edit: self.on_edit(name, link)

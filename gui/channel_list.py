@@ -253,7 +253,7 @@ class ChannelList(ctk.CTkFrame):
 
         logger.info(f"Открыт предпросмотр: {name}")
         if self.on_preview:
-            self.on_preview(name, url, headers)
+            self.on_preview(name, url, headers, channel.get('audio_url'))
 
     def _check_single(self, name: str, status_dot: ctk.CTkLabel, channel: Dict):
         status_dot.configure(image=get_icon('record', self.colors['yellow'], 10))
