@@ -39,18 +39,21 @@ class PreviewPanel(ctk.CTkFrame):
         # та же логика уже проверена в gui/recording_monitor.py).
         self._listener: Optional[AudioListener] = None
         self._listening = False
-        self._muted = False
+        # Хочет ли пользователь слышать звук ВООБЩЕ, а не только для текущего
+        # канала — переживает переключение на другой канал/ссылку (show()),
+        # чтобы звук "следовал" за картинкой без повторного клика на каждую
+        # смену канала (раньше show() всегда останавливал прослушивание).
+        self._want_audio = False
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
         self.name_lbl = ctk.CTkLabel(header, text="Превью", font=ctk.CTkFont(size=12, weight='bold'),
                                       text_color=c['text_primary'])
         self.name_lbl.pack(side='left')
-        self.mute_btn = ctk.CTkButton(
-            header, text="", width=22, height=22, corner_radius=Config.RADIUS_SM,
-            fg_color='transparent', hover_color=c['bg_hover'],
-            image=get_icon('volume', c['text_secondary'], 14), command=self._toggle_mute)
-        self.mute_btn.pack(side='right')
+        # Просто индикатор "звук сейчас идёт" — НЕ кнопка, включать/выключать
+        # звук нужно кликом по самой картинке (см. image_lbl ниже). Спрятан,
+        # пока прослушивание не включено.
+        self.listen_icon = ctk.CTkLabel(header, text="", image=get_icon('volume', c['accent'], 14))
         self.status_lbl = ctk.CTkLabel(header, text="", font=ctk.CTkFont(size=10), text_color=c['text_muted'])
         self.status_lbl.pack(side='right', padx=(0, 6))
 
@@ -95,6 +98,12 @@ class PreviewPanel(ctk.CTkFrame):
         # реального эфира, так что запас нужен больше.
         self.after(15000, lambda: self._check_connected(generation))
 
+        if self._want_audio:
+            # Звук уже был включён на предыдущем канале — продолжаем слушать
+            # СРАЗУ на новом, без повторного клика по картинке (раньше любое
+            # переключение канала звук молча гасило).
+            self._start_listening()
+
     def _check_connected(self, generation: int):
         if generation == self._generation and self._frame_count == 0:
             self.status_lbl.configure(text="Нет сигнала")
@@ -133,12 +142,20 @@ class PreviewPanel(ctk.CTkFrame):
             self._stream = None
 
     def _toggle_listen(self):
+        """Единственный способ включить/выключить звук — клик по картинке.
+        Явное намерение пользователя запоминаем в _want_audio, чтобы оно
+        пережило последующие переключения канала (см. show())."""
         if not self._url:
             return
         if self._listening:
+            self._want_audio = False
             self._stop_listening()
-            return
-        self._stop_listening()
+        else:
+            self._want_audio = True
+            self._start_listening()
+
+    def _start_listening(self):
+        self._stop_listening()  # на случай, если что-то уже играло — не запускать второй ffplay поверх первого
         # audio_url — для каналов, у которых видео и звук на CDN лежат
         # раздельными HLS-рендициями (см. 'Россия 24'/'Россия К' в
         # core/m3u_parser.py) — в self._url тогда только видео, слушать
@@ -147,8 +164,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._listener = AudioListener(listen_url, self._headers, label=self._preview_name)
         self._listener.start()
         self._listening = True
-        self._muted = False  # клик — явное намерение услышать звук, снимаем mute
-        self.mute_btn.configure(image=get_icon('volume', Config.COLORS['text_secondary'], 14))
+        self.listen_icon.pack(side='right', padx=(0, 6), before=self.status_lbl)
         self.audio_status_lbl.configure(text="Прослушивание — клик ещё раз, чтобы выключить",
                                          text_color=Config.COLORS['accent'])
         logger.info(f"PreviewPanel: включено прослушивание '{self._preview_name}'")
@@ -158,16 +174,8 @@ class PreviewPanel(ctk.CTkFrame):
             self._listener.stop()
             self._listener = None
         self._listening = False
+        self.listen_icon.pack_forget()
         self.audio_status_lbl.configure(text="")
-
-    def _toggle_mute(self):
-        c = Config.COLORS
-        self._muted = not self._muted
-        if self._muted:
-            self._stop_listening()
-            self.mute_btn.configure(image=get_icon('volume_off', c['red'], 14))
-        else:
-            self.mute_btn.configure(image=get_icon('volume', c['text_secondary'], 14))
 
     def stop(self):
         self._running = False
