@@ -40,6 +40,12 @@ class PreviewPanel(ctk.CTkFrame):
         self._listener: Optional[AudioListener] = None
         self._listening = False
         self._muted = False
+        # Уровень звука (0..1) — пишется из фонового потока AudioListener
+        # (см. on_level), читается таймером _tick_level в Tk-потоке. Простое
+        # чтение/запись float в CPython атомарно, отдельная синхронизация
+        # тут не нужна — это просто индикатор, не критичное состояние.
+        self._level = 0.0
+        self._level_display = 0.0
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
@@ -59,11 +65,20 @@ class PreviewPanel(ctk.CTkFrame):
             width=IMG_SIZE[0], height=IMG_SIZE[1], corner_radius=8,
             fg_color=c['bg_tertiary'], text_color=c['text_muted'],
             font=ctk.CTkFont(size=11), justify='center')
-        self.image_lbl.pack(padx=10, pady=(0, 10))
+        self.image_lbl.pack(padx=10, pady=(0, 4))
         # Клик по самой картинке — послушать звук того, что сейчас показано
         # (видео и так молча крутится в превью — тут именно про звук).
         self.image_lbl.configure(cursor='pointinghand')
         self.image_lbl.bind('<Button-1>', lambda e: self._toggle_listen())
+
+        # Тонкая полоска уровня звука — единственный способ УВИДЕТЬ, что
+        # звук реально идёт, а не просто предположить это по тому, что
+        # ffplay не упал (что раньше и было единственным сигналом).
+        self.level_bar = ctk.CTkProgressBar(
+            self, height=4, corner_radius=2, width=IMG_SIZE[0],
+            fg_color=c['bg_tertiary'], progress_color=c['accent'])
+        self.level_bar.set(0)
+        self.level_bar.pack(padx=10, pady=(0, 10))
 
     def show(self, name: str, url: str, headers: Optional[dict] = None, audio_url: Optional[str] = None):
         self._stop_stream()
@@ -137,18 +152,38 @@ class PreviewPanel(ctk.CTkFrame):
         # core/m3u_parser.py) — в self._url тогда только видео, слушать
         # там нечего.
         listen_url = self._audio_url or self._url
-        self._listener = AudioListener(listen_url, self._headers, label=self._preview_name)
+        self._listener = AudioListener(listen_url, self._headers, label=self._preview_name,
+                                        on_level=self._on_level_raw)
         self._listener.start()
         self._listening = True
         self._muted = False  # клик — явное намерение услышать звук, снимаем mute
         self.mute_btn.configure(image=get_icon('volume', Config.COLORS['text_secondary'], 14))
         logger.info(f"PreviewPanel: включено прослушивание '{self._preview_name}'")
+        self._tick_level()
 
     def _stop_listening(self):
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
         self._listening = False
+        self._level = 0.0
+
+    def _on_level_raw(self, level: float):
+        # Вызывается из фонового потока AudioListener — просто копим
+        # значение, читает и сглаживает его таймер _tick_level в Tk-потоке.
+        self._level = level
+
+    def _tick_level(self):
+        if not self.winfo_exists():
+            return
+        if not self._listening:
+            self.level_bar.set(0)
+            return
+        # Экспоненциальное сглаживание — иначе полоска дёргается рывками
+        # на каждый обрывок PCM вместо плавного VU-metering.
+        self._level_display += (self._level - self._level_display) * 0.5
+        self.level_bar.set(self._level_display)
+        self.after(80, self._tick_level)
 
     def _toggle_mute(self):
         c = Config.COLORS
