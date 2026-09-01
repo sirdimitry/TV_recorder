@@ -7,12 +7,11 @@
 CTkToplevel(overrideredirect=True), но безрамочные окна на macOS
 периодически не отрисовываются нормально (известная особенность Tk/Aqua).
 Постоянная панель в layout снимает эту проблему полностью."""
-import time
 from typing import Optional
 
 import customtkinter as ctk
 
-from core.audio_listen import AudioListener, NO_AUDIO_TIMEOUT
+from core.audio_listen import AudioListener
 from core.live_stream import LiveThumbnailStream
 from core.snapshot import to_ctk_image
 from utils.config import Config
@@ -41,14 +40,6 @@ class PreviewPanel(ctk.CTkFrame):
         self._listener: Optional[AudioListener] = None
         self._listening = False
         self._muted = False
-        # Уровень звука (0..1) — пишется из фонового потока AudioListener
-        # (см. on_level), читается таймером _tick_level в Tk-потоке. Простое
-        # чтение/запись float в CPython атомарно, отдельная синхронизация
-        # тут не нужна — это просто индикатор, не критичное состояние.
-        self._level = 0.0
-        self._level_display = 0.0
-        self._listen_start = 0.0
-        self._audio_status_shown = ''
 
         header = ctk.CTkFrame(self, fg_color='transparent')
         header.pack(fill='x', padx=10, pady=(8, 4))
@@ -68,25 +59,16 @@ class PreviewPanel(ctk.CTkFrame):
             width=IMG_SIZE[0], height=IMG_SIZE[1], corner_radius=8,
             fg_color=c['bg_tertiary'], text_color=c['text_muted'],
             font=ctk.CTkFont(size=11), justify='center')
-        self.image_lbl.pack(padx=10, pady=(0, 4))
+        self.image_lbl.pack(padx=10, pady=(0, 6))
         # Клик по самой картинке — послушать звук того, что сейчас показано
         # (видео и так молча крутится в превью — тут именно про звук).
         self.image_lbl.configure(cursor='pointinghand')
         self.image_lbl.bind('<Button-1>', lambda e: self._toggle_listen())
 
-        # Тонкая полоска уровня звука — единственный способ УВИДЕТЬ, что
-        # звук реально идёт, а не просто предположить это по тому, что
-        # ffplay не упал (что раньше и было единственным сигналом).
-        self.level_bar = ctk.CTkProgressBar(
-            self, height=4, corner_radius=2, width=IMG_SIZE[0],
-            fg_color=c['bg_tertiary'], progress_color=c['accent'])
-        self.level_bar.set(0)
-        self.level_bar.pack(padx=10, pady=(0, 2))
-        # Без этого клик по видео не давал вообще НИКАКОЙ обратной связи, пока
-        # либо не пойдёт первый звук, либо (на медленном/нестабильном потоке —
-        # реально бывает 15-20+с на некоторых CDN) не истечёт таймаут в логе.
-        # Пользователю это неотличимо от "ничего не произошло" — теперь статус
-        # виден сразу же по клику, а не только постфактум в логе.
+        # Простой статус прослушивания — без полоски уровня звука (была,
+        # но убрали ради простоты/надёжности: три процесса на канал вместо
+        # одного, поток фактически читался дважды. Рабочая PCM-версия с
+        # индикатором осталась в git-истории, если понадобится вернуть).
         self.audio_status_lbl = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=9), text_color=c['text_muted'])
         self.audio_status_lbl.pack(padx=10, pady=(0, 8), anchor='w')
 
@@ -162,59 +144,21 @@ class PreviewPanel(ctk.CTkFrame):
         # core/m3u_parser.py) — в self._url тогда только видео, слушать
         # там нечего.
         listen_url = self._audio_url or self._url
-        self._listener = AudioListener(listen_url, self._headers, label=self._preview_name,
-                                        on_level=self._on_level_raw)
+        self._listener = AudioListener(listen_url, self._headers, label=self._preview_name)
         self._listener.start()
         self._listening = True
-        self._listen_start = time.monotonic()
         self._muted = False  # клик — явное намерение услышать звук, снимаем mute
         self.mute_btn.configure(image=get_icon('volume', Config.COLORS['text_secondary'], 14))
-        self.audio_status_lbl.configure(text="Звук: подключение…", text_color=Config.COLORS['text_muted'])
+        self.audio_status_lbl.configure(text="Прослушивание — клик ещё раз, чтобы выключить",
+                                         text_color=Config.COLORS['accent'])
         logger.info(f"PreviewPanel: включено прослушивание '{self._preview_name}'")
-        self._tick_level()
 
     def _stop_listening(self):
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
         self._listening = False
-        self._level = 0.0
-        self._audio_status_shown = ''
         self.audio_status_lbl.configure(text="")
-
-    def _on_level_raw(self, level: float):
-        # Вызывается из фонового потока AudioListener — просто копим
-        # значение, читает и сглаживает его таймер _tick_level в Tk-потоке.
-        self._level = level
-
-    def _tick_level(self):
-        c = Config.COLORS
-        if not self.winfo_exists():
-            return
-        if not self._listening:
-            self.level_bar.set(0)
-            return
-        # Экспоненциальное сглаживание — иначе полоска дёргается рывками
-        # на каждый обрывок PCM вместо плавного VU-metering.
-        self._level_display += (self._level - self._level_display) * 0.5
-        self.level_bar.set(self._level_display)
-
-        got_audio = bool(self._listener and self._listener._got_audio)
-        elapsed = time.monotonic() - self._listen_start
-        if got_audio:
-            new_status = "Звук: идёт" if self._level_display > 0.02 else "Звук: идёт (тихо)"
-            color = c['accent']
-        elif elapsed > NO_AUDIO_TIMEOUT:
-            new_status = "Звук: не пришёл (см. лог)"
-            color = c['red']
-        else:
-            new_status = "Звук: подключение…"
-            color = c['text_muted']
-        if new_status != self._audio_status_shown:
-            self._audio_status_shown = new_status
-            self.audio_status_lbl.configure(text=new_status, text_color=color)
-
-        self.after(80, self._tick_level)
 
     def _toggle_mute(self):
         c = Config.COLORS
