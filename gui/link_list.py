@@ -177,7 +177,16 @@ class LinkList(ctk.CTkFrame):
     def _resolve_row(self, name: str, link: Dict, thumb_label, live_dot, status_badge):
         """Тянет превью и live/VOD статус через yt-dlp в фоне, не блокируя UI."""
         def worker():
-            info = resolve_link(link.get('url', ''))
+            # allow_tass_browser=False — эта проверка идёт автоматически на
+            # каждый рендер списка (в т.ч. при старте приложения), для TASS
+            # это молча открыло бы настоящее видимое окно Chrome без единого
+            # клика пользователя (антибот TASS блокирует headless — см.
+            # core/tass_provider.py). Статус для таких ссылок просто не
+            # определяется автоматически (см. status_badge ниже) — полноценный
+            # разбор с видимым браузером происходит только по явному нажатию
+            # "Записать" (AppWindow._record_link_now зовёт resolve_link() без
+            # этого флага).
+            info = resolve_link(link.get('url', ''), allow_tass_browser=False)
             image = None
             if info.ok and info.thumbnail:
                 try:

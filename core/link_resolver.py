@@ -143,7 +143,8 @@ class LinkInfo:
     skip_browser_fallback: bool = False
 
 
-def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT) -> LinkInfo:
+def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT,
+                  allow_tass_browser: bool = True) -> LinkInfo:
     """Разбирает страницу/ссылку: сперва через yt-dlp, а если для этого
     сайта у него нет экстрактора — пробует найти прямую ссылку на поток
     прямо в HTML страницы, а если и там пусто (сайт рисует плеер через
@@ -155,7 +156,14 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     есть из чего выбирать) — у HTML-скрейпа и sniff-пути отдаётся то, что
     нашлось; если это HLS-мастер-плейлист, конкретный битрейт под
     target_height выбирается позже, при сборке команды ffmpeg
-    (см. core/stream_resolver.py: resolve_variant_url)."""
+    (см. core/stream_resolver.py: resolve_variant_url).
+
+    allow_tass_browser=False пропускает _resolve_tass — та по-настоящему
+    открывает ВИДИМОЕ окно Chrome (антибот TASS блокирует headless, см.
+    core/tass_provider.py), это оправдано только когда пользователь сам
+    сейчас явно запросил именно эту ссылку (клик записи/добавление),
+    а не для фоновых непрошеных проверок вроде статус-опроса списка ссылок
+    при старте приложения — там нельзя молча выскакивать браузерным окном."""
     if not url:
         return LinkInfo(ok=False, error="Пустая ссылка")
 
@@ -177,6 +185,10 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     # sniff ещё ~80с впустую. См. core/tass_provider.py про то, как читаем
     # поток из уже открытого пользователем Chrome вместо обхода защиты.
     if 'tass.ru' in url.lower():
+        if not allow_tass_browser:
+            return LinkInfo(ok=False, skip_browser_fallback=True,
+                             error="TASS: статус не проверялся автоматически (антибот требует "
+                                   "видимого окна браузера) — нажмите на ссылку, чтобы проверить")
         tass_result = _resolve_tass(url)
         if tass_result is not None:
             return tass_result
