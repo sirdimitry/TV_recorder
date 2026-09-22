@@ -94,12 +94,13 @@ class RecordingTask:
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     def format_recording_period(self) -> str:
-        """Returns the actual recording time range for the interface."""
+        """Дата и фактический диапазон записи для интерфейса."""
         started_at = self.started_at or datetime.fromtimestamp(self.start_time)
         ended_at = self.finished_at
-        start_label = started_at.strftime('%H:%M')
-        end_label = ended_at.strftime('%H:%M') if ended_at else 'now'
-        return f"{start_label} – {end_label}"
+        if ended_at and ended_at.date() != started_at.date():
+            return f"{started_at:%d.%m.%Y · %H:%M} – {ended_at:%d.%m.%Y · %H:%M}"
+        end_label = ended_at.strftime('%H:%M') if ended_at else 'сейчас'
+        return f"{started_at:%d.%m.%Y · %H:%M} – {end_label}"
 
     def format_clip_range(self) -> Optional[str]:
         """Диапазон позиций В САМОМ РОЛИКЕ ("38:30–42:30"), а не время на

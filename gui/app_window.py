@@ -435,7 +435,7 @@ class AppWindow:
                      height=24).pack(side='left', padx=(12, 0), ipadx=8)
 
         self.btn_toolbar_check = ctk.CTkButton(
-            toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 16),
+            toolbar, text="Проверить доступность", image=get_icon('refresh', c['text_primary'], 16),
             compound='left', width=148, height=38, corner_radius=Config.RADIUS_SM,
             fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
             command=self._toolbar_check_all)
@@ -558,7 +558,13 @@ class AppWindow:
         page = self._tab_pages.get(key)
         if page is not None:
             page.tkraise()
-        self.btn_toolbar_check.configure(text="Обновить статус" if key == 'links' else "Проверить все")
+        if key == 'downloads':
+            self.btn_toolbar_check.pack_forget()
+        else:
+            if not self.btn_toolbar_check.winfo_manager():
+                self.btn_toolbar_check.pack(side='right', padx=(6, 0))
+            self.btn_toolbar_check.configure(
+                text="Обновить статусы ссылок" if key == 'links' else "Проверить доступность")
 
         # "Загрузки" архитектурно не связаны ни с планировщиком, ни с
         # активными записями (core/downloader.py не пересекается с

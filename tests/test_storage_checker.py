@@ -113,6 +113,17 @@ class StorageTests(unittest.TestCase):
 
 
 class RecorderResourceTests(unittest.TestCase):
+    def test_recording_period_includes_start_date(self):
+        task = RecordingTask('id', 'Channel', 'url', '/tmp/out.mp4')
+        task.started_at = datetime(2026, 9, 22, 18, 17)
+        self.assertEqual(task.format_recording_period(), '22.09.2026 · 18:17 – сейчас')
+
+        task.finished_at = datetime(2026, 9, 23, 1, 5)
+        self.assertEqual(
+            task.format_recording_period(),
+            '22.09.2026 · 18:17 – 23.09.2026 · 01:05',
+        )
+
     def test_parallel_recording_names_and_task_ids_cannot_collide(self):
         recorded_at = datetime(2026, 9, 22, 12, 0, 0)
         paths = {Recorder.build_output_path('Канал', recorded_at) for _ in range(20)}

@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.26] - 2026-09-22
+
+- See the accompanying Git commit message for details.
+
 ## [1.1.25] - 2026-09-22
 
 - See the accompanying Git commit message for details.

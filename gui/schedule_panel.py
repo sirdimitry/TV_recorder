@@ -352,6 +352,11 @@ class SchedulePanel(ctk.CTkFrame):
             for var in self.day_vars.values():
                 var.set(False)
 
+    def _show_today(self):
+        now = datetime.now()
+        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
+
     def _scroll_channel_selection(self, event, direction=None):
         """Меняет канал/ссылку колёсиком мыши или жестом двумя пальцами."""
         names = self._names_for(self.source_type_var.get())
@@ -551,6 +556,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.channel_var.set(item.get('channel_name', ''))
         self.start_time.set_time(item.get('start_time', ''))
         self.end_time.set_time(item.get('end_time', ''))
+        self._show_today()
 
         for idx, var in self.day_vars.items():
             try:
@@ -588,12 +594,19 @@ class SchedulePanel(ctk.CTkFrame):
         return True
 
     def _clear_form(self):
-        names = self._names_for(self.source_type_var.get())
-        self.channel_var.set(names[0] if names else '')
-
+        """Действительно очищает форму и снимает режим редактирования."""
+        self._duration_detect_generation += 1
+        selected = self.tree.selection()
+        if selected:
+            self.tree.selection_remove(*selected)
+        self.channel_var.set('')
+        self.start_time.set_time('')
+        self.end_time.set_time('')
+        for var in self.day_vars.values():
+            var.set(False)
+        self.duration_hint.configure(text='')
+        self._show_today()
         self._clear_form_buttons()
-        self._apply_time_defaults()
-        self._maybe_detect_link_duration()
 
     def _clear_form_buttons(self):
         self.btn_add.configure(state='normal')
