@@ -16,7 +16,16 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 STAGE_DIR=$(mktemp -d)
-trap 'rm -rf "$STAGE_DIR"' EXIT
+RW_DMG=""
+MOUNT_DEVICE=""
+cleanup() {
+    if [ -n "$MOUNT_DEVICE" ]; then
+        hdiutil detach "$MOUNT_DEVICE" -quiet 2>/dev/null || true
+    fi
+    rm -rf "$STAGE_DIR"
+    [ -z "$RW_DMG" ] || rm -f "$RW_DMG"
+}
+trap cleanup EXIT
 
 cp -R "$APP_PATH" "$STAGE_DIR/"
 ln -s /Applications "$STAGE_DIR/Applications"
@@ -27,12 +36,29 @@ hdiutil create -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" -ov -format UDRW 
 # Без -nobrowse и со стандартной точкой монтирования /Volumes/<имя> — Finder
 # должен реально "видеть" том, иначе AppleScript ниже не найдёт `disk
 # "$VOLUME_NAME"` (проверено: с -nobrowse Finder том не индексирует вообще).
-hdiutil attach "$RW_DMG" -readwrite -noautoopen -quiet
+ATTACH_PLIST=$(mktemp)
+hdiutil attach "$RW_DMG" -readwrite -noautoopen -plist > "$ATTACH_PLIST"
+MOUNT_DEVICE=$(python3 - "$ATTACH_PLIST" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as source:
+    entities = plistlib.load(source).get('system-entities', [])
+print(next(entity['dev-entry'] for entity in entities if entity.get('mount-point')))
+PY
+)
+MOUNT_POINT=$(python3 - "$ATTACH_PLIST" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as source:
+    entities = plistlib.load(source).get('system-entities', [])
+print(next(entity['mount-point'] for entity in entities if entity.get('mount-point')))
+PY
+)
+rm -f "$ATTACH_PLIST"
+MOUNT_NAME=$(basename "$MOUNT_POINT")
 sleep 2
 
 osascript <<OSA
 tell application "Finder"
-    tell disk "$VOLUME_NAME"
+    tell disk "$MOUNT_NAME"
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
@@ -51,10 +77,12 @@ end tell
 OSA
 
 sync
-hdiutil detach "/Volumes/$VOLUME_NAME" -quiet
+hdiutil detach "$MOUNT_DEVICE" -quiet
+MOUNT_DEVICE=""
 
 rm -f "$OUT_DMG"
 hdiutil convert "$RW_DMG" -format UDZO -o "$OUT_DMG" >/dev/null
 rm -f "$RW_DMG"
+RW_DMG=""
 
 echo "Готово: $OUT_DMG"
