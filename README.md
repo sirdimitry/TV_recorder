@@ -1,50 +1,66 @@
 # TV Recorder
 
-A native-feeling macOS desktop app for watching and recording live TV
-channels — from any country's IPTV playlist, not just one — plus a
-universal downloader for pulling video off almost any link. Built with
-Python, Tkinter and CustomTkinter.
+> **English** · [Русская версия](README_RU.md)
 
-## What it does
+TV Recorder is a macOS app for watching and recording live TV, saving web
+video, and scheduling recordings. It combines a compact desktop interface with
+a resilient FFmpeg pipeline designed for sources that may briefly disconnect or
+change quality.
 
-**Каналы (Channels)** — auto-updated IPTV playlist of live channels (ships
-with a Russian federal-channel playlist and local fallback by default, but
-works with any M3U source), live preview via `ffplay`, and simultaneous
-multi-channel recording via `ffmpeg`.
+## Highlights
 
-**Мои ссылки (My Links)** — paste a link to almost anything (YouTube, VK,
-RuTube, Twitch, or a plain news-site article with an embedded player) and
-record it. Resolution runs through a fallback chain: `yt-dlp` first, then a
-direct HTML/JS scrape for sites `yt-dlp` doesn't know, then — as a last
-resort — a real (invisible) embedded browser that watches its own network
-traffic for the stream. When video and audio arrive as separate tracks
-(common on VK), they're muxed into one file with `ffmpeg -c copy` — no
-re-encoding. If nothing in that chain finds a direct stream, recording
-falls back automatically to screen-capturing a real, visible browser
-window — no separate tab or manual step needed, it just happens at record
-time.
+- **Live channels** — import any M3U playlist, preview a channel, check its
+  availability, and record several channels at the same time.
+- **Web links** — resolve YouTube, VK, RuTube, Twitch, 1tv.ru, Smotrim,
+  TV Zvezda, embedded players, and many other pages through a layered resolver.
+- **Downloads** — save a video once at the chosen quality with progress, speed,
+  ETA, cancellation, and final media validation.
+- **Schedule** — record channels or saved links by weekday and time range, with
+  accurate stopping at the configured deadline.
+- **Screen capture fallback** — when a direct stream cannot be extracted, the
+  app can ask permission and record the visible browser player instead.
 
-**Загрузки (Downloads)** — a one-shot universal downloader. Paste any link,
-pick a target quality (360p–1080p, when the source actually offers more than
-one), pick a save folder, and get a single finished MP4 with a live
-progress bar, download speed and ETA — reusing the same resolver chain as
-"Мои ссылки".
+## Recording reliability
 
-**Расписание (Schedule)** — schedule recordings by time range and weekdays
-for either Каналы or Мои ссылки, with automatic stop at the selected end
-time and a live panel of active recordings (pause, stop, remove, reveal in
-Finder, grid monitor view).
+TV Recorder is built to preserve useful output when a source is unstable:
 
-Also: VPN and real internet-connectivity monitoring in the status bar,
-native macOS notifications, and a compact icon-led dark UI.
+- reconnects on network, TLS, HTTP 4xx/5xx, and read-timeout failures;
+- retries failed HLS segments instead of ending the whole recording;
+- selects a practical HLS rendition rather than blindly choosing the largest;
+- starts live HLS close to the current edge to avoid expired DVR segments;
+- validates completed files with `ffprobe` and reports **completed**,
+  **partially saved**, or **processing error**;
+- shuts down FFmpeg, downloads, previews, timers, and browser capture cleanly.
 
-## Requirements
+No recorder can recover media that the source never delivered. Signed stream
+URLs may also expire during a very long recording, but short outages and bad
+segments are handled automatically.
 
-- macOS 12 or newer
-- Python 3.12 or newer
-- FFmpeg (including `ffplay` and `ffprobe`)
+## Supported workflow
 
-## Installation
+1. Open **Channels**, **My Links**, or **Downloads**.
+2. Preview a source or start recording immediately.
+3. Select a source in **Schedule** to create a recurring recording.
+4. Follow active jobs in the recording panel or grid monitor.
+5. Reveal the finished MP4 in Finder.
+
+Recordings are stored in `~/Movies/TV Recorder/recordings` and downloads in
+`~/Movies/TV Recorder/downloads` in the packaged app. Both folders can be
+changed in Settings.
+
+## Install the macOS app
+
+Download the latest DMG, open it, and drag **TV Recorder** to **Applications**.
+The current local build is ad-hoc signed rather than Apple-notarized, so macOS
+may require **Control-click → Open** on the first launch.
+
+Screen recording fallback requires macOS permission in **System Settings →
+Privacy & Security → Screen & System Audio Recording**. Audio capture also
+requires a loopback device such as BlackHole.
+
+## Run from source
+
+Requirements: macOS 12+, Python 3.12+, and FFmpeg with `ffplay` and `ffprobe`.
 
 ```bash
 git clone https://github.com/sirdimitry/TV_recorder.git
@@ -54,56 +70,42 @@ python3 -m pip install -r requirements.txt
 python3 main.py
 ```
 
-If Terminal is already open in the project directory, just run:
+If a supported website stops resolving after a site update, upgrade yt-dlp:
 
 ```bash
-python3 main.py
+python3 -m pip install --upgrade yt-dlp
 ```
 
-> YouTube's site changes frequently and can break older `yt-dlp` releases
-> ("Sign in to confirm you're not a bot", "Requested format is not
-> available"). If links stop resolving, try
-> `python3 -m pip install --upgrade yt-dlp` first.
+## Build a DMG
 
-## Usage
+```bash
+bash packaging/build.sh
+bash packaging/make_dmg.sh
+```
 
-1. Wait for the splash screen to sync the channel list.
-2. **Каналы**: click record next to a channel for a manual recording.
-3. **Мои ссылки**: add a link, then record it manually or schedule it — if
-   no direct stream is found, recording falls back to browser screen-capture
-   automatically.
-4. **Загрузки**: add a link, pick quality and folder, and it downloads in
-   the background — no scheduling involved, it's a one-shot job.
-5. **Расписание**: pick a source, a start/end time, and weekdays; it repeats
-   on the selected days and stops itself at the end time (start and end
-   must differ — equal values would mean a 24-hour recording).
-6. Finished files land in `recordings/` (scheduled/manual channel and link
-   recordings) or `downloads/` (the Загрузки tab); the folder button reveals
-   the selected file in Finder.
+The result is written to `packaging/TV Recorder.dmg`.
 
-## Project layout
+## Project structure
 
 ```text
-core/       Recording, link resolution, scheduling, playlist parsing, storage
-gui/        CustomTkinter/Tkinter interface
-utils/      Configuration, icons, logging, network, VPN, logo cache helpers
-data/       Bundled fallback channel list and runtime data (gitignored)
-recordings/ Saved channel/link recordings (created locally, gitignored)
-downloads/  Saved one-shot downloads (created locally, gitignored)
-logs/       Application logs (created locally, gitignored)
+core/       Recording, downloading, scheduling, stream resolution, storage
+gui/        CustomTkinter interface and browser capture
+utils/      Configuration, icons, logging, network and filename helpers
+data/       Bundled fallback channel list and local runtime data
+packaging/  PyInstaller app and DMG scripts
+tests/      Reliability and regression tests
 ```
 
-## Versioning
+## Credits
 
-Every commit auto-bumps `VERSION` and adds a dated entry to
-`CHANGELOG.md` via a Git hook in `.githooks/` (the repo is configured to
-use it automatically) — write an English one-line summary in the commit
-message. By default this bumps the patch number; for a deliberately larger
-change, bump minor or major explicitly:
+- [FFmpeg](https://ffmpeg.org/) — playback, recording, muxing, and validation.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — web media extraction.
+- [IPTVru](https://github.com/smolnp/IPTVru) — one available channel discovery
+  source used by the default setup.
+- Some logo URLs originate from source playlists and Wikimedia Commons.
 
-```bash
-BUMP=minor git commit -m "..."   # or BUMP=major
-```
+TV Recorder is independent and is not affiliated with broadcasters or content
+providers. Users are responsible for respecting applicable rights and terms.
 
 ## License
 

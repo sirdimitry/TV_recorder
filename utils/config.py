@@ -46,27 +46,27 @@ class Config:
 
     # Цветовая тема (Dark Mode) — фиксированная тёмная тема приложения
     COLORS = {
-        'bg_primary': '#1a1a24',      # Основной фон окна
-        'bg_secondary': '#20202e',    # Фон панелей/карточек
-        'bg_tertiary': '#2a2a3c',     # Фон полей ввода, элевированных поверхностей
-        'bg_hover': '#33334a',        # Hover-состояние строк/кнопок
-        'bg_active': '#3a3a56',       # Активное/нажатое состояние
-        'border': '#34344a',          # Тонкие разделители и рамки карточек
-        'text_primary': '#e4e6f0',    # Основной текст
-        'text_secondary': '#9a9fc0',  # Вторичный текст
-        'text_muted': '#6c7086',      # Приглушённый текст (плейсхолдеры, подписи)
-        'accent': '#89b4fa',          # Акцентный цвет (синий)
-        'accent_hover': '#a5c9ff',    # Акцент при наведении
-        'accent_text': '#11111b',     # Текст поверх акцентного фона
-        'green': '#a6e3a1',           # Успех/Онлайн
-        'yellow': '#f9e2af',          # Предупреждение/Буферизация
-        'red': '#f38ba8',             # Ошибка/REC
-        'red_hover': '#ff9db8',       # Красный при наведении
+        'bg_primary': '#0D111B',
+        'bg_secondary': '#141A27',
+        'bg_tertiary': '#1C2434',
+        'bg_hover': '#253147',
+        'bg_active': '#2C3A55',
+        'border': '#2A354A',
+        'text_primary': '#F2F5FA',
+        'text_secondary': '#AAB5C8',
+        'text_muted': '#6F7B91',
+        'accent': '#64A8FF',
+        'accent_hover': '#82BAFF',
+        'accent_text': '#07111F',
+        'green': '#5DD6A2',
+        'yellow': '#F5C76B',
+        'red': '#FF6B8A',
+        'red_hover': '#FF89A2',
     }
 
     # Радиусы скругления для карточек/кнопок — единая система для всего интерфейса
-    RADIUS = 10
-    RADIUS_SM = 8
+    RADIUS = 14
+    RADIUS_SM = 10
     
     @classmethod
     def init_dirs(cls):

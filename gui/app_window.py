@@ -5,6 +5,7 @@ from typing import Dict, Optional
 import time
 import threading
 import json
+import webbrowser
 from queue import Empty, Queue
 
 import customtkinter as ctk
@@ -130,8 +131,8 @@ class AppWindow:
     def __init__(self):
         self.root = ctk.CTk()
         self.root.title("TV Recorder")
-        self.root.geometry("1150x720")
-        self.root.minsize(920, 620)
+        self.root.geometry("1280x800")
+        self.root.minsize(1024, 680)
         self.root.report_callback_exception = self._report_callback_exception
 
         self.colors = Config.COLORS
@@ -386,10 +387,10 @@ class AppWindow:
         # === МЕНЮ БАР ===
         menubar = tk.Menu(self.root)
         app_menu = tk.Menu(menubar, tearoff=0)
-        app_menu.add_command(label="Settings…", command=self._show_settings)
+        app_menu.add_command(label="Настройки…", command=self._show_settings)
         app_menu.add_command(label="О программе", command=self._show_about)
         app_menu.add_separator()
-        app_menu.add_command(label="Выход", command=self._on_close)
+        app_menu.add_command(label="Выйти", command=self._on_close)
         menubar.add_cascade(label="TV Recorder", menu=app_menu)
 
         # Меню Edit: без него на macOS `root.config(menu=...)` полностью
@@ -403,38 +404,50 @@ class AppWindow:
                 widget.event_generate(virtual_event)
 
         edit_menu = tk.Menu(menubar, tearoff=0)
-        edit_menu.add_command(label="Cut", accelerator="Cmd+X", command=lambda: edit_action('<<Cut>>'))
-        edit_menu.add_command(label="Copy", accelerator="Cmd+C", command=lambda: edit_action('<<Copy>>'))
-        edit_menu.add_command(label="Paste", accelerator="Cmd+V", command=lambda: edit_action('<<Paste>>'))
+        edit_menu.add_command(label="Вырезать", accelerator="Cmd+X", command=lambda: edit_action('<<Cut>>'))
+        edit_menu.add_command(label="Копировать", accelerator="Cmd+C", command=lambda: edit_action('<<Copy>>'))
+        edit_menu.add_command(label="Вставить", accelerator="Cmd+V", command=lambda: edit_action('<<Paste>>'))
         edit_menu.add_separator()
-        edit_menu.add_command(label="Select All", accelerator="Cmd+A", command=lambda: edit_action('<<SelectAll>>'))
-        menubar.add_cascade(label="Edit", menu=edit_menu)
+        edit_menu.add_command(label="Выбрать всё", accelerator="Cmd+A", command=lambda: edit_action('<<SelectAll>>'))
+        menubar.add_cascade(label="Правка", menu=edit_menu)
 
         self.root.config(menu=menubar)
 
         # === ТУЛБАР ===
         toolbar = ctk.CTkFrame(self.root, fg_color='transparent')
-        toolbar.pack(fill='x', padx=16, pady=(14, 8))
+        toolbar.pack(fill='x', padx=20, pady=(18, 12))
 
         title_frame = ctk.CTkFrame(toolbar, fg_color='transparent')
         title_frame.pack(side='left')
-        ctk.CTkLabel(title_frame, image=get_icon('tv', c['accent'], 22), text="").pack(side='left', padx=(0, 8))
-        ctk.CTkLabel(title_frame, text="TV Recorder", font=ctk.CTkFont(size=18, weight='bold'),
-                     text_color=c['text_primary']).pack(side='left')
+        icon_tile = ctk.CTkFrame(title_frame, width=40, height=40, corner_radius=12,
+                                 fg_color=c['bg_tertiary'], border_width=1, border_color=c['border'])
+        icon_tile.pack(side='left', padx=(0, 12))
+        icon_tile.pack_propagate(False)
+        ctk.CTkLabel(icon_tile, image=get_icon('tv', c['accent'], 22), text="").pack(expand=True)
+        title_copy = ctk.CTkFrame(title_frame, fg_color='transparent')
+        title_copy.pack(side='left')
+        ctk.CTkLabel(title_copy, text="TV Recorder", font=ctk.CTkFont(size=19, weight='bold'),
+                     text_color=c['text_primary']).pack(anchor='w')
+        ctk.CTkLabel(title_copy, text="Просмотр • запись • загрузка",
+                     font=ctk.CTkFont(size=10), text_color=c['text_muted']).pack(anchor='w')
+        ctk.CTkLabel(toolbar, text=f"v{Config.APP_VERSION}", font=ctk.CTkFont(size=10, weight='bold'),
+                     text_color=c['text_secondary'], fg_color=c['bg_tertiary'], corner_radius=8,
+                     height=24).pack(side='left', padx=(12, 0), ipadx=8)
 
         self.btn_toolbar_check = ctk.CTkButton(
             toolbar, text="Проверить все", image=get_icon('refresh', c['text_primary'], 16),
-            compound='left', width=140, height=34, corner_radius=Config.RADIUS_SM,
+            compound='left', width=148, height=38, corner_radius=Config.RADIUS_SM,
             fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
             command=self._toolbar_check_all)
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
 
         # === ОСНОВНАЯ ОБЛАСТЬ: 2 КОЛОНКИ ===
         self.paned = ttk.PanedWindow(self.root, orient='horizontal')
-        self.paned.pack(fill='both', expand=True, padx=14, pady=(0, 8))
+        self.paned.pack(fill='both', expand=True, padx=18, pady=(0, 10))
         paned = self.paned
 
-        left_frame = ctk.CTkFrame(paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
+        left_frame = ctk.CTkFrame(paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS,
+                                  border_width=1, border_color=c['border'])
 
         self.preview_panel = PreviewPanel(left_frame)
         self.preview_panel.pack(fill='x', padx=4, pady=(4, 0))
@@ -503,13 +516,15 @@ class AppWindow:
         self.right_paned = ttk.PanedWindow(paned, orient='vertical')
         right_paned = self.right_paned
 
-        schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
+        schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS,
+                                          border_width=1, border_color=c['border'])
         self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed,
                                              on_record_now=self._record_from_schedule_item)
         self.schedule_panel.pack(fill='both', expand=True)
         right_paned.add(schedule_container, weight=1)
 
-        recordings_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS)
+        recordings_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS,
+                                             border_width=1, border_color=c['border'])
         self.recording_panel = RecordingPanel(recordings_container, self.recorder)
         self.recording_panel.pack(fill='both', expand=True)
         right_paned.add(recordings_container, weight=1)
@@ -1247,27 +1262,89 @@ class AppWindow:
 
     def _show_about(self):
         c = self.colors
-        dialog = self._create_dialog("О программе", "500x380")
+        dialog = self._create_dialog("TV Recorder — About / О программе", "660x560")
+        dialog.minsize(600, 520)
 
-        content = f"""TV Recorder v{Config.APP_VERSION}
+        shell = ctk.CTkFrame(dialog, fg_color='transparent')
+        shell.pack(fill='both', expand=True, padx=28, pady=24)
 
-Desktop application for previewing and recording TV streams.
+        hero = ctk.CTkFrame(shell, fg_color=c['bg_primary'], corner_radius=18,
+                            border_width=1, border_color=c['border'])
+        hero.pack(fill='x')
+        icon_tile = ctk.CTkFrame(hero, width=72, height=72, corner_radius=18,
+                                 fg_color=c['bg_tertiary'])
+        icon_tile.pack(side='left', padx=20, pady=20)
+        icon_tile.pack_propagate(False)
+        ctk.CTkLabel(icon_tile, text="", image=get_icon('tv', c['accent'], 38)).pack(expand=True)
 
-Credits and data sources:
-• IPTVru (github.com/smolnp/IPTVru)
-  provides the playlist currently used to discover channels.
-• FFmpeg provides stream recording and preview capabilities.
-• Some channel logo URLs come from the playlist and Wikimedia Commons.
+        hero_copy = ctk.CTkFrame(hero, fg_color='transparent')
+        hero_copy.pack(side='left', fill='x', expand=True, pady=20)
+        ctk.CTkLabel(hero_copy, text="TV Recorder", font=ctk.CTkFont(size=24, weight='bold'),
+                     text_color=c['text_primary']).pack(anchor='w')
+        ctk.CTkLabel(hero_copy, text=f"Version {Config.APP_VERSION}  •  macOS",
+                     font=ctk.CTkFont(size=11), text_color=c['text_secondary']).pack(anchor='w', pady=(3, 0))
+        ctk.CTkLabel(hero_copy, text="Watch  •  Record  •  Download",
+                     font=ctk.CTkFont(size=10, weight='bold'), text_color=c['accent']).pack(anchor='w', pady=(8, 0))
 
-TV Recorder is not affiliated with channels or source providers.
-Built for macOS."""
+        language = ctk.CTkSegmentedButton(
+            shell, values=['English', 'Русский'], height=34,
+            fg_color=c['bg_primary'], selected_color=c['accent'], selected_hover_color=c['accent_hover'],
+            unselected_color=c['bg_primary'], unselected_hover_color=c['bg_hover'],
+            text_color=c['text_primary'])
+        language.pack(fill='x', pady=(18, 12))
 
-        ctk.CTkLabel(dialog, text=content, font=ctk.CTkFont(size=12), text_color=c['text_primary'],
-                     justify='left').pack(pady=28, padx=28)
+        copy = ctk.CTkTextbox(shell, height=250, corner_radius=14, fg_color=c['bg_primary'],
+                              border_width=1, border_color=c['border'], text_color=c['text_primary'],
+                              font=ctk.CTkFont(size=12), wrap='word', activate_scrollbars=True)
+        copy.pack(fill='both', expand=True)
 
-        ctk.CTkButton(dialog, text="Закрыть", command=dialog.destroy, height=32, width=110,
-                      corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
-                      text_color=c['text_primary']).pack(pady=10)
+        texts = {
+            'English': (
+                "A desktop app for watching, recording and downloading TV and web streams.\n\n"
+                "RELIABLE RECORDING\n"
+                "Automatic reconnects, HLS segment retries and FFprobe validation help preserve recordings "
+                "when a source becomes unstable.\n\n"
+                "SOURCES & CREDITS\n"
+                "Channel discovery may use the IPTVru playlist. FFmpeg powers playback and recording; "
+                "yt-dlp helps resolve supported web video. Some logos come from source playlists and "
+                "Wikimedia Commons.\n\n"
+                "TV Recorder is an independent open-source project and is not affiliated with broadcasters "
+                "or content providers."
+            ),
+            'Русский': (
+                "Приложение для просмотра, записи и скачивания телевизионных и веб-потоков.\n\n"
+                "НАДЁЖНАЯ ЗАПИСЬ\n"
+                "Автопереподключение, повторы HLS-сегментов и проверка через FFprobe помогают сохранить "
+                "запись при нестабильном источнике.\n\n"
+                "ИСТОЧНИКИ И БЛАГОДАРНОСТИ\n"
+                "Для поиска каналов может использоваться плейлист IPTVru. FFmpeg обеспечивает просмотр и "
+                "запись, а yt-dlp помогает находить веб-видео. Часть логотипов получена из плейлистов и "
+                "Wikimedia Commons.\n\n"
+                "TV Recorder — независимый проект с открытым исходным кодом, не связанный с телеканалами "
+                "или поставщиками контента."
+            ),
+        }
+
+        def show_language(selected):
+            copy.configure(state='normal')
+            copy.delete('1.0', 'end')
+            copy.insert('1.0', texts[selected])
+            copy.configure(state='disabled')
+
+        language.configure(command=show_language)
+        language.set('English')
+        show_language('English')
+
+        actions = ctk.CTkFrame(shell, fg_color='transparent')
+        actions.pack(fill='x', pady=(14, 0))
+        ctk.CTkButton(actions, text="GitHub", image=get_icon('globe', c['text_primary'], 15),
+                      command=lambda: webbrowser.open('https://github.com/sirdimitry/TV_recorder'),
+                      height=36, width=120, corner_radius=Config.RADIUS_SM,
+                      fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
+                      text_color=c['text_primary']).pack(side='left')
+        ctk.CTkButton(actions, text="Close / Закрыть", command=dialog.destroy, height=36, width=150,
+                      corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
+                      text_color=c['accent_text']).pack(side='right')
 
     def _start_background_checks(self):
         """Обновляет статус сети каждые пять секунд, не замедляя окно."""
