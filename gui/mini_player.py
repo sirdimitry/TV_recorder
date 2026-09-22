@@ -7,7 +7,7 @@ import threading
 from utils.config import Config
 from utils.logger import logger
 from core.m3u_parser import M3UParser
-from core.stream_resolver import resolve_variant_url
+from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from core.link_resolver import resolve_link
 
 
@@ -15,6 +15,8 @@ class MiniPlayer(tk.Toplevel):
     """Невидимый диспетчер ffplay с поддержкой спец. заголовков"""
 
     _active_players = {}  # name -> list[subprocess.Popen] (1 обычно, 2 при пайпе ffmpeg->ffplay)
+    _players_lock = threading.Lock()
+    _closing = False
 
     # -fs у ffplay уходит в НАСТОЯЩИЙ macOS-fullscreen — на весь физический
     # экран, без рамки окна и без простого способа выйти, если поток
@@ -35,6 +37,10 @@ class MiniPlayer(tk.Toplevel):
         self.stream_url = stream_url
         self.large = large
         self.resolve_via_ytdlp = resolve_via_ytdlp
+
+        if self._closing:
+            self.destroy()
+            return
 
         # TOGGLE: если уже играет - убиваем и открываем заново
         if channel_name in self._active_players:
@@ -118,34 +124,35 @@ class MiniPlayer(tk.Toplevel):
             if self.large:
                 ffplay_cmd += ['-x', str(self.LARGE_WIDTH), '-y', str(self.LARGE_HEIGHT)]
 
-            if audio_url:
-                # ffplay умеет играть только один вход, а видео и звук здесь —
-                # раздельные дорожки (типично для YouTube на 720p+). Мультиплекс
-                # делает ffmpeg на лету и стримит результат в ffplay через pipe.
-                ffmpeg_cmd = [
-                    'ffmpeg',
-                    '-headers', headers, '-i', stream_url,
-                    '-headers', headers, '-i', audio_url,
-                    '-map', '0:v:0', '-map', '1:a:0',
-                    '-c', 'copy',
-                    '-f', 'matroska', 'pipe:1',
-                ]
-                ffplay_cmd += ['-i', '-']
-
-                ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                ffplay_proc = subprocess.Popen(ffplay_cmd, stdin=ffmpeg_proc.stdout, stderr=subprocess.DEVNULL)
-                ffmpeg_proc.stdout.close()  # ffplay держит свою копию — иначе ffmpeg не получит SIGPIPE при закрытии плеера
-                procs = [ffmpeg_proc, ffplay_proc]
-            else:
-                ffplay_cmd += ['-headers', headers,
-                                '-rw_timeout', '10000000',
-                                '-probesize', '500000',
-                                '-analyzeduration', '1000000',
-                                '-err_detect', 'ignore_err',
-                                stream_url]
-                procs = [subprocess.Popen(ffplay_cmd)]
-
-            self._active_players[self.channel_name] = procs
+            with self._players_lock:
+                if self._closing:
+                    return
+                if audio_url:
+                    # ffplay умеет играть только один вход, а видео и звук здесь —
+                    # раздельные дорожки (типично для YouTube на 720p+).
+                    ffmpeg_cmd = [
+                        'ffmpeg', *RECONNECT_OPTS, *hls_opts(stream_url),
+                        '-headers', headers, '-i', stream_url,
+                        *RECONNECT_OPTS, *hls_opts(audio_url),
+                        '-headers', headers, '-i', audio_url,
+                        '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy',
+                        '-f', 'matroska', 'pipe:1',
+                    ]
+                    ffplay_cmd += ['-i', '-']
+                    ffmpeg_proc = subprocess.Popen(
+                        ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    ffplay_proc = subprocess.Popen(
+                        ffplay_cmd, stdin=ffmpeg_proc.stdout, stderr=subprocess.DEVNULL)
+                    ffmpeg_proc.stdout.close()
+                    procs = [ffmpeg_proc, ffplay_proc]
+                else:
+                    ffplay_cmd += [*RECONNECT_OPTS, *hls_opts(stream_url), '-headers', headers,
+                                    '-rw_timeout', '10000000',
+                                    '-probesize', '500000',
+                                    '-analyzeduration', '1000000',
+                                    '-err_detect', 'ignore_err', stream_url]
+                    procs = [subprocess.Popen(ffplay_cmd)]
+                self._active_players[self.channel_name] = procs
             logger.info(f"MiniPlayer: поток '{self.channel_name}' открыт в ffplay "
                         f"(PID: {[p.pid for p in procs]})")
 
@@ -155,3 +162,20 @@ class MiniPlayer(tk.Toplevel):
             # поэтому диалог показываем через ещё живой родительский root.
             self.master.after(0, lambda: messagebox.showerror(
                 "Ошибка", f"Не удалось запустить предпросмотр:\n{e}"))
+
+    @classmethod
+    def stop_all(cls, timeout: float = 3.0):
+        """Останавливает все внешние ffplay/ffmpeg предпросмотры при выходе."""
+        with cls._players_lock:
+            cls._closing = True
+            processes = [process for group in cls._active_players.values() for process in group]
+            cls._active_players.clear()
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+        for process in processes:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()

@@ -13,13 +13,15 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from core.link_resolver import resolve_link
+from core.media_probe import COMPLETED, PARTIAL, classify_media
 from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
-from utils.filenames import safe_filename
+from utils.filenames import unique_media_path
 from utils.logger import logger
 
 
@@ -34,7 +36,7 @@ class DownloadTask:
         self.duration: Optional[float] = None
         self.output_path = ''
         self.process: Optional[subprocess.Popen] = None
-        # resolving -> downloading -> done | error | canceled
+        # resolving -> downloading -> done | partial | processing_error | error | canceled
         self.status = 'resolving'
         self.error_message = ''
         self.progress: Optional[float] = None  # 0-100, None пока неизвестно (не тот же duration или ещё не начали)
@@ -75,9 +77,7 @@ class DownloadTask:
 def build_download_path(title: str, output_dir: Path) -> Path:
     """Аналог Recorder.build_output_path, но пишет в указанную (пользователем
     выбранную) папку загрузок, а не в папку записей."""
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    safe_name = safe_filename(title)
-    return output_dir / f"{safe_name}_{timestamp}.mp4"
+    return unique_media_path(output_dir, title)
 
 
 class Downloader:
@@ -85,6 +85,8 @@ class Downloader:
         self.tasks: Dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
         self._ui_callbacks: list = []
+        self._closing = False
+        self._workers: set[threading.Thread] = set()
 
     def set_ui_callback(self, callback: Callable):
         self._ui_callbacks.append(callback)
@@ -106,34 +108,61 @@ class Downloader:
 
     def start_download(self, url: str, target_height: int, output_dir: Path,
                         on_complete: Optional[Callable] = None) -> str:
-        task_id = uuid.uuid4().hex[:12]
+        task_id = uuid.uuid4().hex
         task = DownloadTask(task_id, url, target_height, Path(output_dir))
         task.on_complete = on_complete
 
         with self._lock:
+            if self._closing:
+                logger.warning("Downloader: новая загрузка отклонена — приложение закрывается")
+                return ""
             self.tasks[task_id] = task
         self._notify_ui()
         logger.info(f"Downloader: добавлена загрузка '{url}' (id: {task_id}, до {target_height}p)")
 
-        threading.Thread(target=self._run, args=(task,), daemon=True).start()
+        worker = threading.Thread(target=self._run_worker, args=(task,), daemon=True)
+        with self._lock:
+            self._workers.add(worker)
+        worker.start()
         return task_id
+
+    def _run_worker(self, task: DownloadTask):
+        try:
+            self._run(task)
+        finally:
+            with self._lock:
+                self._workers.discard(threading.current_thread())
 
     def cancel_download(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
-        if not task:
-            return
-        if task.process and task.process.poll() is None:
-            task.process.terminate()
-        task.status = 'canceled'
+            if not task:
+                return
+            if task.status not in ('resolving', 'downloading'):
+                return
+            # Статус и ссылка на процесс фиксируются одной атомарной секцией.
+            # Иначе worker мог запустить ffmpeg между проверкой process=None
+            # и выставлением canceled, после чего процесс оставался без хозяина.
+            task.status = 'canceled'
+            process = task.process
+        if process and process.poll() is None:
+            process.terminate()
         # Оборванный на середине файл (moov в конце из-за +faststart)
         # всё равно не воспроизведётся — не оставляем мусор в папке загрузок.
+        self._cleanup_canceled_file(task)
+        self._notify_ui()
+
+    @staticmethod
+    def _cleanup_canceled_file(task: DownloadTask):
         if task.output_path:
             try:
                 Path(task.output_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-        self._notify_ui()
+            except OSError as error:
+                logger.warning(f"Downloader: не удалось удалить незавершённый файл: {error}")
+
+    def _is_canceled(self, task: DownloadTask) -> bool:
+        with self._lock:
+            return self._closing or task.status == 'canceled'
 
     def remove_task(self, task_id: str):
         with self._lock:
@@ -142,29 +171,41 @@ class Downloader:
 
     def _run(self, task: DownloadTask):
         info = resolve_link(task.url, target_height=task.target_height)
-        if task.status == 'canceled':
+        if self._is_canceled(task):
             # Отменили, пока резолвили ссылку (ffmpeg ещё не запускался,
             # cancel_download() тут ничего не остановил) — не затираем
             # отмену тем, что резолв в итоге всё-таки успел завершиться.
             return
         if not info.ok:
-            task.status = 'error'
-            task.error_message = info.error or 'Не удалось найти поток'
+            with self._lock:
+                if self._closing or task.status == 'canceled':
+                    return
+                task.status = 'error'
+                task.error_message = info.error or 'Не удалось найти поток'
             logger.warning(f"Downloader: не удалось разобрать '{task.url}' (id: {task.task_id}): {task.error_message}")
             self._notify_ui()
             if task.on_complete:
                 task.on_complete(False, task, task.error_message)
             return
 
-        task.name = info.title or task.url
-        task.thumbnail = info.thumbnail or ''
-        task.duration = info.duration
-        task.status = 'downloading'
+        with self._lock:
+            if self._closing or task.status == 'canceled':
+                return
+            task.name = info.title or task.url
+            task.thumbnail = info.thumbnail or ''
+            task.duration = info.duration
+            task.status = 'downloading'
         self._notify_ui()
 
         output_path = build_download_path(task.name, task.output_dir)
-        task.output_dir.mkdir(parents=True, exist_ok=True)
-        task.output_path = str(output_path)
+        try:
+            task.output_dir.mkdir(parents=True, exist_ok=True)
+            task.output_path = str(output_path)
+        except OSError as error:
+            task.status = 'error'
+            task.error_message = f'Не удалось подготовить папку загрузки: {error}'
+            self._notify_ui()
+            return
 
         headers_dict = info.headers or {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
         ua = headers_dict.get('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
@@ -208,11 +249,17 @@ class Downloader:
             ]
 
         try:
-            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                             text=True, bufsize=1)
+            with self._lock:
+                if self._closing or task.status == 'canceled':
+                    return
+                task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                 text=True, bufsize=1)
         except Exception as e:
-            task.status = 'error'
-            task.error_message = f'Не удалось запустить ffmpeg: {e}'
+            with self._lock:
+                if self._closing or task.status == 'canceled':
+                    return
+                task.status = 'error'
+                task.error_message = f'Не удалось запустить ffmpeg: {e}'
             logger.error(f"Downloader: {task.error_message}")
             self._notify_ui()
             if task.on_complete:
@@ -224,49 +271,100 @@ class Downloader:
         # stdout (прогресс) и stderr (диагностика на случай ошибки) нужно
         # читать одновременно отдельными потоками — иначе при заполнении
         # непрочитанного буфера одного из них ffmpeg зависнет намертво.
-        stderr_lines = []
+        stderr_lines = deque(maxlen=300)
 
         def drain_stderr():
             try:
                 for line in task.process.stderr:
                     stderr_lines.append(line)
-                    if len(stderr_lines) > 300:
-                        stderr_lines.pop(0)
             except Exception:
                 pass
 
-        threading.Thread(target=drain_stderr, daemon=True).start()
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
         self._watch_progress(task)
 
         task.process.wait()
+        stderr_thread.join(timeout=1)
         returncode = task.process.returncode
 
-        if task.status == 'canceled':
+        if self._is_canceled(task):
             # cancel_download уже почистил файл и выставил статус — ничего
             # поверх этого дописывать не нужно (иначе затрём статус 'error').
+            self._cleanup_canceled_file(task)
             return
 
-        has_usable_file = output_path.is_file() and output_path.stat().st_size > 1024
-        success = (returncode == 0 or returncode == 255) and has_usable_file
+        process_ok = returncode == 0 or returncode == 255
+        result_status, probe = classify_media(output_path, process_ok, expect_audio=bool(info.audio_url))
+        success = result_status == COMPLETED
         task.finished_at = datetime.now()
 
-        if success:
-            task.status = 'done'
-            task.progress = 100.0
-            task.speed_bps = None
-            task.eta_seconds = None
-            logger.info(f"Downloader: '{task.name}' скачан → {output_path}")
-        else:
-            task.status = 'error'
-            err_msg = ''.join(stderr_lines)[-500:]
-            if not has_usable_file:
-                err_msg = "Не удалось создать файл. " + err_msg
-            task.error_message = err_msg
-            logger.error(f"Downloader: ошибка скачивания '{task.name}' (code {returncode}): {err_msg}")
+        with self._lock:
+            # Отмена могла прийти, пока ffprobe проверял уже закрытый файл.
+            if self._closing or task.status == 'canceled':
+                canceled = True
+            else:
+                canceled = False
+                if success:
+                    task.status = 'done'
+                    task.progress = 100.0
+                    task.speed_bps = None
+                    task.eta_seconds = None
+                    logger.info(f"Downloader: '{task.name}' скачан → {output_path}")
+                elif result_status == PARTIAL:
+                    task.status = 'partial'
+                    reasons = []
+                    if not process_ok:
+                        reasons.append(f'ffmpeg завершился с кодом {returncode}')
+                    if info.audio_url and not probe.has_audio:
+                        reasons.append('отсутствует ожидаемая звуковая дорожка')
+                    task.error_message = '; '.join(reasons) or 'Файл сохранён не полностью'
+                    logger.warning(f"Downloader: частично сохранён '{task.name}': {task.error_message}")
+                else:
+                    task.status = 'processing_error'
+                    err_msg = ''.join(stderr_lines)[-500:]
+                    task.error_message = f"{probe.error}. {err_msg}".strip()
+                    logger.error(f"Downloader: ошибка обработки '{task.name}' (code {returncode}): {task.error_message}")
+
+        if canceled:
+            self._cleanup_canceled_file(task)
+            return
 
         self._notify_ui()
         if task.on_complete:
             task.on_complete(success, task, task.error_message)
+
+    def shutdown(self, timeout: float = 10.0):
+        """Запрещает новые загрузки, останавливает процессы и ждёт worker-потоки."""
+        with self._lock:
+            self._closing = True
+            tasks = list(self.tasks.values())
+            workers = list(self._workers)
+            for task in tasks:
+                if task.status in ('resolving', 'downloading'):
+                    task.status = 'canceled'
+
+        for task in tasks:
+            if task.process and task.process.poll() is None:
+                task.process.terminate()
+
+        deadline = time.monotonic() + timeout
+        for worker in workers:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
+
+        for task in tasks:
+            if task.process and task.process.poll() is None:
+                task.process.kill()
+                try:
+                    task.process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+            if task.status == 'canceled' and task.output_path:
+                try:
+                    Path(task.output_path).unlink(missing_ok=True)
+                except OSError as error:
+                    logger.warning(f"Downloader: не удалось удалить незавершённый файл: {error}")
+        self._notify_ui()
 
     def _watch_progress(self, task: DownloadTask):
         """Читает key=value строки из -progress pipe:1: out_time_us даёт

@@ -8,7 +8,9 @@ master-плейлист на 1080p/6+ Мбит не тянулся целико�
 и быстрее стартует более скромный вариант.
 """
 import re
+import time
 from typing import Optional
+from urllib.parse import urljoin
 
 import requests
 
@@ -71,7 +73,12 @@ def hls_opts(url: str) -> list:
     not found" ещё до открытия потока — замечено на VK/okcdn.ru (прямой
     .mp4-подобный URL без .m3u8). Единая точка для этой проверки — раньше
     была продублирована и разошлась бы снова при следующей правке."""
-    return ['-allowed_extensions', 'ALL'] if '.m3u8' in url.lower() else []
+    if '.m3u8' not in url.lower():
+        return []
+    # По умолчанию HLS-демультиплексор вообще не повторяет неудачный сегмент
+    # (seg_max_retry=0): один короткий 404/503 на CDN способен оборвать
+    # многочасовую запись, хотя следующий запрос уже прошёл бы нормально.
+    return ['-allowed_extensions', 'ALL', '-seg_max_retry', '10']
 
 
 def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Optional[str] = None,
@@ -83,16 +90,26 @@ def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Opti
     if not url or '.m3u8' not in url:
         return url
 
-    try:
-        headers = {'User-Agent': user_agent}
-        if referer:
-            headers['Referer'] = referer
-        resp = requests.get(url, timeout=5, headers=headers)
-        if resp.status_code != 200:
-            return url
-        text = resp.text
-    except Exception as e:
-        logger.debug(f"StreamResolver: не удалось получить плейлист для выбора качества: {e}")
+    headers = {'User-Agent': user_agent}
+    if referer:
+        headers['Referer'] = referer
+    text = None
+    last_error = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, timeout=5, headers=headers)
+            if resp.status_code == 200:
+                text = resp.text
+                break
+            last_error = f'HTTP {resp.status_code}'
+            if resp.status_code not in (408, 425, 429) and resp.status_code < 500:
+                break
+        except Exception as error:
+            last_error = error
+        if attempt < 2:
+            time.sleep(0.5 * (attempt + 1))
+    if text is None:
+        logger.debug(f"StreamResolver: не удалось получить плейлист для выбора качества: {last_error}")
         return url
 
     if '#EXT-X-STREAM-INF' not in text:
@@ -124,8 +141,7 @@ def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Opti
     within_budget = [v for v in pool if v[0] <= budget_bps]
     chosen = max(within_budget, key=lambda v: v[0]) if within_budget else min(pool, key=lambda v: v[0])
 
-    base = url.rsplit('/', 1)[0]
-    chosen_url = chosen[2] if chosen[2].startswith('http') else f"{base}/{chosen[2]}"
+    chosen_url = urljoin(url, chosen[2])
 
     if chosen_url != url:
         logger.info(f"StreamResolver: выбран вариант {chosen[1] or '?'}p / {chosen[0] // 1000} kbps")

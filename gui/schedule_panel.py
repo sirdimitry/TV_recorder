@@ -295,7 +295,9 @@ class SchedulePanel(ctk.CTkFrame):
             'checking': '… проверка',
             'recording': '● идёт',
             'completed': '✓ готово',
+            'partial': '⚠ частично',
             'ended_early': '⚠ раньше',
+            'processing_error': '✕ обработка',
             'failed': '✕ ошибка',
         }.get(status, '—')
 
@@ -439,6 +441,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         item = {
             'channel_name': channel_name,
+            'source_id': self._source_id_for_selection(),
             'source_type': self.source_type_var.get(),
             'start_time': start,
             'end_time': end,
@@ -472,6 +475,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         item = {
             'channel_name': channel_name,
+            'source_id': self._source_id_for_selection(),
             'source_type': self.source_type_var.get(),
             'start_time': start,
             'end_time': end,
@@ -634,11 +638,15 @@ class SchedulePanel(ctk.CTkFrame):
         item = schedule[index]
         source_type = item.get('source_type', 'channel')
         name = item.get('channel_name', '')
+        source_id = item.get('source_id')
 
         if source_type == 'link':
-            target = next((l for l in self.storage.get_links() if l.get('name') == name), None)
+            sources = self.storage.get_links()
         else:
-            target = next((ch for ch in self.storage.get_channels() if ch.get('name') == name), None)
+            sources = self.storage.get_channels()
+        target = next((source for source in sources
+                       if source_id and source.get('id') == source_id), None)
+        target = target or next((source for source in sources if source.get('name') == name), None)
 
         if not target:
             messagebox.showwarning("Внимание", f"«{name}» не найден(а) — возможно, был(а) удалён(а)")
@@ -646,3 +654,10 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.on_record_now(source_type, name, target)
         logger.info(f"Запись выбранной строки расписания сейчас: {name} ({source_type})")
+
+    def _source_id_for_selection(self):
+        sources = (self.storage.get_links() if self.source_type_var.get() == 'link'
+                   else self.storage.get_channels())
+        selected_name = self.channel_var.get()
+        source = next((source for source in sources if source.get('name') == selected_name), None)
+        return source.get('id') if source else None

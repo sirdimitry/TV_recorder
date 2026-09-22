@@ -3,6 +3,7 @@ import requests
 import subprocess
 from enum import Enum
 from typing import Tuple
+from urllib.parse import urljoin
 from utils.config import Config
 from utils.logger import logger
 
@@ -33,12 +34,9 @@ class StreamChecker:
         """
         source_type = channel.get('type', 'iptv')
         url = channel.get('url', '')
+        if not url:
+            return StreamStatus.RED, "URL потока не задан"
 
-        # 1. Проверяем интернет
-        if not self._check_internet():
-            return StreamStatus.RED, "Нет подключения к интернету"
-
-        # 2. Проверяем поток по типу
         checkers = {
             'iptv': self._check_iptv,
             'youtube': self._check_youtube,
@@ -48,28 +46,36 @@ class StreamChecker:
         }
         
         checker = checkers.get(source_type, self._check_iptv)
+        if checker == self._check_iptv:
+            return checker(url, self._channel_headers(channel.get('name', '')))
         return checker(url)
+
+    @staticmethod
+    def _channel_headers(channel_name: str) -> dict:
+        """Те же заголовки, с которыми Recorder открывает этот канал."""
+        # Локальный импорт не утяжеляет запуск checker и избегает связи модулей
+        # на этапе импорта core/__init__.py.
+        from core.recorder import Recorder
+
+        info = Recorder.CHANNEL_HEADERS.get(channel_name, {})
+        user_agent = info.get('ua', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
+        referer = info.get('ref', 'https://www.google.com')
+        return {'User-Agent': user_agent, 'Referer': referer, 'Origin': referer}
     
-    def _check_internet(self) -> bool:
-        try:
-            requests.get('https://www.google.com', timeout=3)
-            return True
-        except:
-            return False
-    
-    def _check_iptv(self, url: str) -> Tuple[StreamStatus, str]:
+    def _check_iptv(self, url: str, headers: dict) -> Tuple[StreamStatus, str]:
         """Проверка HLS/DASH потока"""
         try:
-            resp = requests.head(url, timeout=self.timeout, 
-                                headers={'User-Agent': 'Mozilla/5.0'})
-            if resp.status_code == 200:
-                # Доп проверка сегментов для HLS
-                if '.m3u8' in url:
-                    return self._check_hls_segments(url)
-                return StreamStatus.GREEN, "Поток доступен"
-            elif resp.status_code in (403, 406):
-                return StreamStatus.YELLOW, f"Доступ ограничен (HTTP {resp.status_code})"
-            else:
+            if '.m3u8' in url.lower():
+                return self._check_hls_segments(url, headers)
+
+            # GET с Range работает и на серверах, которые запрещают HEAD, при
+            # этом stream=True не скачивает сам эфир во время проверки.
+            with requests.get(url, timeout=self.timeout, headers={**headers, 'Range': 'bytes=0-1023'},
+                              allow_redirects=True, stream=True) as resp:
+                if resp.status_code in (200, 206):
+                    return StreamStatus.GREEN, "Поток доступен"
+                if resp.status_code in (401, 403, 406):
+                    return StreamStatus.YELLOW, f"Доступ ограничен (HTTP {resp.status_code})"
                 return StreamStatus.RED, f"HTTP ошибка {resp.status_code}"
         except requests.exceptions.Timeout:
             return StreamStatus.YELLOW, "Таймаут подключения"
@@ -78,37 +84,37 @@ class StreamChecker:
         except Exception as e:
             return StreamStatus.RED, str(e)[:100]
     
-    def _check_hls_segments(self, m3u8_url: str, _depth: int = 0) -> Tuple[StreamStatus, str]:
+    def _check_hls_segments(self, m3u8_url: str, headers: dict,
+                            _depth: int = 0) -> Tuple[StreamStatus, str]:
         """Проверяет доступность сегментов HLS"""
         try:
             resp = requests.get(m3u8_url, timeout=self.timeout,
-                               headers={'User-Agent': 'Mozilla/5.0'})
+                                headers=headers)
+            if resp.status_code not in (200, 206):
+                return StreamStatus.RED, f"HTTP ошибка плейлиста {resp.status_code}"
             lines = [l.strip() for l in resp.text.strip().split('\n')]
-            segments = [l for l in lines if l.endswith('.ts') or l.endswith('.m4s')]
+            resources = [line for line in lines if line and not line.startswith('#')]
 
-            if not segments:
-                # Мастер-плейлист: перечисляет варианты битрейта (.m3u8), а не
-                # сами сегменты. Это нормальная и очень частая структура HLS,
-                # а не "пустой" поток — спускаемся на один уровень к первому
-                # варианту и проверяем сегменты уже там.
-                variants = [l for l in lines if l and not l.startswith('#') and l.endswith('.m3u8')]
-                if variants and _depth == 0:
-                    base = m3u8_url.rsplit('/', 1)[0]
-                    variant_url = variants[0] if variants[0].startswith('http') else f"{base}/{variants[0]}"
-                    return self._check_hls_segments(variant_url, _depth=1)
+            if '#EXT-X-STREAM-INF' in resp.text:
+                if resources and _depth < 2:
+                    return self._check_hls_segments(urljoin(m3u8_url, resources[0]), headers, _depth + 1)
                 return StreamStatus.YELLOW, "Плейлист пустой"
 
-            # Проверяем первый сегмент
-            base = m3u8_url.rsplit('/', 1)[0]
-            seg_url = f"{base}/{segments[0]}" if not segments[0].startswith('http') else segments[0]
+            if not resources:
+                return StreamStatus.YELLOW, "Плейлист пустой"
 
-            seg_resp = requests.head(seg_url, timeout=self.timeout)
-            if seg_resp.status_code == 200:
-                return StreamStatus.GREEN, "Поток стабилен"
-            else:
-                return StreamStatus.YELLOW, "Сегменты недоступны"
-        except:
-            return StreamStatus.YELLOW, "Ошибка проверки сегментов"
+            segment_url = urljoin(m3u8_url, resources[0])
+            with requests.get(segment_url, timeout=self.timeout,
+                              headers={**headers, 'Range': 'bytes=0-1023'}, stream=True) as segment:
+                if segment.status_code in (200, 206):
+                    return StreamStatus.GREEN, "Поток стабилен"
+                return StreamStatus.YELLOW, f"Сегменты недоступны (HTTP {segment.status_code})"
+        except requests.exceptions.Timeout:
+            return StreamStatus.YELLOW, "Таймаут проверки HLS"
+        except requests.exceptions.ConnectionError:
+            return StreamStatus.RED, "Не удалось подключиться к HLS-потоку"
+        except requests.exceptions.RequestException as error:
+            return StreamStatus.YELLOW, f"Ошибка проверки HLS: {str(error)[:80]}"
     
     def _check_youtube(self, url: str) -> Tuple[StreamStatus, str]:
         """Проверка YouTube без авторизации"""

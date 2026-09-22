@@ -36,6 +36,11 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
             return
         cls._instance = RecordingMonitorWindow(root, recorder)
 
+    @classmethod
+    def close_if_open(cls):
+        if cls._instance is not None and cls._instance.winfo_exists():
+            cls._instance._close()
+
     def __init__(self, root, recorder: Recorder):
         super().__init__(root)
         self.recorder = recorder
@@ -71,6 +76,7 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         self.grid_frame.pack(fill='both', expand=True, padx=12, pady=(0, 12))
 
         self.recorder.set_ui_callback(self._on_recorder_update)
+        self.recorder.acquire_snapshot_consumer()
         self.protocol("WM_DELETE_WINDOW", self._close)
 
         self._rebuild()
@@ -239,5 +245,6 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         self._running = False
         self._stop_listening()
         self.recorder.remove_ui_callback(self._on_recorder_update)
+        self.recorder.release_snapshot_consumer()
         RecordingMonitorWindow._instance = None
         self.destroy()

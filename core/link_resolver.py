@@ -24,6 +24,8 @@ JS каждого такого сайта — не масштабируется.
 проверки потока выше по стеку), а не будет тихо ломаться.
 """
 import concurrent.futures
+import html
+import json
 import re
 import select
 import shutil
@@ -31,7 +33,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import unquote, urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -121,6 +123,86 @@ _VIPLER_DURATION_RE = re.compile(r'property=["\']video:duration["\'][^>]+content
 # нужно ничего разбирать глубже, просто собираем каноническую ссылку и
 # отдаём её тому же yt-dlp.
 _VK_EMBED_RE = re.compile(r'vk(?:video)?\.(?:ru|com)/video_ext\.php\?oid=(-?\d+)&(?:amp;)?id=(\d+)', re.IGNORECASE)
+_VK_LIVE_RE = re.compile(
+    r'^(https?://(?:(?:m|new|vksport)\.)?vk(?:video)?\.(?:ru|com)/)live(-\d+_\d+.*)$',
+    re.IGNORECASE)
+_NEXTCLOUD_SHARE_RE = re.compile(r'^(https?://[^/]+/s/[A-Za-z0-9]+)')
+_SMOTRIM_RE = re.compile(r'^https?://(?:www\.)?smotrim\.ru/', re.IGNORECASE)
+_SMOTRIM_VIDEO_ID_RE = re.compile(r'(?:/video/(?:id/)?|playing_video=)(\d+)')
+_TVZVEZDA_RE = re.compile(r'^https?://(?:www\.)?tvzvezda\.ru/', re.IGNORECASE)
+_TVZVEZDA_STATE_RE = re.compile(r'<script id=["\']tvzvezda-state["\'][^>]*>(.*?)</script>', re.DOTALL)
+
+
+def _find_tvzvezda_video(node, path: str):
+    if isinstance(node, dict):
+        media = node.get('media')
+        if node.get('url') == path and isinstance(media, dict):
+            video = media.get('video')
+            if isinstance(video, dict) and video.get('url'):
+                return video['url'], node.get('title') or ''
+        for value in node.values():
+            found = _find_tvzvezda_video(value, path)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_tvzvezda_video(value, path)
+            if found:
+                return found
+    return None
+
+
+def _resolve_known_site(url: str, timeout: int) -> Optional['LinkInfo']:
+    """Проверенные прямые пути из srch-dwnld для сайтов со сломанным generic yt-dlp."""
+    headers = {'User-Agent': _DEFAULT_UA, 'Referer': url}
+    if '1tv.ru/' in url.lower():
+        onetv = _resolve_1tv(url, timeout)
+        if onetv is not None:
+            return onetv
+
+    nextcloud = _NEXTCLOUD_SHARE_RE.match(url)
+    if nextcloud:
+        share_url = nextcloud.group(1).rstrip('/')
+        title = 'media'
+        try:
+            page = requests.get(share_url, headers=headers, timeout=timeout).text
+            title_match = re.search(r'<meta property=["\']og:title["\'] content=["\']([^"\']+)',
+                                    page, re.IGNORECASE)
+            if title_match:
+                title = re.sub(r'\.[A-Za-z0-9]{2,5}$', '', html.unescape(title_match.group(1)))
+        except requests.RequestException:
+            pass
+        return LinkInfo(ok=True, title=title, video_url=f'{share_url}/download', headers=headers)
+
+    if _SMOTRIM_RE.match(url):
+        video_id = _SMOTRIM_VIDEO_ID_RE.search(url)
+        if video_id:
+            try:
+                response = requests.get(f'https://player-api.smotrim.ru/api/v1/video/{video_id.group(1)}',
+                                        headers=headers, timeout=timeout)
+                payload = (response.json().get('data') or {})
+                stream_url = (payload.get('streams') or {}).get('m3u8')
+                if stream_url:
+                    title = ((payload.get('fragment') or {}).get('title')
+                             or (payload.get('episode') or {}).get('title')
+                             or (payload.get('brand') or {}).get('title') or url)
+                    return LinkInfo(ok=True, title=title, video_url=stream_url, headers=headers)
+            except (requests.RequestException, ValueError):
+                pass
+
+    if _TVZVEZDA_RE.match(url):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            state_match = _TVZVEZDA_STATE_RE.search(response.text)
+            if state_match:
+                state = json.loads(html.unescape(state_match.group(1)))
+                found = _find_tvzvezda_video(state, urlparse(url).path.removesuffix('/player'))
+                if found:
+                    stream_url, title = found
+                    return LinkInfo(ok=True, title=title or url, video_url=stream_url, headers=headers)
+        except (requests.RequestException, ValueError, TypeError):
+            pass
+    return None
 
 
 @dataclass
@@ -166,6 +248,14 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     при старте приложения — там нельзя молча выскакивать браузерным окном."""
     if not url:
         return LinkInfo(ok=False, error="Пустая ссылка")
+
+    known_site = _resolve_known_site(url, timeout)
+    if known_site is not None:
+        logger.info(f"LinkResolver: использован прямой резолвер для '{url}'")
+        return known_site
+
+    # yt-dlp понимает VK video-ID, но не равнозначный URL трансляции /live-ID.
+    url = _VK_LIVE_RE.sub(r'\1video\2', url)
 
     ytdlp_result = None
     if YTDLP_AVAILABLE:
@@ -435,11 +525,14 @@ def _resolve_via_ytdlp(url: str, timeout: int, target_height: int = TARGET_HEIGH
                      video_url=video_url, audio_url=audio_url, headers=headers)
 
 
-_ONETV_NEWS_ID_RE = re.compile(r'1tv\.ru/n/(\d+)', re.IGNORECASE)
+_ONETV_NEWS_ID_RE = re.compile(
+    r'1tv\.ru/(?:n/|news/\d{4}-\d{2}-\d{2}/)(\d+)(?:[-/?#]|$)',
+    re.IGNORECASE)
 
 
 def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
-    """1tv.ru/n/<id> статьи рисуют плеер JS-ом (EUMP, static.1tv.ru) —
+    """Короткие /n/<id> и полные /news/<date>/<id>-<slug> ссылки 1tv.ru
+    указывают на один материал. Статьи рисуют плеер JS-ом (EUMP, static.1tv.ru) —
     в сыром HTML ссылки нет. Но сам плеер после гидратации просто дёргает
     свой публичный JSON: https://www.1tv.ru/video_materials.json?news_id=<id>
     (тип запроса "11" = news_id — виден в query-параметре встраиваемого
@@ -470,6 +563,13 @@ def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
     stream_url = next((s['src'] for s in sources if s.get('type') == 'application/x-mpegURL'), None)
     if not stream_url:
         stream_url = next((s['src'] for s in sources if s.get('src')), None)
+    if not stream_url:
+        # Актуальный API также отдаёт готовые MP4 в mbr (hd/sd/ld).
+        # Это запасной путь, если поле sources снова изменится на стороне 1tv.
+        variants = {source.get('name'): source.get('src')
+                    for source in (item.get('mbr') or []) if source.get('src')}
+        stream_url = next((variants.get(quality) for quality in ('hd', 'sd', 'ld')
+                           if variants.get(quality)), None)
     if not stream_url:
         return None
     if stream_url.startswith('//'):

@@ -13,7 +13,6 @@ from PIL import Image
 
 from core.link_resolver import resolve_link
 from core.recorder import Recorder, RecordingTask
-from core.snapshot import to_ctk_image
 from core.storage import Storage
 from gui.download_list import _elide_text
 from utils.config import Config
@@ -26,7 +25,9 @@ STATE_ACCENT = {
     'paused': 'yellow',
     'finalizing': 'yellow',
     'completed': 'green',
+    'partial': 'yellow',
     'ended_early': 'yellow',
+    'processing_error': 'red',
     'failed': 'red',
 }
 
@@ -51,22 +52,9 @@ class RecordingPanel(ctk.CTkFrame):
 
         self._setup_ui()
         self.refresh()
-        self._poll_snapshots()
 
     def _schedule_refresh(self):
         self.after(0, self._update_timers_only)
-
-    def _poll_snapshots(self):
-        """Картинки опрашиваем отдельно от текста/таймеров и заметно чаще
-        (снимки в Recorder идут непрерывным потоком на ~4 fps — сверять раз
-        в секунду означало бы показывать в разы меньше кадров, чем реально
-        ловится)."""
-        tasks = {t.task_id: t for t in self.recorder.get_all_tasks()}
-        for tid, widgets in self.task_widgets.items():
-            task = tasks.get(tid)
-            if task:
-                self._apply_snapshot_if_changed(task, widgets)
-        self.after(250, self._poll_snapshots)
 
     def _open_monitor(self):
         from gui.recording_monitor import RecordingMonitorWindow
@@ -120,6 +108,10 @@ class RecordingPanel(ctk.CTkFrame):
             return 'paused'
         if task.is_recording:
             return 'recording'
+        if task.result_status == 'partial':
+            return 'partial'
+        if task.result_status == 'processing_error':
+            return 'processing_error'
         if task.success is True:
             return 'ended_early' if task.ended_early else 'completed'
         if task.success is False:
@@ -143,22 +135,22 @@ class RecordingPanel(ctk.CTkFrame):
 
             widgets['timer'].configure(text=task.format_elapsed_time())
             widgets['period'].configure(text=task.format_clip_range() or task.format_recording_period())
-            self._apply_snapshot_if_changed(task, widgets)
-
             state = self._task_state(task)
             accent = self.colors[STATE_ACCENT[state]]
             widgets['accent_bar'].configure(fg_color=accent)
 
             state_text = {
-                'paused': 'Paused', 'recording': 'Recording', 'completed': 'Completed',
-                'ended_early': 'Ended early', 'failed': 'Failed', 'finalizing': 'Finalizing',
+                'paused': 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
+                'partial': 'Сохранено частично', 'ended_early': 'Ended early',
+                'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing',
             }[state]
             widgets['result'].configure(text=state_text,
                                          text_color=self.colors['text_secondary'] if state == 'recording' else accent)
 
             widgets['status_icon'].configure(image=get_icon(
                 {'paused': 'pause', 'recording': 'record', 'completed': 'record',
-                 'ended_early': 'signal_off', 'failed': 'close', 'finalizing': 'record'}[state], accent, 16))
+                 'partial': 'signal_off', 'ended_early': 'signal_off',
+                 'processing_error': 'close', 'failed': 'close', 'finalizing': 'record'}[state], accent, 16))
 
             pause_icon = 'play' if task.is_paused else 'pause'
             widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
@@ -248,21 +240,6 @@ class RecordingPanel(ctk.CTkFrame):
         cropped = resized.crop((left, top, left + w, top + h))
         return ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, h))
 
-    def _apply_snapshot_if_changed(self, task: RecordingTask, widgets: dict):
-        """Кадры для задачи берёт Recorder централизованно (одна петля на
-        запись, не на каждого отображающего её потребителя) — здесь только
-        перерисовываем картинку, когда номер кадра реально изменился."""
-        if not task.last_snapshot or task.snapshot_seq == widgets.get('snapshot_seq', 0):
-            return
-        try:
-            image = to_ctk_image(task.last_snapshot, self.THUMB_SIZE)
-        except Exception as e:
-            logger.debug(f"RecordingPanel: ошибка снимка {task.channel_name}: {e}")
-            return
-        widgets['logo_lbl'].configure(image=image)
-        widgets['logo_lbl']._logo_ref = image
-        widgets['snapshot_seq'] = task.snapshot_seq
-
     def _add_task_row(self, task: RecordingTask):
         c = self.colors
         row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
@@ -323,7 +300,6 @@ class RecordingPanel(ctk.CTkFrame):
         self.task_widgets[task.task_id] = {
             'row': row,
             'logo_lbl': logo_lbl,
-            'snapshot_seq': 0,
             'accent_bar': accent_bar,
             'status_icon': status_icon,
             'name_lbl': name_lbl,

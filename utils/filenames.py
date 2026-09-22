@@ -3,6 +3,9 @@
 Recorder.build_output_path, теперь общая (запись и загрузки должны давать
 одинаково безопасные имена на macOS/Windows)."""
 import re
+import uuid
+from datetime import datetime
+from pathlib import Path
 
 TRANSLITERATION = str.maketrans({
     'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E',
@@ -23,3 +26,18 @@ def safe_filename(name: str) -> str:
     portable-имя, одинаково работающее на macOS и Windows."""
     latin_name = name.translate(TRANSLITERATION)
     return re.sub(r'[^A-Za-z0-9_-]+', '_', latin_name).strip('_') or 'file'
+
+
+def unique_media_path(directory: Path, title: str, recorded_at: datetime | None = None,
+                      extension: str = '.mp4') -> Path:
+    """Создаёт практически уникальное имя даже для одновременных запусков.
+
+    Микросекунды удобны при просмотре папки, а случайный фрагмент исключает
+    совпадение между потоками и отдельными экземплярами приложения.
+    """
+    timestamp = (recorded_at or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S-%f')
+    safe_name = safe_filename(title)
+    while True:
+        candidate = Path(directory) / f"{safe_name}_{timestamp}_{uuid.uuid4().hex[:8]}{extension}"
+        if not candidate.exists():
+            return candidate

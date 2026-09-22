@@ -1,6 +1,7 @@
 # gui/download_list.py
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -102,6 +103,12 @@ class DownloadList(ctk.CTkFrame):
         # пиксель-в-пиксель точной, а не приблизительной.
         self._name_font = ctk.CTkFont(size=13, weight='bold')
         self._error_font = ctk.CTkFont(size=9)
+        self._persist_after_id = None
+        self._persist_lock = threading.Lock()
+        self._persist_pending = None
+        self._persist_thread = None
+        self._persist_error = None
+        self._last_queued_status = {}
 
         self._setup_ui()
 
@@ -315,12 +322,13 @@ class DownloadList(ctk.CTkFrame):
         status = item.get('status', 'resolving')
         colors_by_status = {
             'resolving': c['text_muted'], 'downloading': c['accent'],
-            'done': c['green'], 'error': c['red'], 'canceled': c['text_muted'],
+            'done': c['green'], 'partial': c['yellow'],
+            'error': c['red'], 'processing_error': c['red'], 'canceled': c['text_muted'],
         }
         dot_color = colors_by_status.get(status, c['text_muted'])
         widgets['status_dot'].configure(image=get_icon('record', dot_color, 10))
 
-        error_message = item.get('error_message') if status == 'error' else ''
+        error_message = item.get('error_message') if status in ('partial', 'error', 'processing_error') else ''
         if error_message:
             widgets['full_error'] = error_message
             info_width = widgets['label_name'].master.winfo_width()
@@ -389,7 +397,7 @@ class DownloadList(ctk.CTkFrame):
             widgets['progress_strip'].grid_forget()
             widgets['progress_shown'] = False
 
-        widgets['btn_folder'].configure(state='normal' if status == 'done' else 'disabled')
+        widgets['btn_folder'].configure(state='normal' if status in ('done', 'partial') else 'disabled')
         widgets['btn_cancel'].configure(
             state='normal' if status in ('resolving', 'downloading') else 'disabled')
 
@@ -459,6 +467,9 @@ class DownloadList(ctk.CTkFrame):
             if item.get('status') in ('resolving', 'downloading'):
                 self.downloader.cancel_download(download_id)
             self.downloader.remove_task(download_id)
+        # Дожидаемся ранее поставленной в очередь пакетной записи, иначе она
+        # могла бы вернуть только что удалённую строку обратно в JSON.
+        self.flush_persistence()
         if self.storage:
             self.storage.delete_download(download_id)
         widgets = self.row_widgets.pop(download_id, None)
@@ -471,14 +482,90 @@ class DownloadList(ctk.CTkFrame):
     def _refresh_from_downloader(self):
         if not self.downloader:
             return
-        for task in self.downloader.get_all_downloads():
-            item = task.to_dict()
-            if self.storage:
-                self.storage.save_download(item)
-            if task.task_id in self.row_widgets:
+        items = [task.to_dict() for task in self.downloader.get_all_downloads()]
+        terminal_changed = any(
+            item.get('status') in ('done', 'partial', 'error', 'processing_error', 'canceled')
+            and self._last_queued_status.get(item.get('id')) != item.get('status')
+            for item in items
+        )
+        for item in items:
+            task_id = item.get('id')
+            if task_id in self.row_widgets:
                 # Название/хронометраж известны только после resolve —
                 # _apply_status обновляет текст строки на месте, не
                 # перестраивая её целиком.
-                self._apply_status(task.task_id, item)
+                self._apply_status(task_id, item)
             else:
                 self._add_row(item)
+
+        if self.storage and items:
+            self._schedule_persistence(immediate=terminal_changed)
+
+    def _schedule_persistence(self, immediate: bool = False):
+        """Сохраняет прогресс пачкой: редко во время работы, сразу в финале."""
+        if self._persist_after_id is not None:
+            if not immediate:
+                return
+            self.after_cancel(self._persist_after_id)
+            self._persist_after_id = None
+        if immediate:
+            self._queue_persistence()
+        else:
+            self._persist_after_id = self.after(3000, self._queue_persistence)
+
+    def _queue_persistence(self):
+        self._persist_after_id = None
+        if not self.downloader or not self.storage:
+            return
+        items = [task.to_dict() for task in self.downloader.get_all_downloads()]
+        if not items:
+            return
+        self._last_queued_status.update({item.get('id'): item.get('status') for item in items})
+        with self._persist_lock:
+            # Если предыдущая запись ещё идёт, оставляем только самый свежий
+            # снимок. Рабочий поток заберёт его следующим проходом.
+            self._persist_pending = items
+            if self._persist_thread is not None and self._persist_thread.is_alive():
+                return
+            self._persist_thread = threading.Thread(target=self._persistence_worker, daemon=True)
+            self._persist_thread.start()
+
+    def _persistence_worker(self):
+        while True:
+            with self._persist_lock:
+                items = self._persist_pending
+                self._persist_pending = None
+                if items is None:
+                    self._persist_thread = None
+                    return
+            try:
+                self.storage.save_downloads(items)
+            except Exception as error:
+                logger.error(f"DownloadList: ошибка сохранения прогресса: {error}")
+                self._persist_error = error
+                with self._persist_lock:
+                    self._persist_thread = None
+                try:
+                    self.after(0, self._raise_persist_error)
+                except Exception:
+                    pass
+                return
+
+    def _raise_persist_error(self):
+        error = self._persist_error
+        self._persist_error = None
+        if error is not None:
+            raise error
+
+    def flush_persistence(self):
+        """Перед закрытием сохраняет последний снимок и дожидается записи."""
+        if self._persist_after_id is not None:
+            self.after_cancel(self._persist_after_id)
+            self._persist_after_id = None
+        self._queue_persistence()
+        with self._persist_lock:
+            thread = self._persist_thread
+        if thread is not None:
+            thread.join(timeout=5)
+        if self._persist_error is not None:
+            self._raise_persist_error()

@@ -7,6 +7,8 @@ import io
 import subprocess
 from typing import Optional, Tuple
 
+from core.stream_resolver import RECONNECT_OPTS, hls_opts
+
 SNAPSHOT_WIDTH = 320
 # Замеры по реальным каналам показали разброс 0.3-5.5с — 6с таймаут был
 # впритык для медленных, но рабочих потоков (ложные "нет сигнала").
@@ -28,7 +30,7 @@ def grab_snapshot(url: str, headers: Optional[dict] = None,
 
     cmd = [
         'ffmpeg', '-y',
-        '-allowed_extensions', 'ALL',
+        *RECONNECT_OPTS, *hls_opts(url),
         '-headers', header_str,
         '-analyzeduration', '2000000',
         '-probesize', '1000000',

@@ -19,7 +19,7 @@ from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
 from gui.tab_strip import TabStrip
 from core.link_resolver import resolve_link, guess_type
-from core.storage import Storage
+from core.storage import Storage, StorageError
 from core.scheduler import RecordingScheduler
 from core.recorder import Recorder
 from core.downloader import Downloader
@@ -132,10 +132,21 @@ class AppWindow:
         self.root.title("TV Recorder")
         self.root.geometry("1150x720")
         self.root.minsize(920, 620)
+        self.root.report_callback_exception = self._report_callback_exception
 
         self.colors = Config.COLORS
-        self.storage = Storage()
+        try:
+            self.storage = Storage()
+        except StorageError as error:
+            messagebox.showerror("Ошибка данных", str(error), parent=self.root)
+            self.root.destroy()
+            raise
         self.recorder = Recorder()
+        self._capture_permissions = {'full_screen': None, 'without_audio': None}
+        self._capture_permission_lock = threading.Lock()
+        self._closing = False
+        self.recorder.set_screen_capture_callbacks(
+            self._confirm_screen_capture_mode, self._show_screen_capture_unavailable)
         self.downloader = Downloader()
         self.scheduler = RecordingScheduler(recorder=self.recorder)
         self.notifier = Notifier()
@@ -154,6 +165,72 @@ class AppWindow:
         threading.Thread(target=self._initialize_app, daemon=True).start()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _report_callback_exception(self, exc_type, exc_value, traceback):
+        """Показывает ошибки сохранения, которые возникли в Tk-callback."""
+        logger.error("Ошибка обработчика интерфейса", exc_info=(exc_type, exc_value, traceback))
+        title = "Ошибка сохранения" if isinstance(exc_value, StorageError) else "Ошибка приложения"
+        messagebox.showerror(title, str(exc_value), parent=self.root)
+
+    def _run_dialog_from_worker(self, callback, default=False):
+        """Безопасно выполняет модальный Tk-диалог из фонового потока."""
+        if threading.current_thread() is threading.main_thread():
+            return callback()
+        done = threading.Event()
+        result = {'value': default}
+
+        def show():
+            if not self._closing and self.root.winfo_exists():
+                result['value'] = callback()
+            done.set()
+
+        try:
+            self.root.after(0, show)
+        except Exception:
+            return default
+        while not done.wait(0.1):
+            if self._closing:
+                return default
+        return result['value']
+
+    def _confirm_screen_capture_mode(self, channel_name: str, full_screen: bool,
+                                     without_audio: bool) -> bool:
+        """Запрашивает каждое разрешение один раз за сеанс приложения."""
+        required = []
+        if full_screen:
+            required.append('full_screen')
+        if without_audio:
+            required.append('without_audio')
+
+        with self._capture_permission_lock:
+            if any(self._capture_permissions[key] is False for key in required):
+                return False
+            pending = [key for key in required if self._capture_permissions[key] is None]
+            if not pending:
+                return True
+
+            details = []
+            if 'full_screen' in pending:
+                details.append(
+                    "Не удалось определить границы окна браузера, поэтому в запись попадёт весь экран. "
+                    "Другие окна и уведомления тоже могут оказаться в кадре.")
+            if 'without_audio' in pending:
+                details.append(
+                    "Устройство BlackHole не найдено, поэтому запись будет сохранена без звука.")
+            text = (f"«{channel_name}»\n\n" + "\n\n".join(details)
+                    + "\n\nРазрешить этот режим до закрытия приложения?")
+            allowed = self._run_dialog_from_worker(lambda: messagebox.askyesno(
+                "Разрешение на захват экрана", text, parent=self.root))
+            for key in pending:
+                self._capture_permissions[key] = bool(allowed)
+            return bool(allowed)
+
+    def _show_screen_capture_unavailable(self, channel_name: str):
+        text = (f"Не удалось начать захват экрана для «{channel_name}».\n\n"
+                "Разрешите TV Recorder запись экрана в «Системные настройки → "
+                "Конфиденциальность и безопасность → Запись экрана», затем перезапустите приложение.")
+        self._run_dialog_from_worker(lambda: messagebox.showerror(
+            "Захват экрана недоступен", text, parent=self.root))
 
     def _initialize_app(self):
         try:
@@ -570,16 +647,21 @@ class AppWindow:
             # итог (прямая запись, браузер или ошибка), а не раньше.
             self.root.after(0, lambda: self.link_list.set_row_resolving(name, True))
 
-            def on_task_complete(success, channel_name, output_path, ended_early=False):
+            def on_task_complete(success, channel_name, output_path, ended_early=False,
+                                 result_status='completed'):
                 # Раньше по завершении мгновенной записи ссылки не было
                 # вообще никакой видимой пользователю обратной связи (только
                 # лог) — планировщик (core/scheduler.py) шлёт уведомления
                 # для расписания, а этот, ручной, путь — нет. По просьбе:
                 # итог (сколько реально писали, и какой фрагмент ролика,
                 # если был seek) должен быть виден, а не только в логе.
-                self._on_record_complete(success, channel_name, output_path, ended_early)
+                self._on_record_complete(success, channel_name, output_path, ended_early, result_status)
                 elapsed = time.time() - record_started
-                if success:
+                if result_status == 'partial':
+                    self.notifier.send("⚠️ Запись сохранена частично", f"{channel_name}\n{output_path}")
+                elif result_status == 'processing_error':
+                    self.notifier.send("❌ Ошибка обработки записи", channel_name)
+                elif success:
                     body = f"Длительность записи: {_format_human_duration(elapsed)}"
                     if clip_range_text and not used_browser_fallback:
                         body = f"Фрагмент {clip_range_text}\n{body}"
@@ -654,9 +736,7 @@ class AppWindow:
                     # stop_after по часам означало бы записать в
                     # browser_speed_factor раз БОЛЬШЕ содержимого, чем просили.
                     wall_clock_stop = stop_after / used_speed_factor if used_speed_factor else stop_after
-                    timer = threading.Timer(wall_clock_stop, self.recorder.stop_recording, args=[task_id])
-                    timer.daemon = True
-                    timer.start()
+                    self.recorder.schedule_stop(task_id, wall_clock_stop)
             finally:
                 self.root.after(0, lambda: self.link_list.set_row_resolving(name, False))
 
@@ -670,8 +750,13 @@ class AppWindow:
         else:
             self._record_channel_now(name, target)
 
-    def _on_record_complete(self, success: bool, channel_name: str, output_path: str, ended_early: bool = False):
-        if success and ended_early:
+    def _on_record_complete(self, success: bool, channel_name: str, output_path: str,
+                            ended_early: bool = False, result_status: str = 'completed'):
+        if result_status == 'partial':
+            logger.warning(f"Запись сохранена частично: {channel_name} → {output_path}")
+        elif result_status == 'processing_error':
+            logger.error(f"Ошибка обработки записи: {channel_name} → {output_path}")
+        elif success and ended_early:
             logger.warning(f"Запись завершена раньше срока (источник закончился сам): {channel_name} → {output_path}")
         elif success:
             logger.info(f"Запись завершена: {channel_name} → {output_path}")
@@ -783,12 +868,11 @@ class AppWindow:
                 bind_cyrillic_layout_shortcuts(fields[key])
 
         def save():
-            updated = {
+            updated = {**channel,
                 'name': fields['name'].get().strip(),
                 'url': fields['url'].get().strip(),
                 'logo_url': fields['logo'].get().strip(),
                 'type': fields['type'].get(),
-                'alt_urls': channel.get('alt_urls', [])
             }
             if updated['name'] and updated['url']:
                 self.storage.save_channel(updated)
@@ -1054,8 +1138,10 @@ class AppWindow:
                 def resolve_and_rename():
                     info = resolve_link(url)
                     if info.ok and info.title and info.title != initial_name:
-                        self.storage.delete_link(initial_name)
-                        self.storage.save_link({'name': info.title, 'url': url, 'type': link_type})
+                        current = next((item for item in self.storage.get_links()
+                                        if item.get('name') == initial_name and item.get('url') == url), None)
+                        if current:
+                            self.storage.save_link({**current, 'name': info.title})
                         self.root.after(0, self._refresh_data)
 
                 threading.Thread(target=resolve_and_rename, daemon=True).start()
@@ -1100,14 +1186,12 @@ class AppWindow:
                           text_color=c['text_primary']).grid(row=2, column=1, pady=8, sticky='ew')
 
         def save():
-            updated = {
+            updated = {**link,
                 'name': fields['name'].get().strip(),
                 'url': fields['url'].get().strip(),
                 'type': type_var.get(),
             }
             if updated['name'] and updated['url']:
-                if updated['name'] != name:
-                    self.storage.delete_link(name)
                 self.storage.save_link(updated)
                 self._refresh_data()
                 dialog.destroy()
@@ -1216,10 +1300,18 @@ Built for macOS."""
         self.root.after(0, refresh_status_bar)
 
     def _on_close(self):
+        from gui.mini_player import MiniPlayer
+        from gui.recording_monitor import RecordingMonitorWindow
+
+        self._closing = True
         self._network_monitor_running = False
+        RecordingMonitorWindow.close_if_open()
+        MiniPlayer.stop_all()
         self.preview_panel.stop()
         self.scheduler.stop()
+        self.downloader.shutdown()
         self.recorder.stop_all()
+        self.download_list.flush_persistence()
         self.root.destroy()
 
     def run(self):

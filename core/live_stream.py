@@ -8,6 +8,8 @@ import subprocess
 import threading
 from typing import Callable, Optional
 
+from core.stream_resolver import RECONNECT_OPTS, hls_opts
+
 DEFAULT_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 
 
@@ -24,13 +26,16 @@ class LiveThumbnailStream:
         self.on_frame = on_frame
         self._process: Optional[subprocess.Popen] = None
         self._running = False
+        self._stop_event = threading.Event()
 
     def start(self):
         self._running = True
+        self._stop_event.clear()
         threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
         self._running = False
+        self._stop_event.set()
         proc = self._process
         if proc is not None:
             try:
@@ -46,7 +51,7 @@ class LiveThumbnailStream:
 
         cmd = [
             'ffmpeg', '-y',
-            '-allowed_extensions', 'ALL',
+            *RECONNECT_OPTS, *hls_opts(self.url),
             '-headers', header_str,
             # Без явных лимитов ffmpeg по умолчанию пробует набрать до 5МБ/5с
             # перед стартом декодирования — на медленной сети это само по себе
@@ -66,43 +71,46 @@ class LiveThumbnailStream:
             '-vcodec', 'mjpeg',
             'pipe:1',
         ]
-        try:
-            self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except Exception:
-            return
-
-        buffer = bytearray()
-        try:
-            while self._running:
-                chunk = self._process.stdout.read(8192)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                while True:
-                    start = buffer.find(b'\xff\xd8')
-                    if start == -1:
-                        buffer.clear()
+        retry_delay = 1.0
+        while self._running:
+            try:
+                self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                buffer = bytearray()
+                while self._running:
+                    chunk = self._process.stdout.read(8192)
+                    if not chunk:
                         break
-                    end = buffer.find(b'\xff\xd9', start + 2)
-                    if end == -1:
-                        if start > 0:
-                            del buffer[:start]
-                        break
-                    frame = bytes(buffer[start:end + 2])
-                    del buffer[:end + 2]
-                    if self._running:
-                        self.on_frame(frame)
-        except Exception:
-            pass
-        finally:
-            proc = self._process
-            if proc is not None:
-                try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                        proc.wait(timeout=2)
-                except Exception:
+                    retry_delay = 1.0
+                    buffer.extend(chunk)
+                    while True:
+                        start = buffer.find(b'\xff\xd8')
+                        if start == -1:
+                            buffer.clear()
+                            break
+                        end = buffer.find(b'\xff\xd9', start + 2)
+                        if end == -1:
+                            if start > 0:
+                                del buffer[:start]
+                            break
+                        frame = bytes(buffer[start:end + 2])
+                        del buffer[:end + 2]
+                        if self._running:
+                            self.on_frame(frame)
+            except Exception:
+                pass
+            finally:
+                proc = self._process
+                if proc is not None:
                     try:
-                        proc.kill()
+                        if proc.poll() is None:
+                            proc.terminate()
+                            proc.wait(timeout=2)
                     except Exception:
-                        pass
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                self._process = None
+            if self._running:
+                self._stop_event.wait(retry_delay)
+                retry_delay = min(10.0, retry_delay * 2)

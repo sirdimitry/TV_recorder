@@ -1,5 +1,4 @@
 # core/scheduler.py
-import threading
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 
@@ -69,8 +68,12 @@ class RecordingScheduler:
     def _load_all_schedules(self):
         """Загружает все активные записи из хранилища."""
         schedule_items = self.storage.get_schedule()
-        channels = {channel['name']: channel for channel in self.storage.get_channels()}
-        links = {link['name']: link for link in self.storage.get_links()}
+        channel_list = self.storage.get_channels()
+        link_list = self.storage.get_links()
+        channels = {channel['name']: channel for channel in channel_list}
+        links = {link['name']: link for link in link_list}
+        channels_by_id = {channel.get('id'): channel for channel in channel_list if channel.get('id')}
+        links_by_id = {link.get('id'): link for link in link_list if link.get('id')}
 
         for index, item in enumerate(schedule_items):
             if not item.get('enabled', True):
@@ -79,7 +82,8 @@ class RecordingScheduler:
             name = item.get('channel_name')
             source_type = item.get('source_type', 'channel')
             source_map = links if source_type == 'link' else channels
-            target = source_map.get(name)
+            source_id_map = links_by_id if source_type == 'link' else channels_by_id
+            target = source_id_map.get(item.get('source_id')) or source_map.get(name)
             if not target:
                 kind = 'Ссылка' if source_type == 'link' else 'Канал'
                 logger.warning(f"{kind} '{name}' не найден(а) для расписания #{index}")
@@ -91,31 +95,47 @@ class RecordingScheduler:
         """Добавляет задачу в планировщик."""
         days = item.get('days', [])
         start_time = item.get('start_time', '00:00')
-        end_time = item.get('end_time', '00:30')
         hour, minute = map(int, start_time.split(':'))
-        end_hour, end_minute = map(int, end_time.split(':'))
-
-        start_dt = datetime.now().replace(hour=hour, minute=minute)
-        end_dt = datetime.now().replace(hour=end_hour, minute=end_minute)
-        if end_dt <= start_dt:
-            end_dt += timedelta(days=1)
-        duration = int((end_dt - start_dt).total_seconds())
 
         day_of_week = ','.join(self.DAYS_MAP.get(day, str(day)) for day in days) if days else '*'
         trigger = CronTrigger(hour=hour, minute=minute, day_of_week=day_of_week)
         self.scheduler.add_job(
             self._pre_record_check,
             trigger=trigger,
-            args=[target, duration, item, index],
+            args=[target, item, index],
             id=f"recording_{index}",
             replace_existing=True,
         )
         logger.info(f"Задача добавлена: {target['name']} в {start_time} ({day_of_week})")
 
-    def _pre_record_check(self, target: dict, duration: int, schedule_item: dict, index: int):
+    @staticmethod
+    def _end_deadline(schedule_item: dict, now: Optional[datetime] = None) -> datetime:
+        """Абсолютное время «До» для текущего запуска, включая переход через полночь."""
+        now = now or datetime.now()
+        start_hour, start_minute = map(int, schedule_item.get('start_time', '00:00').split(':'))
+        end_hour, end_minute = map(int, schedule_item.get('end_time', '00:30').split(':'))
+        start_minutes = start_hour * 60 + start_minute
+        end_minutes = end_hour * 60 + end_minute
+        deadline = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        if end_minutes <= start_minutes:
+            deadline += timedelta(days=1)
+        return deadline
+
+    def _schedule_stop_at(self, task_id: str, deadline: datetime) -> float:
+        """Ставит остановку точно на «До» и возвращает оставшиеся секунды."""
+        remaining = max(0.0, (deadline - datetime.now()).total_seconds())
+        self.recorder.schedule_stop(task_id, remaining)
+        return remaining
+
+    def _pre_record_check(self, target: dict, schedule_item: dict, index: int):
         """Проверка перед записью, вызываемая планировщиком."""
         name = target.get('name', 'Unknown')
         source_type = schedule_item.get('source_type', 'channel')
+        deadline = self._end_deadline(schedule_item)
+        if deadline <= datetime.now():
+            logger.error(f"Запись '{name}' не начата: время окончания уже прошло")
+            self._notify_status(index, 'failed')
+            return
         logger.info(f"Предварительная проверка: {name} ({source_type})")
         self._notify_status(index, 'checking')
 
@@ -132,6 +152,10 @@ class RecordingScheduler:
                 # вкладка "Браузер" с отдельным source_type — теперь один и
                 # тот же пункт расписания сам решает по факту резолва.
                 logger.warning(f"Прямой поток для '{name}' не найден ({info.error}) — пробуем через браузер")
+                if deadline <= datetime.now():
+                    logger.error(f"Запись '{name}' не начата: поиск источника занял всё окно расписания")
+                    self._notify_status(index, 'failed')
+                    return
                 output_path = self.recorder.build_output_path(name)
                 self._notify_status(index, 'recording')
                 task_id = self.recorder.start_browser_recording(
@@ -139,15 +163,17 @@ class RecordingScheduler:
                     url=info.player_url or target.get('player_url') or target.get('url', ''),
                     output_path=str(output_path),
                     source='schedule',
-                    on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
+                    start_deadline_timestamp=deadline.timestamp(),
+                    on_complete=lambda success, n, path, early, result, idx=index:
+                        self._on_recording_complete(success, n, path, early, result, idx),
                 )
                 if not task_id:
                     self._on_recording_error(name, 'Не удалось начать запись экрана')
                     self._notify_status(index, 'failed')
                     return
-                timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
-                timer.daemon = True
-                timer.start()
+                remaining = self._schedule_stop_at(task_id, deadline)
+                logger.info(f"Scheduler: '{name}' будет остановлен через {remaining:.1f}с, "
+                            f"строго в {deadline:%H:%M:%S}")
                 return
             video_url, audio_url, extra_headers = info.video_url, info.audio_url, info.headers
         else:
@@ -166,6 +192,12 @@ class RecordingScheduler:
             # там video-only, без этого поля запись выходит совсем без звука).
             video_url, audio_url = target.get('url', ''), target.get('audio_url')
 
+        remaining = (deadline - datetime.now()).total_seconds()
+        if remaining <= 0:
+            logger.error(f"Запись '{name}' не начата: подготовка заняла всё окно расписания")
+            self._notify_status(index, 'failed')
+            return
+
         output_path = self.recorder.build_output_path(name)
         self._notify_status(index, 'recording')
         task_id = self.recorder.start_recording(
@@ -173,9 +205,12 @@ class RecordingScheduler:
             stream_url=video_url,
             output_path=str(output_path),
             source='schedule',
-            on_complete=lambda success, n, path, early, idx=index: self._on_recording_complete(success, n, path, early, idx),
+            on_complete=lambda success, n, path, early, result, idx=index:
+                self._on_recording_complete(success, n, path, early, result, idx),
             audio_url=audio_url,
             extra_headers=extra_headers,
+            duration_limit_seconds=remaining if source_type == 'link' else None,
+            start_deadline_timestamp=deadline.timestamp(),
             is_live_channel=(source_type != 'link'),
         )
         if not task_id:
@@ -183,13 +218,22 @@ class RecordingScheduler:
             self._notify_status(index, 'failed')
             return
 
-        timer = threading.Timer(duration, self.recorder.stop_recording, args=[task_id])
-        timer.daemon = True
-        timer.start()
+        remaining = self._schedule_stop_at(task_id, deadline)
+        logger.info(f"Scheduler: '{name}' будет остановлен через {remaining:.1f}с, "
+                    f"строго в {deadline:%H:%M:%S}")
 
     def _on_recording_complete(self, success: bool, channel_name: str, file_path: str,
-                                ended_early: bool = False, index: Optional[int] = None):
-        if success and ended_early:
+                                ended_early: bool = False, result_status: str = 'completed',
+                                index: Optional[int] = None):
+        if result_status == 'partial':
+            self.notifier.send("⚠️ Запись сохранена частично", f"{channel_name}\n{file_path}")
+            if index is not None:
+                self._notify_status(index, 'partial')
+        elif result_status == 'processing_error':
+            self._on_recording_error(channel_name, 'Итоговый файл не прошёл проверку ffprobe')
+            if index is not None:
+                self._notify_status(index, 'processing_error')
+        elif success and ended_early:
             self.notifier.send("⚠️ Запись завершена раньше срока",
                                 f"{channel_name}\nЭфир или файл закончились раньше, чем длилось окно записи.\n{file_path}")
             if index is not None:

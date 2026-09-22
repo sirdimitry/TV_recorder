@@ -3,15 +3,18 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict
 from core.live_stream import LiveThumbnailStream
+from core.media_probe import COMPLETED, PARTIAL, classify_media
 from core.screen_capture import (build_screen_capture_cmd, build_timestretch_cmd, find_loopback_audio_index,
                                   find_screen_device_index, get_retina_scale_factor)
 from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.config import Config
-from utils.filenames import safe_filename
+from utils.filenames import unique_media_path
 from utils.logger import logger
 
 SNAPSHOT_FPS = 4  # активных записей может быть много одновременно (1-16+) — держим частоту скромной
@@ -44,6 +47,7 @@ class RecordingTask:
         self.started_at: Optional[datetime] = None
         self.finished_at: Optional[datetime] = None
         self.success: Optional[bool] = None
+        self.result_status: Optional[str] = None
         self.error_message = ""
         self.on_complete: Optional[Callable] = None
         self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
@@ -120,10 +124,16 @@ class Recorder:
     
     def __init__(self):
         self.tasks: Dict[str, RecordingTask] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._timer_thread: Optional[threading.Thread] = None
         self._running = False
         self._ui_callbacks: list = []  # несколько подписчиков (панель записей, списки каналов/ссылок)
+        self._snapshot_consumers = 0
+        self._closing = False
+        self._stop_timers: Dict[str, threading.Timer] = {}
+        self._wait_threads: set[threading.Thread] = set()
+        self._screen_capture_confirmation: Optional[Callable[[str, bool, bool], bool]] = None
+        self._screen_capture_error_callback: Optional[Callable[[str], None]] = None
 
     def set_ui_callback(self, callback: Callable):
         """Регистрирует callback для обновления UI (вызывается из любого потока).
@@ -137,6 +147,12 @@ class Recorder:
         if callback in self._ui_callbacks:
             self._ui_callbacks.remove(callback)
 
+    def set_screen_capture_callbacks(self, confirmation: Callable[[str, bool, bool], bool],
+                                     unavailable: Callable[[str], None]):
+        """Подключает UI-подтверждение рискованных режимов захвата экрана."""
+        self._screen_capture_confirmation = confirmation
+        self._screen_capture_error_callback = unavailable
+
     def find_active_task_id(self, channel_name: str) -> Optional[str]:
         """ID текущей активной (незавершённой) записи для этого имени, если есть."""
         with self._lock:
@@ -148,9 +164,7 @@ class Recorder:
     @classmethod
     def build_output_path(cls, channel_name: str, recorded_at: datetime | None = None) -> Path:
         """Builds a portable filename so macOS and Windows handle it identically."""
-        timestamp = (recorded_at or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S')
-        safe_name = safe_filename(channel_name)
-        return Config.get_recordings_dir() / f"{safe_name}_{timestamp}.mp4"
+        return unique_media_path(Config.get_recordings_dir(), channel_name, recorded_at)
 
     def _notify_ui(self):
         """Безопасный вызов всех UI callback'ов из любого потока"""
@@ -168,12 +182,17 @@ class Recorder:
                        seek_seconds: Optional[float] = None,
                        clip_end_seconds: Optional[float] = None,
                        duration_limit_seconds: Optional[float] = None,
+                       start_deadline_timestamp: Optional[float] = None,
                        is_live_channel: bool = False) -> str:
+        with self._lock:
+            if self._closing:
+                logger.warning(f"Recorder: запуск '{channel_name}' отклонён — приложение закрывается")
+                return ""
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        task_id = f"{channel_name}_{int(time.time())}"
+        task_id = uuid.uuid4().hex
 
         if extra_headers:
             # Ссылки, разобранные через yt-dlp (core/link_resolver.py),
@@ -240,6 +259,13 @@ class Recorder:
             logger.info(f"Recorder: запись '{channel_name}' ограничена {duration_limit_seconds:.0f}с контента (-t)")
 
         if audio_url:
+            if start_deadline_timestamp is not None:
+                remaining = start_deadline_timestamp - time.time()
+                if remaining <= 0:
+                    logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска ffmpeg")
+                    return ""
+                duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
+                                           if duration_limit_seconds else remaining)]
             # Видео и звук — уже отдельные закодированные дорожки (типично
             # для YouTube на 720p+): просто мультиплексируем их в один файл,
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
@@ -263,6 +289,14 @@ class Recorder:
             # ffmpeg (обычно самый тяжёлый) — без перекодирования, просто
             # другой исходный вариант для copy-режима.
             stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
+
+            if start_deadline_timestamp is not None:
+                remaining = start_deadline_timestamp - time.time()
+                if remaining <= 0:
+                    logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска ffmpeg")
+                    return ""
+                duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
+                                           if duration_limit_seconds else remaining)]
 
             # У части "instant DVR/catch-up" HLS-источников (обнаружено на
             # "Доверие" — rt-mos-htlive.cdn.ngenix.net) сегменты в плейлисте
@@ -305,18 +339,25 @@ class Recorder:
         task.clip_end_seconds = clip_end_seconds
 
         try:
-            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            task.is_recording = True
-            task.start_time = time.time()
-            task.started_at = datetime.now()
-            
             with self._lock:
+                if self._closing:
+                    return ""
+                task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                task.is_recording = True
+                task.start_time = time.time()
+                task.started_at = datetime.now()
                 self.tasks[task_id] = task
             
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
-            threading.Thread(target=self._wait_for_task, args=(task,), daemon=True).start()
-            self._start_snapshot_stream(task)
+            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=True)
+            with self._lock:
+                self._wait_threads.add(wait_thread)
+            wait_thread.start()
+            with self._lock:
+                snapshots_requested = self._snapshot_consumers > 0
+            if snapshots_requested:
+                self._start_snapshot_stream(task)
 
             if not self._running:
                 self._start_timer_loop()
@@ -332,7 +373,8 @@ class Recorder:
 
     def start_browser_recording(self, channel_name: str, url: str, output_path: str,
                                  source: str = "manual", on_complete: Optional[Callable] = None,
-                                 speed_factor: Optional[float] = None) -> str:
+                                 speed_factor: Optional[float] = None,
+                                 start_deadline_timestamp: Optional[float] = None) -> str:
         """Запись через захват экрана: открывает ссылку в отдельном окне-браузере
         и параллельно пишет экран через ffmpeg/avfoundation — для сайтов, чью
         прямую ссылку на поток получить не удалось (core/link_resolver.py).
@@ -349,6 +391,10 @@ class Recorder:
         build_timestretch_cmd растягивает файл обратно до нормальной
         скорости. Кадровая частота исходного захвата поднимается
         пропорционально — иначе после растяжки видео будет дёрганым."""
+        with self._lock:
+            if self._closing:
+                logger.warning(f"Recorder: запуск '{channel_name}' отклонён — приложение закрывается")
+                return ""
         Config.init_dirs()
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -356,13 +402,15 @@ class Recorder:
         screen_index = find_screen_device_index()
         if screen_index is None:
             logger.error("Recorder: не найдено устройство 'Capture screen' для avfoundation")
+            if self._screen_capture_error_callback:
+                self._screen_capture_error_callback(channel_name)
             return ""
         audio_index = find_loopback_audio_index()
         if audio_index is None:
             logger.warning("Recorder: устройство BlackHole не найдено — запись экрана будет без звука "
                             "(нужен виртуальный аудио-loopback и Multi-Output Device в Audio MIDI Setup)")
 
-        task_id = f"{channel_name}_{int(time.time())}"
+        task_id = uuid.uuid4().hex
 
         browser_args = [url, channel_name]
         if speed_factor and speed_factor > 1:
@@ -385,6 +433,24 @@ class Recorder:
         else:
             logger.warning(f"Recorder: не удалось получить границы окна-браузера '{channel_name}' — "
                             f"придётся писать весь экран целиком")
+
+        needs_full_screen = crop is None
+        needs_silent_capture = audio_index is None
+        if needs_full_screen or needs_silent_capture:
+            if self._screen_capture_confirmation is None:
+                logger.error("Recorder: рискованный режим захвата не подтверждён интерфейсом")
+                browser_proc.terminate()
+                return ""
+            try:
+                allowed = self._screen_capture_confirmation(
+                    channel_name, needs_full_screen, needs_silent_capture)
+            except Exception as error:
+                logger.error(f"Recorder: не удалось запросить разрешение на захват: {error}")
+                allowed = False
+            if not allowed:
+                logger.info(f"Recorder: пользователь отменил захват экрана '{channel_name}'")
+                browser_proc.terminate()
+                return ""
 
         speed_confirmed = False
         if speed_factor and speed_factor > 1:
@@ -410,6 +476,11 @@ class Recorder:
         cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index, crop=crop,
                                         framerate=capture_framerate)
 
+        if start_deadline_timestamp is not None and time.time() >= start_deadline_timestamp:
+            logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска захвата экрана")
+            browser_proc.terminate()
+            return ""
+
         task = RecordingTask(task_id, channel_name, url, str(output_file), source)
         task.on_complete = on_complete
         task.is_screen_capture = True
@@ -422,17 +493,22 @@ class Recorder:
         task.screen_capture_has_audio = audio_index is not None
 
         try:
-            task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            task.is_recording = True
-            task.start_time = time.time()
-            task.started_at = datetime.now()
-
             with self._lock:
+                if self._closing:
+                    browser_proc.terminate()
+                    return ""
+                task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                task.is_recording = True
+                task.start_time = time.time()
+                task.started_at = datetime.now()
                 self.tasks[task_id] = task
 
             logger.info(f"Recorder: Начата запись экрана '{channel_name}' → {output_file} (source: {source})")
 
-            threading.Thread(target=self._wait_for_task, args=(task,), daemon=True).start()
+            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=True)
+            with self._lock:
+                self._wait_threads.add(wait_thread)
+            wait_thread.start()
             threading.Thread(target=self._watch_browser_proc, args=(task,), daemon=True).start()
 
             if not self._running:
@@ -515,6 +591,18 @@ class Recorder:
             self.stop_recording(task.task_id)
 
     @staticmethod
+    def _leave_paused_state(task: 'RecordingTask', resume_process: bool = True):
+        """Снимает паузу и учитывает её длительность перед остановкой/выходом."""
+        if not task.is_paused:
+            return
+        if resume_process and task.process and task.process.poll() is None:
+            # Остановленный SIGSTOP процесс сначала нужно продолжить: иначе
+            # он может не обработать SIGINT/SIGTERM и не дописать контейнер.
+            task.process.send_signal(signal.SIGCONT)
+        task.total_paused_duration += max(0.0, time.time() - task.pause_time)
+        task.is_paused = False
+
+    @staticmethod
     def _terminate_task_process(task: 'RecordingTask'):
         """SIGTERM надёжно останавливает обычный -c copy ffmpeg (стрим
         каналов/ссылок), но запись экрана (-f avfoundation, см.
@@ -525,6 +613,7 @@ class Recorder:
         дописывает корректный трейлер и выходит. Раньше отправлялся
         SIGTERM всегда — судя по всему, именно это давало запись экрана,
         которая не останавливалась таймером "До:" вовремя."""
+        Recorder._leave_paused_state(task)
         if task.is_screen_capture:
             task.process.send_signal(signal.SIGINT)
         else:
@@ -534,7 +623,7 @@ class Recorder:
         with self._lock:
             task = self.tasks.get(task_id)
 
-        if task and task.process:
+        if task and task.process and task.is_recording and task.process.poll() is None:
             logger.info(f"Recorder: Остановка записи '{task.channel_name}' (task: {task_id})")
             task.final_duration = task.get_elapsed_time()
             task.stop_requested = True
@@ -544,21 +633,41 @@ class Recorder:
             if task.browser_proc and task.browser_proc.poll() is None:
                 task.browser_proc.terminate()
             self._notify_ui()
+
+    def schedule_stop(self, task_id: str, delay_seconds: float):
+        """Регистрирует отменяемый таймер остановки записи."""
+        def stop_from_timer():
+            with self._lock:
+                self._stop_timers.pop(task_id, None)
+                if self._closing:
+                    return
+            self.stop_recording(task_id)
+
+        timer = threading.Timer(max(0.0, delay_seconds), stop_from_timer)
+        timer.daemon = True
+        with self._lock:
+            if self._closing:
+                return
+            previous = self._stop_timers.pop(task_id, None)
+            self._stop_timers[task_id] = timer
+        if previous:
+            previous.cancel()
+        timer.start()
     
     def pause_recording(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
         
-        if task and task.process:
+        if task and task.process and task.is_recording and task.process.poll() is None:
             if not task.is_paused:
-                task.process.send_signal(19)
+                task.process.send_signal(signal.SIGSTOP)
                 task.is_paused = True
                 task.pause_time = time.time()
+                self._stop_snapshot_stream(task)
                 logger.info(f"Recorder: Пауза '{task.channel_name}'")
             else:
-                task.process.send_signal(18)
-                task.total_paused_duration += time.time() - task.pause_time
-                task.is_paused = False
+                self._leave_paused_state(task)
+                self._start_snapshot_stream(task)
                 logger.info(f"Recorder: Возобновление '{task.channel_name}'")
             
             self._notify_ui()
@@ -576,9 +685,25 @@ class Recorder:
     def _wait_for_task(self, task: RecordingTask):
         if not task.process:
             return
-        
-        stdout, stderr = task.process.communicate()
+
+        # communicate() сохранял весь stderr многoчасовой записи в памяти.
+        # Читаем поток непрерывно, но держим только последние строки для
+        # диагностики ошибки. stdout ffmpeg для записи не используется.
+        stderr_tail = deque(maxlen=200)
+
+        def drain_stderr():
+            try:
+                for line in task.process.stderr:
+                    stderr_tail.append(line)
+            except (OSError, ValueError):
+                pass
+
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
+        task.process.wait()
+        stderr_thread.join(timeout=1)
         returncode = task.process.returncode
+        self._leave_paused_state(task, resume_process=False)
         
         if task.final_duration == 0:
             task.final_duration = task.get_elapsed_time()
@@ -588,35 +713,64 @@ class Recorder:
         if task.browser_proc and task.browser_proc.poll() is None:
             task.browser_proc.terminate()
 
-        success = returncode == 0 or returncode == 255
+        # При штатной остановке кнопкой/таймером код зависит от платформы и
+        # сигнала; окончательное качество всё равно определит ffprobe ниже.
+        process_ok = returncode in (0, 255) or task.stop_requested
         output_file = Path(task.output_path)
-        has_usable_file = output_file.is_file() and output_file.stat().st_size > 1024
-        success = success and has_usable_file
-        if success and task.speed_factor:
-            self._timestretch_task_output(task)
+        with self._lock:
+            closing = self._closing
+        if process_ok and task.speed_factor:
+            if closing:
+                # Многоминутное перекодирование нельзя оставлять daemon-потоку
+                # после уничтожения приложения; исходный ускоренный файл цел.
+                process_ok = False
+            else:
+                process_ok = self._timestretch_task_output(task)
+        expect_audio = bool(task.audio_url) or (task.is_screen_capture and task.screen_capture_has_audio)
+        result_status, probe = classify_media(output_file, process_ok, expect_audio=expect_audio)
+        success = result_status == COMPLETED
+        task.result_status = result_status
         task.success = success
         # Если ffmpeg сам дошёл до конца потока (и мы его об этом не просили) —
         # значит источник закончился раньше, чем длилось окно записи: эфир
         # прервался или закончился сам записываемый файл/ролик.
-        task.ended_early = success and not task.stop_requested
+        task.ended_early = result_status == COMPLETED and not task.stop_requested
         if success:
             if task.ended_early:
                 logger.warning(f"Recorder: '{task.channel_name}' — источник закончился раньше окна записи")
             else:
                 logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
+        elif result_status == PARTIAL:
+            reasons = []
+            if task.speed_factor and closing:
+                reasons.append('обратное растяжение ускоренной записи отменено при закрытии приложения')
+            elif not process_ok:
+                reasons.append(f'ffmpeg завершился с кодом {returncode}')
+            if expect_audio and not probe.has_audio:
+                reasons.append('в итоговом файле отсутствует ожидаемая звуковая дорожка')
+            task.error_message = '; '.join(reasons) or 'файл сохранён не полностью'
+            logger.warning(f"Recorder: Частичная запись '{task.channel_name}': {task.error_message}")
         else:
+            stderr = b''.join(stderr_tail)
             err_msg = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
-            if not has_usable_file:
-                err_msg = "Recording finished without creating a usable video file. " + err_msg
+            err_msg = f"{probe.error}. {err_msg}".strip()
             task.error_message = err_msg
-            logger.error(f"Recorder: Ошибка записи '{task.channel_name}' (code {returncode}): {err_msg}")
+            logger.error(f"Recorder: Ошибка обработки '{task.channel_name}' (code {returncode}): {err_msg}")
 
         if task.on_complete:
-            task.on_complete(success, task.channel_name, task.output_path, task.ended_early)
+            try:
+                task.on_complete(success, task.channel_name, task.output_path, task.ended_early, result_status)
+            except Exception as error:
+                logger.error(f"Recorder: ошибка callback завершения '{task.channel_name}': {error}")
 
         self._notify_ui()
+        with self._lock:
+            timer = self._stop_timers.pop(task.task_id, None)
+            self._wait_threads.discard(threading.current_thread())
+        if timer:
+            timer.cancel()
 
-    def _timestretch_task_output(self, task: RecordingTask):
+    def _timestretch_task_output(self, task: RecordingTask) -> bool:
         """Растягивает файл, записанный на ускоренном playbackRate, обратно
         до нормальной скорости (см. start_browser_recording). Идёт СИНХРОННО
         в потоке _wait_for_task — этот поток и так уже фоновый и больше
@@ -636,37 +790,60 @@ class Recorder:
                 temp_file.rename(output_file)
                 logger.info(f"Recorder: '{task.channel_name}' — запись растянута обратно по времени "
                             f"(записывалась на x{task.speed_factor:.0f})")
+                return True
             else:
                 temp_file.unlink(missing_ok=True)
                 err = result.stderr.decode('utf-8', errors='ignore')[-300:] if result.stderr else ''
                 logger.error(f"Recorder: не удалось растянуть по времени '{task.channel_name}' — "
                              f"файл остался ускоренным ({task.speed_factor:.0f}x): {err}")
+                return False
         except Exception as e:
             temp_file.unlink(missing_ok=True)
             logger.error(f"Recorder: ошибка растяжки по времени '{task.channel_name}' — "
                          f"файл остался ускоренным ({task.speed_factor:.0f}x): {e}")
+            return False
 
     def _start_snapshot_stream(self, task: RecordingTask):
-        """Непрерывный поток кадров (~4 fps) на саму задачу — централизованно,
-        один ffmpeg-процесс на запись, а не по одному на каждого, кто её
-        отображает (панель записей + окно-монитор независимо друг от друга
-        дублировали бы одни и те же вызовы)."""
+        """Запускает один поток кадров для задачи, пока открыт монитор."""
         def on_frame(jpeg_bytes: bytes):
             task.last_snapshot = jpeg_bytes
             task.snapshot_seq += 1
             # _notify_ui() здесь не дёргаем: при нескольких записях это было
             # бы широковещательное уведомление всем подписчикам на каждый
-            # кадр каждой задачи. Панель записей и монитор сами опрашивают
-            # snapshot_seq с нужной им частотой.
+            # кадр каждой задачи. Окно монитора само опрашивает snapshot_seq.
 
-        task.snapshot_stream = LiveThumbnailStream(
-            task.stream_url, task.headers, fps=SNAPSHOT_FPS, on_frame=on_frame)
-        task.snapshot_stream.start()
+        with self._lock:
+            if (self._snapshot_consumers <= 0 or task.is_screen_capture
+                    or not task.is_recording or task.snapshot_stream is not None):
+                return
+            task.snapshot_stream = LiveThumbnailStream(
+                task.stream_url, task.headers, fps=SNAPSHOT_FPS, on_frame=on_frame)
+            task.snapshot_stream.start()
+
+    def acquire_snapshot_consumer(self):
+        """Включает живые миниатюры, пока хотя бы одно окно их показывает."""
+        with self._lock:
+            self._snapshot_consumers += 1
+            tasks = [task for task in self.tasks.values() if task.is_recording]
+        for task in tasks:
+            self._start_snapshot_stream(task)
+
+    def release_snapshot_consumer(self):
+        """Останавливает декодирование кадров после закрытия последнего окна."""
+        with self._lock:
+            self._snapshot_consumers = max(0, self._snapshot_consumers - 1)
+            should_stop = self._snapshot_consumers == 0
+            tasks = list(self.tasks.values()) if should_stop else []
+        for task in tasks:
+            self._stop_snapshot_stream(task)
 
     def _stop_snapshot_stream(self, task: RecordingTask):
-        if task.snapshot_stream is not None:
-            task.snapshot_stream.stop()
+        with self._lock:
+            stream = task.snapshot_stream
             task.snapshot_stream = None
+            task.last_snapshot = None
+        if stream is not None:
+            stream.stop()
 
     def _start_timer_loop(self):
         self._running = True
@@ -684,17 +861,38 @@ class Recorder:
         self._timer_thread = threading.Thread(target=loop, daemon=True)
         self._timer_thread.start()
     
-    def stop_all(self):
+    def stop_all(self, timeout: float = 20.0):
+        """Запрещает новые задачи и дожидается финализации активных файлов."""
         self._running = False
         with self._lock:
-            for task in self.tasks.values():
-                if task.process and task.is_recording:
-                    task.final_duration = task.get_elapsed_time()
-                    task.stop_requested = True
-                    self._terminate_task_process(task)
-                    task.is_recording = False
-                    self._stop_snapshot_stream(task)
-                    if task.browser_proc and task.browser_proc.poll() is None:
-                        task.browser_proc.terminate()
-            self.tasks.clear()
+            self._closing = True
+            timers = list(self._stop_timers.values())
+            self._stop_timers.clear()
+            tasks = list(self.tasks.values())
+        for timer in timers:
+            timer.cancel()
+
+        for task in tasks:
+            if task.process and task.is_recording and task.process.poll() is None:
+                task.final_duration = task.get_elapsed_time()
+                task.stop_requested = True
+                self._terminate_task_process(task)
+                task.is_recording = False
+                self._stop_snapshot_stream(task)
+            if task.browser_proc and task.browser_proc.poll() is None:
+                task.browser_proc.terminate()
+
+        deadline = time.monotonic() + timeout
+        for task in tasks:
+            for process in (task.process, task.browser_proc):
+                if process and process.poll() is None:
+                    try:
+                        process.wait(timeout=max(0.1, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+
+        with self._lock:
+            wait_threads = list(self._wait_threads)
+        for thread in wait_threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
         self._notify_ui()
