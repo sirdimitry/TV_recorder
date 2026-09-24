@@ -52,6 +52,7 @@ class RecordingTask:
         self.on_complete: Optional[Callable] = None
         self.stop_requested = False  # True, если остановку инициировали мы (кнопка/расписание/выход)
         self.ended_early = False  # True, если ffmpeg сам дошёл до конца потока раньше, чем мы попросили его остановиться
+        self.duration_limit_seconds: Optional[float] = None
         self.headers: Optional[dict] = None  # заголовки, с которыми реально шла запись — для live-превью того же потока
         # Если видео и звук у источника — раздельные HLS-рендиции (см.
         # 'Россия 24'/'Россия К' в core/m3u_parser.py), stream_url отдаёт
@@ -338,6 +339,7 @@ class Recorder:
         task.audio_url = audio_url
         task.clip_start_seconds = seek_seconds
         task.clip_end_seconds = clip_end_seconds
+        task.duration_limit_seconds = float(duration_opts[1]) if duration_opts else None
 
         try:
             with self._lock:
@@ -735,7 +737,13 @@ class Recorder:
         # Если ffmpeg сам дошёл до конца потока (и мы его об этом не просили) —
         # значит источник закончился раньше, чем длилось окно записи: эфир
         # прервался или закончился сам записываемый файл/ролик.
-        task.ended_early = result_status == COMPLETED and not task.stop_requested
+        # -t завершает FFmpeg самостоятельно. Сверяем длительность файла,
+        # чтобы отличить штатный конец фрагмента от преждевременного EOF.
+        reached_limit = (task.duration_limit_seconds is not None
+                         and probe.duration is not None
+                         and probe.duration >= task.duration_limit_seconds - 0.25)
+        task.ended_early = (result_status == COMPLETED
+                            and not task.stop_requested and not reached_limit)
         if success:
             if task.ended_early:
                 logger.warning(f"Recorder: '{task.channel_name}' — источник закончился раньше окна записи")
@@ -765,6 +773,17 @@ class Recorder:
                 logger.error(f"Recorder: ошибка callback завершения '{task.channel_name}': {error}")
 
         self._notify_ui()
+
+    def remove_completed_tasks(self) -> int:
+        """Убирает завершённые строки из интерфейса, не удаляя медиафайлы."""
+        with self._lock:
+            completed_ids = [task_id for task_id, task in self.tasks.items()
+                             if not task.is_recording and task.result_status is not None]
+            for task_id in completed_ids:
+                del self.tasks[task_id]
+        if completed_ids:
+            self._notify_ui()
+        return len(completed_ids)
         with self._lock:
             timer = self._stop_timers.pop(task.task_id, None)
             self._wait_threads.discard(threading.current_thread())

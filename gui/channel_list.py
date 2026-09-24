@@ -165,7 +165,9 @@ class ChannelList(ctk.CTkFrame):
                     logger.debug(f"Ошибка отображения логотипа {name}: {e}")
 
             def apply():
-                if name not in self.channel_widgets:
+                widgets = self.channel_widgets.get(name)
+                if (not widgets or widgets.get('logo_label') is not logo_label
+                        or not logo_label.winfo_exists()):
                     return
                 if image is not None:
                     logo_label.configure(image=image)

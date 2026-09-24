@@ -123,6 +123,10 @@ class DownloadList(ctk.CTkFrame):
             ctk.CTkButton(header_row, text="", image=get_icon('plus', c['accent_text'], 14), width=26, height=26,
                           corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
                           command=self.on_add).pack(side='right')
+        ctk.CTkButton(header_row, text="Очистить всё", height=26,
+                      corner_radius=Config.RADIUS_SM, fg_color='transparent',
+                      hover_color=c['bg_hover'], text_color=c['text_secondary'],
+                      command=self._clear_all).pack(side='right', padx=(0, 6))
 
         hint = ctk.CTkLabel(
             self, text="Пришлите ссылку — найдём в ней видео (при необходимости отдельно "
@@ -476,6 +480,29 @@ class DownloadList(ctk.CTkFrame):
         if widgets:
             widgets['row'].destroy()
 
+    def _clear_all(self):
+        if not self.row_widgets and not (self.storage and self.storage.get_downloads()):
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Очистить загрузки",
+                "Очистить всю историю загрузок?\nАктивные загрузки будут отменены, готовые файлы останутся на диске.",
+                parent=self.root):
+            return
+
+        if self.downloader:
+            for task in self.downloader.get_all_downloads():
+                if task.status in ('resolving', 'downloading'):
+                    self.downloader.cancel_download(task.task_id)
+                self.downloader.remove_task(task.task_id)
+
+        # Завершаем более раннее сохранение перед окончательной пустой записью.
+        self.flush_persistence()
+        if self.storage:
+            self.storage.delete_all_downloads()
+        self._last_queued_status.clear()
+        self.load_downloads([])
+
     def _on_downloader_update(self):
         self.after(0, self._refresh_from_downloader)
 
@@ -559,10 +586,18 @@ class DownloadList(ctk.CTkFrame):
 
     def flush_persistence(self):
         """Перед закрытием сохраняет последний снимок и дожидается записи."""
+        self.begin_shutdown()
+        self.wait_for_persistence()
+
+    def begin_shutdown(self):
+        """Вызывается из Tk-потока перед фоновым завершением приложения."""
         if self._persist_after_id is not None:
             self.after_cancel(self._persist_after_id)
             self._persist_after_id = None
         self._queue_persistence()
+
+    def wait_for_persistence(self):
+        """Ожидание дисковой записи можно выполнять вне Tk-потока."""
         with self._persist_lock:
             thread = self._persist_thread
         if thread is not None:

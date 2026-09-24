@@ -248,6 +248,11 @@ class Storage:
             self._save_json(self.links_file, links)
         logger.info(f"Ссылка удалена: {name}")
 
+    def delete_all_links(self):
+        with self._io_lock:
+            self._save_json(self.links_file, [])
+        logger.info("Все ссылки удалены")
+
     # === Расписание ===
     def get_schedule(self) -> List[Dict]:
         return self._load_json(self.schedule_file)
@@ -325,6 +330,11 @@ class Storage:
                 removed = schedule.pop(index)
                 self._save_json(self.schedule_file, schedule)
                 logger.info(f"Расписание удалено: {removed.get('channel_name')}")
+
+    def delete_all_schedule_items(self):
+        with self._io_lock:
+            self._save_json(self.schedule_file, [])
+        logger.info("Расписание очищено")
     
     def toggle_schedule_item(self, index: int):
         with self._io_lock:
@@ -361,3 +371,8 @@ class Storage:
             downloads = [item for item in self.get_downloads() if item.get('id') != download_id]
             self._save_json(self.downloads_file, downloads)
         logger.info(f"Загрузка удалена: {download_id}")
+
+    def delete_all_downloads(self):
+        with self._io_lock:
+            self._save_json(self.downloads_file, [])
+        logger.info("История загрузок очищена")

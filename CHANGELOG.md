@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.30] - 2026-09-24
+
+- See the accompanying Git commit message for details.
+
+## [1.1.29] - 2026-09-24
+
+- Keep user-edited channel streams through playlist sync; use the playlist temporarily when the preferred stream is unavailable.
+- Ignore delayed link and logo updates for list rows that have already been replaced.
+
+## [1.1.28] - 2026-09-24
+
+- “Сейчас” records the channel or link selected in the form, without requiring a schedule row selection.
+- Application shutdown now waits for recording, download, and file finalization in the background so the window remains responsive.
+
+## [1.1.27] - 2026-09-23
+
+- The schedule “Clear” action now removes schedule and completed-recording rows while preserving form values.
+- Selecting a channel now chooses today and a valid 30-minute time window.
+- Added “Clear all” actions for saved links and download history.
+- Corrected completion status for recordings with a duration limit.
+
 ## [1.1.26] - 2026-09-22
 
 - See the accompanying Git commit message for details.

@@ -267,8 +267,8 @@ class AppWindow:
     def _sync_channels(self):
         """Синхронизирует список каналов с живым плейлистом.
 
-        Живой плейлист — источник истины и может обновлять уже сохранённые
-        каналы (URL потока/логотипа мог поменяться). Локальный
+        Исправленные пользователем адреса имеют приоритет, пока доступны.
+        Живой плейлист обновляет остальные каналы. Локальный
         default_channels.json — это статичный аварийный резерв на случай,
         когда сеть недоступна; он используется только чтобы добавить каналы,
         которых ещё нет, и никогда не перезаписывает уже сохранённые —
@@ -292,6 +292,8 @@ class AppWindow:
 
         current = self.storage.get_channels()
         current_map = {ch['name']: ch for ch in current}
+        from core.checker import StreamChecker, StreamStatus
+        checker = StreamChecker()
 
         added = 0
         updated = 0
@@ -302,6 +304,26 @@ class AppWindow:
                 added += 1
             elif is_live:
                 existing = current_map[ch['name']]
+                preferred_url = existing.get('preferred_url')
+                if preferred_url:
+                    status, message = checker.check({**existing, 'url': preferred_url})
+                    if status != StreamStatus.RED:
+                        if existing.get('url') != preferred_url:
+                            existing = {**existing, 'url': preferred_url, 'audio_url': None}
+                            self.storage.save_channel(existing)
+                            current_map[ch['name']] = existing
+                            updated += 1
+                        logger.info(f"Канал '{ch['name']}': пользовательский поток сохранён ({message})")
+                        continue
+                    logger.warning(f"Канал '{ch['name']}': пользовательский поток недоступен ({message}), "
+                                   "временно используем адрес из плейлиста")
+                    fallback = {**existing, 'url': ch['url']}
+                    if ch.get('audio_url'):
+                        fallback['audio_url'] = ch['audio_url']
+                    self.storage.save_channel(fallback)
+                    current_map[ch['name']] = fallback
+                    updated += 1
+                    continue
                 if (existing.get('url') != ch['url'] or existing.get('logo_url') != ch['logo_url']
                         or existing.get('audio_url') != ch.get('audio_url')):
                     self.storage.save_channel(ch)
@@ -320,7 +342,8 @@ class AppWindow:
             if not audio_fix:
                 continue
             existing = current_map.get(name)
-            if existing and existing.get('audio_url') != audio_fix:
+            if (existing and existing.get('url') != existing.get('preferred_url')
+                    and existing.get('audio_url') != audio_fix):
                 existing['audio_url'] = audio_fix
                 self.storage.save_channel(existing)
                 updated += 1
@@ -493,6 +516,7 @@ class AppWindow:
             on_delete=self._delete_link,
             on_add=self._add_link_dialog,
             on_preview=self._show_channel_preview,
+            on_clear_all=self._delete_all_links,
         )
         self.link_list.grid(row=0, column=0, sticky='nsew')
 
@@ -519,7 +543,8 @@ class AppWindow:
         schedule_container = ctk.CTkFrame(right_paned, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS,
                                           border_width=1, border_color=c['border'])
         self.schedule_panel = SchedulePanel(schedule_container, on_schedule_changed=self._on_schedule_changed,
-                                             on_record_now=self._record_from_schedule_item)
+                                             on_record_now=self._record_from_schedule_item,
+                                             on_clear_recordings=self._clear_completed_recordings)
         self.schedule_panel.pack(fill='both', expand=True)
         right_paned.add(schedule_container, weight=1)
 
@@ -594,6 +619,10 @@ class AppWindow:
 
     def _on_schedule_changed(self):
         self.scheduler.reload_schedules()
+
+    def _clear_completed_recordings(self):
+        self.recorder.remove_completed_tasks()
+        self.recording_panel.refresh()
 
     def _record_channel_now(self, name: str, channel: Dict):
         """Мгновенная запись выбранного канала по кнопке записи у канала"""
@@ -796,6 +825,17 @@ class AppWindow:
             self.storage.delete_link(name)
             self._refresh_data()
 
+    def _delete_all_links(self):
+        links = self.storage.get_links()
+        if not links:
+            return
+        if messagebox.askyesno(
+                "Очистить ссылки",
+                "Удалить все ссылки из списка?\nЭто не затронет уже сделанные записи и загрузки.",
+                parent=self.root):
+            self.storage.delete_all_links()
+            self._refresh_data()
+
     def _create_dialog(self, title: str, geo: str) -> ctk.CTkToplevel:
         c = self.colors
         dialog = ctk.CTkToplevel(self.root)
@@ -896,6 +936,9 @@ class AppWindow:
                 'type': fields['type'].get(),
             }
             if updated['name'] and updated['url']:
+                if updated['url'] != channel.get('url'):
+                    updated['preferred_url'] = updated['url']
+                    updated['audio_url'] = None
                 self.storage.save_channel(updated)
                 self._refresh_data()
                 dialog.destroy()
@@ -1386,16 +1429,38 @@ class AppWindow:
         from gui.mini_player import MiniPlayer
         from gui.recording_monitor import RecordingMonitorWindow
 
+        if self._closing:
+            return
         self._closing = True
         self._network_monitor_running = False
+        self.root.title("TV Recorder — завершение…")
         RecordingMonitorWindow.close_if_open()
-        MiniPlayer.stop_all()
         self.preview_panel.stop()
         self.scheduler.stop()
-        self.downloader.shutdown()
-        self.recorder.stop_all()
-        self.download_list.flush_persistence()
-        self.root.destroy()
+        self.download_list.begin_shutdown()
+
+        finished = threading.Event()
+
+        def shutdown():
+            try:
+                MiniPlayer.stop_all()
+                self.downloader.shutdown()
+                self.recorder.stop_all()
+                self.download_list.wait_for_persistence()
+            except Exception:
+                logger.exception("Ошибка при завершении приложения")
+            finally:
+                finished.set()
+
+        threading.Thread(target=shutdown, daemon=True).start()
+
+        def finish_when_ready():
+            if finished.is_set():
+                self.root.destroy()
+            else:
+                self.root.after(100, finish_when_ready)
+
+        self.root.after(100, finish_when_ready)
 
     def run(self):
         logger.info("Приложение запущено")

@@ -70,6 +70,26 @@ class StorageTests(unittest.TestCase):
         downloads = {item['id']: item for item in self.storage.get_downloads()}
         self.assertEqual(set(downloads), {'old', 'one', 'two'})
 
+    def test_clear_all_links_and_downloads(self):
+        self.storage.links_file = self.root / 'links.json'
+        self.storage.downloads_file = self.root / 'downloads.json'
+        self.storage._save_json(self.storage.links_file, [{'id': 'link'}])
+        self.storage._save_json(self.storage.downloads_file, [{'id': 'download'}])
+
+        self.storage.delete_all_links()
+        self.storage.delete_all_downloads()
+
+        self.assertEqual(self.storage.get_links(), [])
+        self.assertEqual(self.storage.get_downloads(), [])
+
+    def test_clear_all_schedule_items(self):
+        self.storage.schedule_file = self.root / 'schedule.json'
+        self.storage._save_json(self.storage.schedule_file, [{'channel_name': 'Channel'}])
+
+        self.storage.delete_all_schedule_items()
+
+        self.assertEqual(self.storage.get_schedule(), [])
+
     def test_migration_assigns_ids_and_connects_legacy_schedule(self):
         self.storage.channels_file = self.root / 'channels.json'
         self.storage.links_file = self.root / 'links.json'
@@ -111,8 +131,71 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(schedule_item['channel_name'], 'Новое')
         self.assertEqual(schedule_item['source_id'], 'channel-id')
 
+    def test_user_channel_url_survives_online_sync_when_available(self):
+        self.storage.channels_file = self.root / 'channels.json'
+        self.storage.schedule_file = self.root / 'schedule.json'
+        self.storage._save_json(self.storage.channels_file, [
+            {'id': 'one', 'name': 'Первый канал', 'url': 'https://custom/live.m3u8',
+             'preferred_url': 'https://custom/live.m3u8', 'type': 'iptv'},
+        ])
+        self.storage._save_json(self.storage.schedule_file, [
+            {'source_id': 'one', 'channel_name': 'Первый канал', 'source_type': 'channel'},
+        ])
+        app = object.__new__(AppWindow)
+        app.storage = self.storage
+        app.splash = Mock()
+        online = [{'name': 'Первый канал', 'url': 'https://playlist/live.m3u8',
+                   'logo_url': '', 'type': 'iptv'}]
+        with patch('core.m3u_parser.M3UParser.fetch_and_parse', return_value=online), \
+                patch('core.checker.StreamChecker.check', return_value=(StreamStatus.GREEN, 'ok')):
+            app._sync_channels()
+
+        self.assertEqual(self.storage.get_channels()[0]['url'], 'https://custom/live.m3u8')
+        self.assertEqual(self.storage.get_schedule()[0]['source_id'], 'one')
+
+        with patch('core.m3u_parser.M3UParser.fetch_and_parse', return_value=online), \
+                patch('core.checker.StreamChecker.check', return_value=(StreamStatus.RED, 'offline')):
+            app._sync_channels()
+        channel = self.storage.get_channels()[0]
+        self.assertEqual(channel['url'], 'https://playlist/live.m3u8')
+        self.assertEqual(channel['preferred_url'], 'https://custom/live.m3u8')
+
+        with patch('core.m3u_parser.M3UParser.fetch_and_parse', return_value=online), \
+                patch('core.checker.StreamChecker.check', return_value=(StreamStatus.GREEN, 'ok')):
+            app._sync_channels()
+        self.assertEqual(self.storage.get_channels()[0]['url'], 'https://custom/live.m3u8')
+
 
 class RecorderResourceTests(unittest.TestCase):
+    def test_clear_completed_tasks_keeps_active_recordings(self):
+        recorder = Recorder()
+        active = RecordingTask('active', 'Active', 'url', '/tmp/active.mp4')
+        active.is_recording = True
+        completed = RecordingTask('completed', 'Done', 'url', '/tmp/done.mp4')
+        completed.result_status = COMPLETED
+        recorder.tasks = {'active': active, 'completed': completed}
+
+        removed = recorder.remove_completed_tasks()
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(list(recorder.tasks), ['active'])
+
+    def test_duration_limit_completion_is_not_an_early_end(self):
+        for limit, duration, expected_early in [(3, 3.02, False), (10, 3, True),
+                                                 (None, 3, True)]:
+            with self.subTest(limit=limit, duration=duration):
+                recorder = Recorder()
+                task = RecordingTask('id', 'Channel', 'url', '/tmp/out.mp4')
+                task.duration_limit_seconds = limit
+                task.process = Mock(returncode=0, stderr=[])
+                task.on_complete = Mock()
+                probe = MediaProbeResult(True, has_video=True, has_audio=True,
+                                         duration=duration)
+                with patch('core.recorder.classify_media', return_value=(COMPLETED, probe)):
+                    recorder._wait_for_task(task)
+                self.assertEqual(task.ended_early, expected_early)
+                self.assertEqual(task.on_complete.call_args.args[3], expected_early)
+
     def test_recording_period_includes_start_date(self):
         task = RecordingTask('id', 'Channel', 'url', '/tmp/out.mp4')
         task.started_at = datetime(2026, 9, 22, 18, 17)

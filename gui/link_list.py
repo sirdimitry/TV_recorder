@@ -29,7 +29,8 @@ class LinkList(ctk.CTkFrame):
     def __init__(self, parent, recorder=None, on_select: Optional[Callable] = None,
                  on_edit: Optional[Callable] = None, on_record: Optional[Callable] = None,
                  on_delete: Optional[Callable] = None, on_add: Optional[Callable] = None,
-                 on_preview: Optional[Callable] = None):
+                 on_preview: Optional[Callable] = None,
+                 on_clear_all: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.root = parent.winfo_toplevel()
         self.colors = Config.COLORS
@@ -40,6 +41,7 @@ class LinkList(ctk.CTkFrame):
         self.on_delete = on_delete
         self.on_add = on_add
         self.on_preview = on_preview
+        self.on_clear_all = on_clear_all
         self.link_widgets: Dict[str, dict] = {}
         # Общий инстанс шрифта, которым реально измеряется и рисуется текст —
         # см. _elide_text/_update_row_width (тот же приём, что и в
@@ -62,6 +64,11 @@ class LinkList(ctk.CTkFrame):
             ctk.CTkButton(header_row, text="", image=get_icon('plus', c['accent_text'], 14), width=26, height=26,
                           corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
                           command=self.on_add).pack(side='right')
+        if self.on_clear_all:
+            ctk.CTkButton(header_row, text="Очистить всё", height=26,
+                          corner_radius=Config.RADIUS_SM, fg_color='transparent',
+                          hover_color=c['bg_hover'], text_color=c['text_secondary'],
+                          command=self.on_clear_all).pack(side='right', padx=(0, 6))
 
         hint = ctk.CTkLabel(self, text="Прямой эфир или готовая запись с YouTube, VK, RuTube, Twitch и т.п.",
                              font=ctk.CTkFont(size=10), text_color=c['text_muted'], wraplength=280, justify='left')
@@ -205,11 +212,13 @@ class LinkList(ctk.CTkFrame):
                     logger.debug(f"LinkList: ошибка превью {name}: {e}")
 
             def apply():
-                if name not in self.link_widgets:
+                widgets = self.link_widgets.get(name)
+                if (not widgets or widgets.get('thumb_label') is not thumb_label
+                        or not thumb_label.winfo_exists()):
                     return
                 # Кэшируем — по клику на строку показываем встроенное превью
                 # (PreviewPanel) без повторного resolve_link на каждый клик.
-                self.link_widgets[name]['resolved_info'] = info
+                widgets['resolved_info'] = info
                 c = self.colors
                 if image is not None:
                     thumb_label.configure(image=image)

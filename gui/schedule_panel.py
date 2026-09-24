@@ -63,15 +63,18 @@ class SchedulePanel(ctk.CTkFrame):
     ACTIVE_COLUMN = '#5'
 
     def __init__(self, parent, on_schedule_changed: Optional[Callable] = None,
-                 on_record_now: Optional[Callable] = None):
+                 on_record_now: Optional[Callable] = None,
+                 on_clear_recordings: Optional[Callable] = None):
         super().__init__(parent, fg_color='transparent')
         self.colors = Config.COLORS
         self.storage = Storage()
         self.on_schedule_changed = on_schedule_changed
         self.on_record_now = on_record_now
+        self.on_clear_recordings = on_clear_recordings
         self._channel_names: List[str] = []
         self._link_names: List[str] = []
         self._duration_detect_generation = 0
+        self._clearing_form = False
         self.run_status: Dict[int, str] = {}
 
         self._setup_ui()
@@ -117,7 +120,7 @@ class SchedulePanel(ctk.CTkFrame):
                                                 height=30, corner_radius=Config.RADIUS_SM,
                                                 fg_color=c['bg_secondary'], button_color=c['bg_secondary'],
                                                 button_hover_color=c['bg_hover'], text_color=c['text_primary'],
-                                                command=lambda _v: self._maybe_detect_link_duration())
+                                                command=lambda _v: self._on_source_changed())
         self.channel_combo.pack(side='left', padx=6, fill='x', expand=True)
         self.channel_combo.bind('<MouseWheel>', self._scroll_channel_selection)
         self.channel_combo.bind('<Button-4>', lambda event: self._scroll_channel_selection(event, -1))
@@ -198,7 +201,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.btn_clear_form = ctk.CTkButton(btn_frame, text="Очистить", height=30, corner_radius=Config.RADIUS_SM,
                                              fg_color='transparent', hover_color=c['bg_hover'],
-                                             text_color=c['text_secondary'], command=self._clear_form)
+                                             text_color=c['text_secondary'], command=self._clear_lists)
         self.btn_clear_form.pack(side='right')
 
         # Таблица расписания
@@ -246,6 +249,16 @@ class SchedulePanel(ctk.CTkFrame):
         self._refresh_source_dropdown()
         self._apply_time_defaults()
         self._maybe_detect_link_duration()
+        self._update_record_now_button()
+
+    def _on_source_changed(self):
+        self._maybe_detect_link_duration()
+        self._update_record_now_button()
+
+    def _update_record_now_button(self):
+        name = self.channel_var.get()
+        available = name in self._names_for(self.source_type_var.get())
+        self.btn_record_now.configure(state='normal' if self.on_record_now and available else 'disabled')
 
     def _refresh_source_dropdown(self):
         names = self._names_for(self.source_type_var.get())
@@ -258,6 +271,7 @@ class SchedulePanel(ctk.CTkFrame):
         self._channel_names = [ch['name'] for ch in self.storage.get_channels()]
         self._link_names = [l['name'] for l in self.storage.get_links()]
         self._refresh_source_dropdown()
+        self._update_record_now_button()
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -339,7 +353,7 @@ class SchedulePanel(ctk.CTkFrame):
         if self.source_type_var.get() == 'channel':
             self.days_frame.pack(fill='x', padx=12, pady=6)
             self.start_time.set_time(now.strftime("%H:%M"))
-            self.end_time.set_time(now.strftime("%H:%M"))
+            self.end_time.set_time((now + timedelta(minutes=30)).strftime("%H:%M"))
             self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
             today_idx = now.weekday()
             for idx, var in self.day_vars.items():
@@ -373,6 +387,7 @@ class SchedulePanel(ctk.CTkFrame):
             idx = max(0, min(len(names) - 1, idx + direction))
         self.channel_var.set(names[idx])
         self._maybe_detect_link_duration()
+        self._update_record_now_button()
         return 'break'
 
     def _maybe_detect_link_duration(self):
@@ -531,6 +546,8 @@ class SchedulePanel(ctk.CTkFrame):
             return 'break'
 
     def _on_tree_select(self, event):
+        if self._clearing_form:
+            return
         selected = self.tree.selection()
         if not selected:
             self._clear_form_buttons()
@@ -568,7 +585,7 @@ class SchedulePanel(ctk.CTkFrame):
         self.btn_add.configure(state='disabled')
         self.btn_update.configure(state='normal')
         self.btn_delete_form.configure(state='normal')
-        self.btn_record_now.configure(state='normal' if self.on_record_now else 'disabled')
+        self._update_record_now_button()
 
     @staticmethod
     def _is_valid_time(value: str) -> bool:
@@ -595,6 +612,10 @@ class SchedulePanel(ctk.CTkFrame):
 
     def _clear_form(self):
         """Действительно очищает форму и снимает режим редактирования."""
+        # Treeview отправляет <<TreeviewSelect>> асинхронно. Без защиты уже
+        # поставленное в очередь событие могло сразу снова заполнить форму
+        # только что снятой строкой — визуально кнопка ничего не делала.
+        self._clearing_form = True
         self._duration_detect_generation += 1
         selected = self.tree.selection()
         if selected:
@@ -607,12 +628,38 @@ class SchedulePanel(ctk.CTkFrame):
         self.duration_hint.configure(text='')
         self._show_today()
         self._clear_form_buttons()
+        self.after_idle(self._finish_clear_form)
+
+    def _finish_clear_form(self):
+        self._clearing_form = False
+
+    def _clear_lists(self):
+        """Очищает расписание и завершённые строки, сохраняя поля формы."""
+        has_schedule = bool(self.storage.get_schedule())
+        if not has_schedule and not self.on_clear_recordings:
+            return
+        if not messagebox.askyesno(
+                "Очистить списки",
+                "Очистить расписание и список завершённых записей?\n"
+                "Активные записи и сохранённые видеофайлы останутся.",
+                parent=self.winfo_toplevel()):
+            return
+
+        if has_schedule:
+            self.storage.delete_all_schedule_items()
+            self.run_status.clear()
+            self.refresh()
+        if self.on_clear_recordings:
+            self.on_clear_recordings()
+        self._clear_form_buttons()
+        if self.on_schedule_changed:
+            self.on_schedule_changed()
 
     def _clear_form_buttons(self):
         self.btn_add.configure(state='normal')
         self.btn_update.configure(state='disabled')
         self.btn_delete_form.configure(state='disabled')
-        self.btn_record_now.configure(state='disabled')
+        self._update_record_now_button()
 
     def preselect_source(self, source_type: str, name: str):
         """Клик по каналу/ссылке слева (gui/app_window.py:_on_source_select) —
@@ -628,7 +675,7 @@ class SchedulePanel(ctk.CTkFrame):
             return  # список планировщика ещё не обновился под свежие данные — не портим форму
 
         if self.tree.selection():
-            self.tree.selection_remove(self.tree.selection())
+            self.tree.selection_remove(*self.tree.selection())
 
         self.source_segmented.set(self.TYPE_TO_LABEL.get(source_type, 'Канал'))
         self.source_type_var.set(source_type)
@@ -641,32 +688,23 @@ class SchedulePanel(ctk.CTkFrame):
         self._maybe_detect_link_duration()
 
     def _record_selected_now(self):
-        selected = self.tree.selection()
-        if not selected or not self.on_record_now:
+        """Записывает источник, показанный в верхней форме, без выбора строки."""
+        if not self.on_record_now:
             return
-        index = int(selected[0])
-        schedule = self.storage.get_schedule()
-        if index >= len(schedule):
+        source_type = self.source_type_var.get()
+        name = self.channel_var.get()
+        if not name:
+            messagebox.showwarning("Внимание", "Выберите канал или ссылку")
             return
-        item = schedule[index]
-        source_type = item.get('source_type', 'channel')
-        name = item.get('channel_name', '')
-        source_id = item.get('source_id')
-
-        if source_type == 'link':
-            sources = self.storage.get_links()
-        else:
-            sources = self.storage.get_channels()
-        target = next((source for source in sources
-                       if source_id and source.get('id') == source_id), None)
-        target = target or next((source for source in sources if source.get('name') == name), None)
+        sources = self.storage.get_links() if source_type == 'link' else self.storage.get_channels()
+        target = next((source for source in sources if source.get('name') == name), None)
 
         if not target:
             messagebox.showwarning("Внимание", f"«{name}» не найден(а) — возможно, был(а) удалён(а)")
             return
 
         self.on_record_now(source_type, name, target)
-        logger.info(f"Запись выбранной строки расписания сейчас: {name} ({source_type})")
+        logger.info(f"Запись выбранного в форме источника сейчас: {name} ({source_type})")
 
     def _source_id_for_selection(self):
         sources = (self.storage.get_links() if self.source_type_var.get() == 'link'
