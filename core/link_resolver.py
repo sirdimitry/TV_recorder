@@ -257,7 +257,7 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
             response.raise_for_status()
             url = extract_yandex_source(response.text, url)
         except (requests.RequestException, ValueError) as error:
-            return LinkInfo(ok=False, error=str(error), skip_browser_fallback=True)
+            logger.info(f"LinkResolver: новое правило Яндекса не подошло, пробуем прежний обработчик: {error}")
 
     known_site = _resolve_known_site(url, timeout)
     if known_site is not None:
@@ -921,9 +921,12 @@ def list_available_heights(url: str, info: LinkInfo, timeout: int = 10) -> Optio
         try:
             url = normalize_mail_url(url.strip())
             if yandex_preview_id(url):
-                response = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
-                response.raise_for_status()
-                url = extract_yandex_source(response.text, url)
+                try:
+                    response = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
+                    response.raise_for_status()
+                    url = extract_yandex_source(response.text, url)
+                except (requests.RequestException, ValueError):
+                    pass  # Старую разметку по-прежнему может понимать yt-dlp.
             opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'socket_timeout': timeout}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 yt_info = ydl.extract_info(url, download=False)

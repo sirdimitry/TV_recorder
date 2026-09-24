@@ -19,12 +19,12 @@ class YandexResolverTests(unittest.TestCase):
 
     @patch('core.link_resolver._resolve_via_ytdlp')
     @patch('core.link_resolver.requests.get')
-    def test_no_browser_on_missing_source(self, get, extract):
+    def test_old_handler_on_missing_source(self, get, extract):
         get.return_value = Mock(text='<p>Captcha</p>')
+        extract.return_value = LinkInfo(ok=True, video_url='https://cdn.example/old.mp4')
         info = resolve_link(PAGE)
-        self.assertFalse(info.ok)
-        self.assertTrue(info.skip_browser_fallback)
-        extract.assert_not_called()
+        self.assertTrue(info.ok)
+        extract.assert_called_once_with(PAGE, 15, 720)
 
     @patch('core.link_resolver.yt_dlp.YoutubeDL')
     @patch('core.link_resolver.requests.get')
@@ -34,3 +34,12 @@ class YandexResolverTests(unittest.TestCase):
         extractor.extract_info.return_value = {'formats': [{'height': 720}, {'height': 360}, {'height': 1080, 'vcodec': 'none'}]}
         self.assertEqual(list_available_heights(PAGE, LinkInfo(ok=True)), [720, 360])
         extractor.extract_info.assert_called_once_with(MAIL, download=False)
+
+    @patch('core.link_resolver.yt_dlp.YoutubeDL')
+    @patch('core.link_resolver.requests.get')
+    def test_old_handler_keeps_quality_selection(self, get, ydl):
+        get.return_value = Mock(text='<p>Old layout</p>')
+        extractor = ydl.return_value.__enter__.return_value
+        extractor.extract_info.return_value = {'formats': [{'height': 720}]}
+        self.assertEqual(list_available_heights(PAGE, LinkInfo(ok=True)), [720])
+        extractor.extract_info.assert_called_once_with(PAGE, download=False)
