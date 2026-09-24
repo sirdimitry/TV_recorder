@@ -120,9 +120,25 @@ class Recorder:
         "Первый канал": {"ua": "Mozilla/5.0", "ref": "https://www.1tv.ru"},
         "Россия 1": {"ua": "Mozilla/5.0", "ref": "https://smotrim.ru"},
         "НТВ": {"ua": "Mozilla/5.0", "ref": "https://www.ntv.ru"},
-        "Матч ТВ": {"ua": "Restream/5.20408.171030 (mag250)", "ref": "https://matchtv.ru"},
+        "Матч ТВ": {"ua": "HlsWinkPlayer", "ref": "https://matchtv.ru"},
+        "ТНТ": {"ua": "WINK/1.40.1 (AndroidTV/9) HlsWinkPlayer"},
         "Муз-ТВ": {"ua": "Dalvik/2.1.0 (Linux; U; Android 10)", "ref": "https://muz-tv.ru"}
     }
+
+    @classmethod
+    def channel_headers(cls, channel: dict) -> dict:
+        """Единые HTTP-заголовки канала для проверки, просмотра и записи."""
+        info = cls.CHANNEL_HEADERS.get(channel.get('name', ''), {})
+        referer = info.get('ref', 'https://www.google.com')
+        headers = {
+            'User-Agent': info.get('ua', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'),
+            'Referer': referer,
+            'Origin': referer,
+        }
+        if channel.get('user_agent'):
+            headers['User-Agent'] = channel['user_agent']
+        headers.update(channel.get('headers') or {})
+        return headers
     
     def __init__(self):
         self.tasks: Dict[str, RecordingTask] = {}
@@ -206,11 +222,10 @@ class Recorder:
             headers = ''.join(f"{k}: {v}\r\n" for k, v in extra_headers.items())
             headers_dict = dict(extra_headers)
         else:
-            headers_info = self.CHANNEL_HEADERS.get(channel_name, {})
-            ua = headers_info.get("ua", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
-            ref = headers_info.get("ref", "https://www.google.com")
-            headers = f"User-Agent: {ua}\r\nReferer: {ref}\r\nOrigin: {ref}\r\n"
-            headers_dict = {"User-Agent": ua, "Referer": ref, "Origin": ref}
+            headers_dict = self.channel_headers({'name': channel_name, 'url': stream_url})
+            ua = headers_dict['User-Agent']
+            ref = headers_dict.get('Referer', '')
+            headers = ''.join(f"{k}: {v}\r\n" for k, v in headers_dict.items())
 
         # -ss ПЕРЕД -i — это seek на уровне демуксера (быстрый, к ближайшему
         # keyframe), а не перекодирование с обрезкой после -i (то было бы
@@ -290,7 +305,8 @@ class Recorder:
             # вариант ближе к 720p/3-5 Мбит вместо того, что выберет сам
             # ffmpeg (обычно самый тяжёлый) — без перекодирования, просто
             # другой исходный вариант для copy-режима.
-            stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref)
+            stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref,
+                                             request_headers=headers_dict)
 
             if start_deadline_timestamp is not None:
                 remaining = start_deadline_timestamp - time.time()

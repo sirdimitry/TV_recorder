@@ -191,6 +191,7 @@ class RecordingScheduler:
             # "Россия 24"/"Россия К" через stream.smotrim.ru — обычный 'url'
             # там video-only, без этого поля запись выходит совсем без звука).
             video_url, audio_url = target.get('url', ''), target.get('audio_url')
+            extra_headers = self.recorder.channel_headers(target)
 
         remaining = (deadline - datetime.now()).total_seconds()
         if remaining <= 0:

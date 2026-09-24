@@ -255,6 +255,12 @@ class AppWindow:
                 existing = current_map[ch['name']]
                 preferred_url = existing.get('preferred_url')
                 if preferred_url:
+                    if (preferred_url == ch['url'] and ch.get('user_agent')
+                            and not existing.get('user_agent')):
+                        existing = {**existing, 'user_agent': ch['user_agent']}
+                        self.storage.save_channel(existing)
+                        current_map[ch['name']] = existing
+                        updated += 1
                     status, message = checker.check({**existing, 'url': preferred_url})
                     if status != StreamStatus.RED:
                         if existing.get('url') != preferred_url:
@@ -581,6 +587,7 @@ class AppWindow:
                 name, channel['url'], output, source="manual",
                 on_complete=self._on_record_complete,
                 audio_url=channel.get('audio_url'),
+                extra_headers=self.recorder.channel_headers(channel),
                 is_live_channel=True
             )
             if task_id:

@@ -12,6 +12,9 @@ class M3UParser:
     
     # РУЧНЫЕ ФИКСЫ: Ссылки и логотипы, которые точно работают
     MANUAL_FIXES = {
+        "Первый канал": {
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_1TVSD/variant.m3u8",
+        },
         # vgtrkregion-reg.cdnvideo.ru отдаёт TLS-обрыв (Error in the pull
         # function / End of file) на все каналы ВГТРК независимо от VPN —
         # CDN мёртв, а не заблокирован локально (проверено curl+ffmpeg
@@ -46,12 +49,22 @@ class M3UParser:
         # Логотипы: старые Wikimedia thumb-ссылки перестали отдаваться (HTTP 400),
         # заменены на действующие picons из того же плейлиста IPTVru.
         "Матч ТВ": {
+            "url": "https://rt-ural-ekt-htlive.cdn.ngenix.net/hls/CH_R02_MATCHTV_EKT/variant.m3u8",
+            "user_agent": "HlsWinkPlayer",
             "logo": "https://iptvx.one/picons/match-tv.png"
+        },
+        "НТВ": {
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_NTV/variant.m3u8",
+        },
+        "ТНТ": {
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_TNT/variant.m3u8",
+            "user_agent": "WINK/1.40.1 (AndroidTV/9) HlsWinkPlayer",
         },
         "ТВ-3": {
             "logo": "https://iptvx.one/picons/tv3-ru.png"
         },
         "Муз-ТВ": {
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_MUZTV/variant.m3u8",
             "logo": "https://iptvx.one/picons/muztv.png"
         },
         # РЕН ТВ: ни старая Wikimedia-ссылка, ни собственный tvg-logo плейлиста
@@ -129,6 +142,8 @@ class M3UParser:
                     ch['url'] = fix['url']
                 if 'audio_url' in fix:
                     ch['audio_url'] = fix['audio_url']
+                if 'user_agent' in fix:
+                    ch['user_agent'] = fix['user_agent']
                 if 'logo' in fix:
                     ch['logo_url'] = fix['logo']
                 logger.info(f"M3UParser: Применен фикс для '{name}'")

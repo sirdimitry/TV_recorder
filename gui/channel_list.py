@@ -243,15 +243,7 @@ class ChannelList(ctk.CTkFrame):
             messagebox.showwarning("Внимание", f"У канала '{name}' нет URL потока")
             return
 
-        headers_info = Recorder.CHANNEL_HEADERS.get(name, {})
-        headers = None
-        if headers_info:
-            headers = {}
-            if headers_info.get('ua'):
-                headers['User-Agent'] = headers_info['ua']
-            if headers_info.get('ref'):
-                headers['Referer'] = headers_info['ref']
-                headers['Origin'] = headers_info['ref']
+        headers = Recorder.channel_headers(channel)
 
         logger.info(f"Открыт предпросмотр: {name}")
         if self.on_preview:

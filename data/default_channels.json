@@ -1,7 +1,7 @@
 [
   {
     "name": "Первый канал",
-    "url": "https://edge1.1internet.tv/dash-live2/streams/1tv-dvr/1tvdash.mpd",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_1TVSD/variant.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/pervy.png",
@@ -17,7 +17,8 @@
   },
   {
     "name": "Матч ТВ",
-    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_MATCHTV/variant.m3u8",
+    "url": "https://rt-ural-ekt-htlive.cdn.ngenix.net/hls/CH_R02_MATCHTV_EKT/variant.m3u8",
+    "user_agent": "HlsWinkPlayer",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/match-tv.png",
@@ -25,7 +26,7 @@
   },
   {
     "name": "НТВ",
-    "url": "https://cdn.ntv.ru/ntv0/playlist.m3u8",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_NTV/variant.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/ntv.png",
@@ -139,7 +140,8 @@
   },
   {
     "name": "ТНТ",
-    "url": "http://31.131.141.195:8000/play/2090/index.m3u8",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_TNT/variant.m3u8",
+    "user_agent": "WINK/1.40.1 (AndroidTV/9) HlsWinkPlayer",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/tnt.png",
@@ -147,7 +149,7 @@
   },
   {
     "name": "Муз-ТВ",
-    "url": "http://185.71.81.6:8080/20/index.m3u8",
+    "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_MUZTV/variant.m3u8",
     "type": "iptv",
     "vpn_required": null,
     "logo_url": "https://iptvx.one/picons/muztv.png",

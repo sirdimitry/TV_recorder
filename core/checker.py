@@ -47,20 +47,17 @@ class StreamChecker:
         
         checker = checkers.get(source_type, self._check_iptv)
         if checker == self._check_iptv:
-            return checker(url, self._channel_headers(channel.get('name', '')))
+            return checker(url, self._channel_headers(channel))
         return checker(url)
 
     @staticmethod
-    def _channel_headers(channel_name: str) -> dict:
+    def _channel_headers(channel: dict) -> dict:
         """Те же заголовки, с которыми Recorder открывает этот канал."""
         # Локальный импорт не утяжеляет запуск checker и избегает связи модулей
         # на этапе импорта core/__init__.py.
         from core.recorder import Recorder
 
-        info = Recorder.CHANNEL_HEADERS.get(channel_name, {})
-        user_agent = info.get('ua', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
-        referer = info.get('ref', 'https://www.google.com')
-        return {'User-Agent': user_agent, 'Referer': referer, 'Origin': referer}
+        return Recorder.channel_headers(channel)
     
     def _check_iptv(self, url: str, headers: dict) -> Tuple[StreamStatus, str]:
         """Проверка HLS/DASH потока"""

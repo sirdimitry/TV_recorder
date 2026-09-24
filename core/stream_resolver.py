@@ -83,7 +83,8 @@ def hls_opts(url: str) -> list:
 
 def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Optional[str] = None,
                          target_height: int = TARGET_HEIGHT,
-                         target_bitrate_kbps: int = TARGET_BITRATE_KBPS) -> str:
+                         target_bitrate_kbps: int = TARGET_BITRATE_KBPS,
+                         request_headers: Optional[dict] = None) -> str:
     """Возвращает URL наиболее подходящего варианта HLS для мастер-плейлиста,
     либо исходный URL без изменений, если это не мастер-плейлист или
     что-то пошло не так (сеть, парсинг) — тогда просто ничего не меняем."""
@@ -93,6 +94,8 @@ def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Opti
     headers = {'User-Agent': user_agent}
     if referer:
         headers['Referer'] = referer
+    if request_headers:
+        headers.update(request_headers)
     text = None
     last_error = None
     for attempt in range(3):

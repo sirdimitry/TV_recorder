@@ -463,6 +463,28 @@ class SchedulerTimingTests(unittest.TestCase):
 
 
 class StreamCheckerTests(unittest.TestCase):
+    def test_channel_specific_headers_override_legacy_defaults(self):
+        channel = {
+            'name': 'Матч ТВ',
+            'type': 'iptv',
+            'url': 'https://media.example/live.m3u8',
+            'user_agent': 'HlsWinkPlayer',
+            'headers': {'X-Channel': 'match'},
+        }
+        playlist = Mock(status_code=200, text='#EXTM3U\n#EXTINF:2,\nsegment.ts')
+        segment = Mock(status_code=206)
+        segment.__enter__ = Mock(return_value=segment)
+        segment.__exit__ = Mock(return_value=False)
+
+        with patch('core.checker.requests.get', side_effect=[playlist, segment]) as request:
+            status, _ = StreamChecker().check(channel)
+
+        self.assertIs(status, StreamStatus.GREEN)
+        for call in request.call_args_list:
+            self.assertEqual(call.kwargs['headers']['User-Agent'], 'HlsWinkPlayer')
+            self.assertEqual(call.kwargs['headers']['X-Channel'], 'match')
+        self.assertEqual(Recorder.channel_headers(channel)['User-Agent'], 'HlsWinkPlayer')
+
     def test_hls_uses_recording_headers_and_get_for_segment(self):
         checker = StreamChecker()
         playlist = Mock(status_code=200, text='#EXTM3U\n#EXTINF:2,\nsegment.ts?token=x')
