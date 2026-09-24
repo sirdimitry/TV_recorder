@@ -51,7 +51,7 @@ TV Recorder старается сохранить полезный файл да
 
 ## Установка приложения
 
-Скачайте [последний готовый DMG](https://github.com/sirdimitry/TV_recorder/releases/latest/download/TV%20Recorder.dmg) с GitHub, откройте его и перетащите **TV Recorder** в **Applications**.
+Скачайте [последний готовый DMG](https://github.com/sirdimitry/TV_recorder/releases/latest/download/TV.Recorder.dmg) с GitHub, откройте его и перетащите **TV Recorder** в **Applications**.
 На [странице последнего релиза](https://github.com/sirdimitry/TV_recorder/releases/latest) указана актуальная версия и доступен установщик. Текущая локальная
 сборка подписана ad-hoc и не нотарифицирована Apple, поэтому при первом запуске
 может потребоваться **Control-клик → Открыть**.
