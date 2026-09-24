@@ -43,6 +43,7 @@ try:
 except ImportError:
     YTDLP_AVAILABLE = False
 
+from core.video_page_url import normalize_mail_url, yandex_preview_id, extract_yandex_source
 from utils.config import Config
 from utils.logger import logger
 
@@ -248,6 +249,15 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     при старте приложения — там нельзя молча выскакивать браузерным окном."""
     if not url:
         return LinkInfo(ok=False, error="Пустая ссылка")
+
+    url = normalize_mail_url(url.strip())
+    if yandex_preview_id(url):
+        try:
+            response = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
+            response.raise_for_status()
+            url = extract_yandex_source(response.text, url)
+        except (requests.RequestException, ValueError) as error:
+            return LinkInfo(ok=False, error=str(error), skip_browser_fallback=True)
 
     known_site = _resolve_known_site(url, timeout)
     if known_site is not None:
@@ -909,12 +919,17 @@ def list_available_heights(url: str, info: LinkInfo, timeout: int = 10) -> Optio
     гоняем сеть повторно там, где достаточно того, что уже есть."""
     if YTDLP_AVAILABLE:
         try:
+            url = normalize_mail_url(url.strip())
+            if yandex_preview_id(url):
+                response = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
+                response.raise_for_status()
+                url = extract_yandex_source(response.text, url)
             opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'socket_timeout': timeout}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 yt_info = ydl.extract_info(url, download=False)
             if yt_info:
                 heights = {f.get('height') for f in (yt_info.get('formats') or [])
-                           if f.get('height') and f.get('vcodec') not in (None, 'none')}
+                           if f.get('height') and f.get('vcodec') != 'none'}
                 if heights:
                     return sorted(heights, reverse=True)
         except Exception:
