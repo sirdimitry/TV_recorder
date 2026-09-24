@@ -36,55 +36,6 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-class SplashScreen(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        c = Config.COLORS
-        self.title("TV Recorder")
-        self.geometry("460x340")
-        self.resizable(False, False)
-        self.attributes('-topmost', True)
-        self.configure(fg_color=c['bg_primary'])
-
-        self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width() - 460) // 2
-        py = parent.winfo_y() + (parent.winfo_height() - 340) // 2
-        if px < 0: px = 100
-        if py < 0: py = 100
-        self.geometry(f"+{px}+{py}")
-
-        ctk.CTkLabel(self, image=get_icon('tv', c['accent'], 52), text="").pack(pady=(36, 10))
-        ctk.CTkLabel(self, text="TV Recorder", font=ctk.CTkFont(size=22, weight='bold'),
-                     text_color=c['text_primary']).pack()
-        ctk.CTkLabel(self, text=f"v{Config.APP_VERSION}", font=ctk.CTkFont(size=11),
-                     text_color=c['text_secondary']).pack(pady=(0, 22))
-
-        self.progress = ctk.CTkProgressBar(self, mode='indeterminate', width=300,
-                                            progress_color=c['accent'], fg_color=c['bg_tertiary'])
-        self.progress.pack(pady=6)
-        self.progress.start()
-
-        self.log_box = ctk.CTkTextbox(self, width=380, height=100, corner_radius=8,
-                                       fg_color=c['bg_secondary'], text_color=c['text_secondary'],
-                                       font=('Menlo', 10))
-        self.log_box.pack(pady=(18, 24), padx=30, fill='both', expand=True)
-        self.log_box.configure(state='disabled')
-
-        self._log("Инициализация приложения...")
-
-    def _log(self, message: str):
-        timestamp = time.strftime("%H:%M:%S")
-        self.log_box.configure(state='normal')
-        self.log_box.insert('end', f"[{timestamp}] {message}\n")
-        self.log_box.see('end')
-        self.log_box.configure(state='disabled')
-        self.update_idletasks()
-
-    def close(self):
-        self.progress.stop()
-        self.destroy()
-
-
 def _format_mmss(total_seconds: float) -> str:
     """Секунды -> "мм:сс" — позиция/длительность внутри самого ролика, не
     время на часах. Минуты не ограничены двумя цифрами (см. TimeEntry в
@@ -156,16 +107,12 @@ class AppWindow:
 
         self.root.configure(fg_color=self.colors['bg_primary'])
 
-        self.splash = SplashScreen(self.root)
-        self.root.withdraw()
-
         self._apply_ttk_theme()
         self._setup_ui()
         self.scheduler.set_status_callback(self.schedule_panel.update_run_status)
-
-        threading.Thread(target=self._initialize_app, daemon=True).start()
-
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._startup_result = Queue(maxsize=1)
+        self.root.after(0, self._start_ui)
 
     def _report_callback_exception(self, exc_type, exc_value, traceback):
         """Показывает ошибки сохранения, которые возникли в Tk-callback."""
@@ -233,36 +180,38 @@ class AppWindow:
         self._run_dialog_from_worker(lambda: messagebox.showerror(
             "Захват экрана недоступен", text, parent=self.root))
 
+    def _start_ui(self):
+        """Показывает сохранённые данные сразу; сеть обновит их позднее."""
+        if self._closing:
+            return
+        self._refresh_data()
+        self.scheduler.start()
+        self._start_background_checks()
+        threading.Thread(target=self._initialize_app, daemon=True).start()
+        self.root.after(100, self._finish_initialization)
+
     def _initialize_app(self):
+        """Только файловая и сетевая работа: Tk должен оставаться в главном потоке."""
         try:
-            self.splash._log("Проверка конфигурации...")
             Config.init_dirs()
-            time.sleep(0.3)
-
-            self.splash._log("Синхронизация списка каналов...")
             self._sync_channels()
-            time.sleep(0.3)
+            self._startup_result.put(None)
+        except Exception as error:
+            logger.exception("Ошибка фоновой синхронизации каналов")
+            self._startup_result.put(error)
 
-            self.splash._log("Загрузка расписания и логотипов...")
-            self.root.after(0, self._refresh_data)
-            time.sleep(0.5)
-
-            self.splash._log("Запуск планировщика...")
-            self.scheduler.start()
-            time.sleep(0.3)
-
-            self.splash._log("Проверка сетевого подключения...")
-            self._start_background_checks()
-            time.sleep(0.5)
-
-            self.splash._log("Готово! Запуск интерфейса...")
-            time.sleep(0.5)
-
-            self.root.after(0, self._show_main_window)
-
-        except Exception as e:
-            self.splash._log(f"ОШИБКА: {e}")
-            logger.error(f"Ошибка инициализации: {e}", exc_info=True)
+    def _finish_initialization(self):
+        if self._closing:
+            return
+        try:
+            error = self._startup_result.get_nowait()
+        except Empty:
+            self.root.after(100, self._finish_initialization)
+            return
+        if error is None:
+            self._refresh_data()
+            self.scheduler.reload_schedules()
+            logger.info("Синхронизация каналов завершена")
 
     def _sync_channels(self):
         """Синхронизирует список каналов с живым плейлистом.
@@ -281,12 +230,12 @@ class AppWindow:
         is_live = bool(online_channels)
 
         if not is_live:
-            self.splash._log("⚠️ Не удалось загрузить онлайн-плейлист.")
+            logger.warning("Не удалось загрузить онлайн-плейлист")
             defaults_path = Config.BASE_DIR / "data" / "default_channels.json"
             if defaults_path.exists():
                 with open(defaults_path, 'r', encoding='utf-8') as f:
                     online_channels = json.load(f)
-                self.splash._log("📂 Используем локальную базу каналов (только для новых каналов)")
+                logger.info("Используем локальную базу каналов только для новых каналов")
             else:
                 return
 
@@ -370,12 +319,7 @@ class AppWindow:
                     updated += 1
 
         msg = f"✅ Добавлено: {added}, Обновлено: {updated}"
-        self.splash._log(msg)
-
-    def _show_main_window(self):
-        self.splash.close()
-        self.root.deiconify()
-        self.root.focus_force()
+        logger.info(msg)
 
     def _apply_ttk_theme(self):
         """Стилизует остаточные ttk-виджеты (Treeview, PanedWindow, Scrollbar),

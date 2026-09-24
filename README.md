@@ -50,7 +50,8 @@ changed in Settings.
 
 ## Install the macOS app
 
-Download the latest DMG, open it, and drag **TV Recorder** to **Applications**.
+Download the [latest ready-to-install DMG](https://github.com/sirdimitry/TV_recorder/releases/latest/download/TV%20Recorder.dmg) from GitHub, open it, and drag **TV Recorder** to **Applications**.
+The [latest release page](https://github.com/sirdimitry/TV_recorder/releases/latest) lists the current version and its installer.
 The current local build is ad-hoc signed rather than Apple-notarized, so macOS
 may require **Control-click → Open** on the first launch.
 

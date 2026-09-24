@@ -2,9 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.1.30] - 2026-09-24
+## [1.1.31] - 2026-09-24
 
 - See the accompanying Git commit message for details.
+
+## [1.1.30] - 2026-09-24
+
+- Show the main window and start the scheduler immediately while channel synchronization runs in the background.
+- Keep all Tk interface updates on the main thread during startup, avoiding an intermittent Dock-only launch.
 
 ## [1.1.29] - 2026-09-24
 
