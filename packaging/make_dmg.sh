@@ -63,12 +63,13 @@ tell application "Finder"
         set current view of container window to icon view
         set toolbar visible of container window to false
         set statusbar visible of container window to false
-        set the bounds of container window to {200, 120, 720, 420}
+        set the bounds of container window to {200, 120, 800, 605}
         set viewOptions to the icon view options of container window
         set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 96
-        set position of item "TV Recorder.app" of container window to {130, 150}
-        set position of item "Applications" of container window to {390, 150}
+        set icon size of viewOptions to 112
+        set background picture of viewOptions to (POSIX file "$MOUNT_POINT/TV Recorder.app/Contents/Resources/dmg_background.png" as alias)
+        set position of item "TV Recorder.app" of container window to {150, 145}
+        set position of item "Applications" of container window to {450, 145}
         close
         open
         update without registering applications
@@ -77,6 +78,9 @@ end tell
 OSA
 
 sync
+if [ -d "$MOUNT_POINT/.fseventsd" ]; then
+    find "$MOUNT_POINT/.fseventsd" -depth -delete
+fi
 hdiutil detach "$MOUNT_DEVICE" -quiet
 MOUNT_DEVICE=""
 

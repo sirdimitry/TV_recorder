@@ -29,6 +29,7 @@ a = Analysis(
     binaries=[*pywebview_binaries, *playwright_binaries],
     datas=[
         (str(REPO_ROOT / 'VERSION'), '.'),
+        (str(REPO_ROOT / 'packaging' / 'dmg_background.png'), '.'),
         (str(REPO_ROOT / 'data' / 'default_channels.json'), 'data'),
         *pywebview_datas,
         *customtkinter_datas,

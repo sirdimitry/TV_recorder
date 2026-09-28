@@ -17,6 +17,7 @@ cd "$REPO_ROOT"
 
 echo "==> Иконка"
 python3 packaging/generate_icon.py
+python3 packaging/generate_dmg_background.py
 
 echo "==> PyInstaller (--distpath/--workpath внутрь packaging/, не трогаем корень репозитория)"
 python3 -m PyInstaller packaging/TVRecorder.spec --noconfirm \
