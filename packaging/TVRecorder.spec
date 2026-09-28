@@ -86,6 +86,7 @@ app = BUNDLE(
     info_plist={
         'CFBundleShortVersionString': (REPO_ROOT / 'VERSION').read_text(encoding='utf-8').strip(),
         'NSHighResolutionCapable': True,
+        'NSMicrophoneUsageDescription': 'TV Recorder использует звук при записи видео с экрана.',
         'NSHumanReadableCopyright': 'MIT License',
     },
 )

@@ -30,25 +30,16 @@ from utils.icons import get_icon
 from utils.vpn_manager import VPNManager
 from utils.network_monitor import NetworkMonitor
 from utils.tk_helpers import bind_cyrillic_layout_shortcuts
+from utils.timecode import format_clip_time, parse_clip_time
 from utils.logger import logger
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-def _format_mmss(total_seconds: float) -> str:
-    """Секунды -> "мм:сс" — позиция/длительность внутри самого ролика, не
-    время на часах. Минуты не ограничены двумя цифрами (см. TimeEntry в
-    gui/schedule_panel.py — виджет сам разрешает вводить больше цифр,
-    трёхчасовой ролик — это "200:44", а не переполнение)."""
-    total = round(total_seconds)
-    minutes, seconds = divmod(total, 60)
-    return f"{minutes}:{seconds:02d}"
-
-
 def _format_human_duration(total_seconds: float) -> str:
     """Секунды -> "6 мин 13 сек" — для итогового уведомления по завершении
-    записи (не путать с _format_mmss — та обозначает позицию в ролике)."""
+    записи (не путать с format_clip_time — та обозначает позицию в ролике)."""
     total = round(total_seconds)
     minutes, seconds = divmod(total, 60)
     hours, minutes = divmod(minutes, 60)
@@ -59,23 +50,6 @@ def _format_human_duration(total_seconds: float) -> str:
         parts.append(f"{minutes} мин")
     parts.append(f"{seconds} сек")
     return " ".join(parts)
-
-
-def _parse_mmss_seconds(text: str) -> Optional[int]:
-    """"мм:сс" -> секунды, либо None если пусто/невалидно. Секунды должны
-    быть 0-59 (минуты не ограничены — см. _format_mmss)."""
-    if not text:
-        return None
-    parts = text.split(':')
-    if len(parts) != 2:
-        return None
-    try:
-        minutes, seconds = int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
-    if seconds >= 60 or minutes < 0 or seconds < 0:
-        return None
-    return minutes * 60 + seconds
 
 
 class AppWindow:
@@ -360,11 +334,11 @@ class AppWindow:
         # === МЕНЮ БАР ===
         menubar = tk.Menu(self.root)
         app_menu = tk.Menu(menubar, tearoff=0)
-        app_menu.add_command(label="Настройки…", command=self._show_settings)
+        app_menu.add_command(label="Пути…", command=self._show_settings)
         app_menu.add_command(label="О программе", command=self._show_about)
         app_menu.add_separator()
         app_menu.add_command(label="Выйти", command=self._on_close)
-        menubar.add_cascade(label="TV Recorder", menu=app_menu)
+        menubar.add_cascade(label="Настройки", menu=app_menu)
 
         # Меню Edit: без него на macOS `root.config(menu=...)` полностью
         # заменяет системное меню приложения, а вместе с ним — и скрытую
@@ -618,8 +592,8 @@ class AppWindow:
         clip_end_seconds = (seek_seconds or 0) + stop_after if stop_after else None
         clip_range_text = None
         if seek_seconds:
-            end_label = _format_mmss(clip_end_seconds) if clip_end_seconds else '…'
-            clip_range_text = f"{_format_mmss(seek_seconds)}–{end_label}"
+            end_label = format_clip_time(clip_end_seconds) if clip_end_seconds else '…'
+            clip_range_text = f"{format_clip_time(seek_seconds)}–{end_label}"
 
         # Скорость ускоренного воспроизведения для резервной записи экрана
         # (когда не помог ни прямой поток, ни sniff — см. ниже) — реальное
@@ -724,7 +698,7 @@ class AppWindow:
                             self.root.after(0, lambda: messagebox.showwarning(
                                 "Внимание",
                                 f"Прямую ссылку на поток для «{name}» получить не удалось — запись пошла через "
-                                f"окно браузера.\nПеремотка на {_format_mmss(seek_seconds)} в этом режиме не "
+                                f"окно браузера.\nПеремотка на {format_clip_time(seek_seconds)} в этом режиме не "
                                 f"поддерживается — пишется с той позиции, с которой сама начнёт воспроизведение "
                                 f"страница.", parent=self.root))
                     else:
@@ -954,7 +928,7 @@ class AppWindow:
         # --- Запись сразу по хронометражу ролика: это не расписание по
         # часам (ссылка не привязана к календарной дате/времени эфира) —
         # "С:"/"До:" здесь означают положение в САМОМ ролике в формате
-        # мм:сс (0:00 — его начало), а не время на часах. "С:" — реальный
+        # чч:мм:сс (00:00:00 — его начало), а не время на часах. "С:" — реальный
         # seek (ffmpeg -ss, см. core/recorder.py), не просто вычитается для
         # длины записи. По умолчанию — весь ролик целиком (0:00 до его
         # настоящей длительности, как только она определится); можно
@@ -971,16 +945,16 @@ class AppWindow:
         time_frame = ctk.CTkFrame(body, fg_color='transparent')
         time_frame.grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
-        start_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+        start_entry = TimeEntry(time_frame, width=94, height=30, corner_radius=Config.RADIUS_SM,
                                  fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
         start_entry.pack(side='left', padx=6)
         ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
-        end_entry = TimeEntry(time_frame, width=64, height=30, corner_radius=Config.RADIUS_SM,
+        end_entry = TimeEntry(time_frame, width=94, height=30, corner_radius=Config.RADIUS_SM,
                                fg_color=c['bg_primary'], border_color=c['border'], text_color=c['text_primary'])
         end_entry.pack(side='left', padx=6)
-        ctk.CTkLabel(time_frame, text="мм:сс — позиция в ролике", font=ctk.CTkFont(size=10),
+        ctk.CTkLabel(time_frame, text="чч:мм:сс — позиция в ролике", font=ctk.CTkFont(size=10),
                      text_color=c['text_muted']).pack(side='left', padx=(10, 0))
-        start_entry.set_time('0:00')
+        start_entry.set_time('00:00:00')
         end_entry.set_time('')
 
         def toggle_schedule_fields():
@@ -993,7 +967,7 @@ class AppWindow:
         name_touched = {'value': False}
         fields['name'].bind('<Key>', lambda e: name_touched.__setitem__('value', True))
 
-        # TimeEntry показывает "До:" только с точностью до минуты, а
+        # TimeEntry показывает "До:" только с точностью до секунды, а
         # реальная длительность может быть, например, 83.968 сек — если по
         # округлённому до минуты значению ставить таймер остановки, запись
         # обрежется на десятки секунд раньше конца ролика. Поэтому точную
@@ -1061,7 +1035,7 @@ class AppWindow:
                     if info.duration:
                         resolved_duration['value'] = info.duration
                         if not end_touched['value']:
-                            end_entry.set_time(_format_mmss(info.duration))
+                            end_entry.set_time(format_clip_time(info.duration))
                         minutes = int(info.duration // 60)
                         hint.configure(text=f"Определено: длительность ролика ~{minutes} мин")
                     else:
@@ -1092,7 +1066,12 @@ class AppWindow:
             start = start_entry.get().strip()
             end = end_entry.get().strip()
 
-            start_seconds = _parse_mmss_seconds(start) or 0
+            start_seconds = parse_clip_time(start)
+            if do_schedule and start_seconds is None:
+                messagebox.showwarning(
+                    "Внимание", "«С:» должно быть в формате ЧЧ:ММ:СС", parent=dialog)
+                return
+            start_seconds = start_seconds or 0
             # Реальный seek в сам ролик (ffmpeg -ss перед -i, см.
             # core/recorder.py) — раньше "С:" только вычиталось из "До:" для
             # длины записи, а сама запись всегда стартовала с начала ролика.
@@ -1107,10 +1086,10 @@ class AppWindow:
                 if not end_touched['value'] and resolved_duration['value']:
                     duration_seconds = resolved_duration['value']
                 else:
-                    end_seconds = _parse_mmss_seconds(end)
+                    end_seconds = parse_clip_time(end)
                     if end_seconds is None:
                         messagebox.showwarning(
-                            "Внимание", "«До:» должно быть в формате мм:сс (позиция в ролике), "
+                            "Внимание", "«До:» должно быть в формате ЧЧ:ММ:СС (позиция в ролике), "
                                          "либо оставьте поле пустым, чтобы писать до ручной остановки", parent=dialog)
                         return
                     duration_seconds = end_seconds - start_seconds
@@ -1151,7 +1130,7 @@ class AppWindow:
 
             if not name:
                 def resolve_and_rename():
-                    info = resolve_link(url)
+                    info = resolve_link(url, allow_tass_browser=False, allow_browser_sniff=False)
                     if info.ok and info.title and info.title != initial_name:
                         current = next((item for item in self.storage.get_links()
                                         if item.get('name') == initial_name and item.get('url') == url), None)
@@ -1219,7 +1198,7 @@ class AppWindow:
 
     def _show_settings(self):
         c = self.colors
-        dialog = self._create_dialog("Settings", "620x320")
+        dialog = self._create_dialog("Пути", "620x320")
         recordings_dir = tk.StringVar(value=str(Config.get_recordings_dir()))
         downloads_dir = tk.StringVar(value=str(Config.get_downloads_dir()))
 
@@ -1239,12 +1218,12 @@ class AppWindow:
                 if selected:
                     variable.set(selected)
 
-            ctk.CTkButton(body, text="Choose…", command=choose_folder, height=32, width=110,
+            ctk.CTkButton(body, text="Выбрать…", command=choose_folder, height=32, width=110,
                           corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
                           text_color=c['text_primary']).pack(anchor='w', pady=(0, 16))
 
-        folder_row("Recording folder:", recordings_dir)
-        folder_row("Downloads folder:", downloads_dir)
+        folder_row("Папка для записей:", recordings_dir)
+        folder_row("Папка для загрузок:", downloads_dir)
 
         def save():
             try:
@@ -1254,9 +1233,9 @@ class AppWindow:
                 logger.info(f"Downloads folder changed to: {Config.get_downloads_dir()}")
                 dialog.destroy()
             except OSError as error:
-                messagebox.showerror("Settings", f"Could not use this folder:\n{error}", parent=dialog)
+                messagebox.showerror("Пути", f"Не удалось использовать папку:\n{error}", parent=dialog)
 
-        ctk.CTkButton(body, text="Save", command=save, height=32, width=90,
+        ctk.CTkButton(body, text="Сохранить", command=save, height=32, width=90,
                       corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
                       text_color=c['accent_text']).pack(anchor='e')
 

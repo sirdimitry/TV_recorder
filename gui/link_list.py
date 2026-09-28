@@ -193,7 +193,8 @@ class LinkList(ctk.CTkFrame):
             # разбор с видимым браузером происходит только по явному нажатию
             # "Записать" (AppWindow._record_link_now зовёт resolve_link() без
             # этого флага).
-            info = resolve_link(link.get('url', ''), allow_tass_browser=False)
+            info = resolve_link(link.get('url', ''), allow_tass_browser=False,
+                                allow_browser_sniff=False)
             image = None
             if info.ok and info.thumbnail:
                 try:

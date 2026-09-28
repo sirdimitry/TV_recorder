@@ -132,6 +132,8 @@ _SMOTRIM_RE = re.compile(r'^https?://(?:www\.)?smotrim\.ru/', re.IGNORECASE)
 _SMOTRIM_VIDEO_ID_RE = re.compile(r'(?:/video/(?:id/)?|playing_video=)(\d+)')
 _TVZVEZDA_RE = re.compile(r'^https?://(?:www\.)?tvzvezda\.ru/', re.IGNORECASE)
 _TVZVEZDA_STATE_RE = re.compile(r'<script id=["\']tvzvezda-state["\'][^>]*>(.*?)</script>', re.DOTALL)
+_TV1_PLAYLIST_RE = re.compile(r'data-playlist-url=["\']([^"\']+)["\']', re.IGNORECASE)
+_REN_CDN_RE = re.compile(r'"([^"<>\s]*\.cdnvideo\.ru[^"<>\s]*\.mp4)"', re.IGNORECASE)
 
 
 def _find_tvzvezda_video(node, path: str):
@@ -160,6 +162,14 @@ def _resolve_known_site(url: str, timeout: int) -> Optional['LinkInfo']:
         onetv = _resolve_1tv(url, timeout)
         if onetv is not None:
             return onetv
+        onetv = _resolve_1tv_playlist(url, timeout)
+        if onetv is not None:
+            return onetv
+
+    if urlparse(url).hostname in ('ren.tv', 'www.ren.tv'):
+        ren = _resolve_ren_platformcraft(url, timeout)
+        if ren is not None:
+            return ren
 
     nextcloud = _NEXTCLOUD_SHARE_RE.match(url)
     if nextcloud:
@@ -227,7 +237,7 @@ class LinkInfo:
 
 
 def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT,
-                  allow_tass_browser: bool = True) -> LinkInfo:
+                  allow_tass_browser: bool = True, allow_browser_sniff: bool = True) -> LinkInfo:
     """Разбирает страницу/ссылку: сперва через yt-dlp, а если для этого
     сайта у него нет экстрактора — пробует найти прямую ссылку на поток
     прямо в HTML страницы, а если и там пусто (сайт рисует плеер через
@@ -301,6 +311,9 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
     onetv = _resolve_1tv(url, timeout)
     if onetv is not None:
         return onetv
+
+    if not allow_browser_sniff:
+        return fallback if fallback.title else (ytdlp_result or fallback)
 
     # Ни у yt-dlp, ни в сыром HTML ничего не нашлось — если у страницы
     # есть своя embed-страница (og:video), сначала пробуем прогнать через
@@ -589,6 +602,71 @@ def _resolve_1tv(url: str, timeout: int) -> Optional[LinkInfo]:
     return LinkInfo(ok=True, title=item.get('title', url), thumbnail=item.get('poster', ''),
                      is_live=False, duration=item.get('duration'), video_url=stream_url,
                      headers={'User-Agent': _DEFAULT_UA, 'Referer': url})
+
+
+def _resolve_1tv_playlist(url: str, timeout: int) -> Optional[LinkInfo]:
+    """Выпуски /shows/ и короткие /-/ ссылки содержат URL плейлиста плеера."""
+    try:
+        page = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
+        page.raise_for_status()
+        match = _TV1_PLAYLIST_RE.search(page.text)
+        if not match:
+            return None
+        playlist_url = urljoin(page.url, html.unescape(match.group(1)))
+        playlist = requests.get(playlist_url, headers={'User-Agent': _DEFAULT_UA, 'Referer': page.url},
+                                timeout=timeout)
+        playlist.raise_for_status()
+        items = playlist.json()
+        if not isinstance(items, list) or not items:
+            return None
+        video_id = re.search(r'[?&]video_id=(\d+)', playlist_url)
+        item = next((entry for entry in items if isinstance(entry, dict)
+                     and str(entry.get('uid')) == video_id.group(1)), None) if video_id else None
+        if item is None:
+            item = items[0]
+        variants = {entry.get('name'): entry.get('src') for entry in item.get('mbr', [])
+                    if isinstance(entry, dict) and entry.get('src')}
+        stream_url = next((variants.get(quality) for quality in ('hd', 'sd', 'ld')
+                           if variants.get(quality)), None)
+        if not stream_url:
+            return None
+        if stream_url.startswith('//'):
+            stream_url = 'https:' + stream_url
+        logger.info("LinkResolver/1tv: нашли поток выпуска через плейлист %s", playlist_url)
+        return LinkInfo(ok=True, title=item.get('title') or url, thumbnail=item.get('poster', ''),
+                        duration=item.get('duration'), video_url=stream_url, is_live=False,
+                        headers={'User-Agent': _DEFAULT_UA, 'Referer': page.url})
+    except (requests.RequestException, ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.debug("LinkResolver/1tv: плейлист выпуска недоступен для %s: %s", url, exc)
+        return None
+
+
+def _resolve_ren_platformcraft(url: str, timeout: int) -> Optional[LinkInfo]:
+    """Новые страницы РЕН отдают MP4 CDN в серверных данных platformcraft."""
+    try:
+        page = requests.get(url, headers={'User-Agent': _DEFAULT_UA}, timeout=timeout)
+        page.raise_for_status()
+        match = _REN_CDN_RE.search(page.text)
+        if not match:
+            return None
+        cdn_url = json.loads('"' + match.group(1) + '"')
+        parsed = urlparse('http://' + cdn_url)
+        if not parsed.hostname or not parsed.hostname.endswith('.cdnvideo.ru') or not parsed.path.endswith('.mp4'):
+            return None
+        stream_url = parsed.geturl()
+        if _probe_stream(stream_url, page.url, timeout) is None:
+            return None
+        title_match = _TITLE_RE.search(page.text)
+        duration_match = _VIPLER_DURATION_RE.search(page.text)
+        duration = float(duration_match.group(1)) if duration_match else None
+        title = html.unescape(title_match.group(1)).strip() if title_match else url
+        logger.info("LinkResolver/ren: нашли MP4 через platformcraft для %s", url)
+        return LinkInfo(ok=True, title=title, is_live=False, duration=duration,
+                        video_url=stream_url,
+                        headers={'User-Agent': _DEFAULT_UA, 'Referer': page.url})
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        logger.debug("LinkResolver/ren: platformcraft недоступен для %s: %s", url, exc)
+        return None
 
 
 # Общий пул для гонки параллельных попыток в _webcaster_get — так все

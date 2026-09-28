@@ -194,7 +194,8 @@ class RecordingPanel(ctk.CTkFrame):
                 links = {l['name']: l for l in self.storage.get_links()}
                 link = links.get(channel_name)
                 if link:
-                    info = resolve_link(link.get('url', ''))
+                    info = resolve_link(link.get('url', ''), allow_tass_browser=False,
+                                        allow_browser_sniff=False)
                     if info.ok:
                         logo_url = info.thumbnail
 

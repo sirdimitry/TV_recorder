@@ -12,10 +12,11 @@ from core.storage import Storage
 from utils.config import Config
 from utils.icons import get_icon
 from utils.logger import logger
+from utils.timecode import format_clock_time, parse_clock_time
 
 
 class TimeEntry(ctk.CTkEntry):
-    """Поле времени: пользователь вводит только цифры, двоеточие добавляется само."""
+    """Поле ЧЧ:ММ:СС: двоеточия добавляются при вводе цифр."""
 
     def __init__(self, parent, **kwargs):
         self.value = tk.StringVar()
@@ -32,25 +33,24 @@ class TimeEntry(ctk.CTkEntry):
         except tk.TclError:
             cursor_position = len(raw_value)
         digits_before_cursor = sum(char.isdigit() for char in raw_value[:cursor_position])
-        # Последние 2 введённые цифры — минуты/секунды (второй сегмент),
-        # всё, что перед ними — часы/минуты (первый сегмент), без
-        # ограничения в 2 цифры: полю нужно показывать и "10:05" (время на
-        # часах), и "200:44" (позиция в 3-часовом ролике для "Мои ссылки" —
-        # см. gui/app_window.py: _add_link_dialog). Раньше первый сегмент
-        # был жёстко зафиксирован в 2 цифры ("93:0" при вводе "930"), из-за
-        # чего длинные позиции физически нельзя было ввести.
+        # Вставленные значения с двоеточиями сохраняем как есть: старый
+        # формат ММ:СС для фрагментов (включая 200:44) остаётся доступен.
+        segments = raw_value.split(':')
+        if len(segments) in (2, 3) and all(part.isdigit() for part in segments) and \
+                len(segments[-1]) <= 2 and (len(segments) == 2 or len(segments[1]) <= 2):
+            return
         digits = ''.join(char for char in raw_value if char.isdigit())[:6]
         if len(digits) <= 2:
             formatted = digits
+        elif len(digits) <= 4:
+            formatted = f"{digits[:2]}:{digits[2:]}"
         else:
-            formatted = f"{digits[:-2]}:{digits[-2:]}"
+            formatted = f"{digits[:2]}:{digits[2:4]}:{digits[4:]}"
         if formatted != raw_value:
             self._formatting = True
             self.value.set(formatted)
             self._formatting = False
-            new_cursor_position = digits_before_cursor
-            if len(digits) > 2 and digits_before_cursor > len(digits) - 2:
-                new_cursor_position += 1
+            new_cursor_position = digits_before_cursor + (digits_before_cursor > 2) + (digits_before_cursor > 4)
             self.after_idle(lambda: self.icursor(min(new_cursor_position, len(formatted))))
 
     def set_time(self, value: str):
@@ -131,13 +131,13 @@ class SchedulePanel(ctk.CTkFrame):
         time_frame.pack(fill='x', padx=12, pady=4)
 
         ctk.CTkLabel(time_frame, text="С:", text_color=c['text_secondary']).pack(side='left')
-        self.start_time = TimeEntry(time_frame, width=76, height=30, corner_radius=Config.RADIUS_SM,
+        self.start_time = TimeEntry(time_frame, width=96, height=30, corner_radius=Config.RADIUS_SM,
                                      fg_color=c['bg_secondary'], border_color=c['border'],
                                      text_color=c['text_primary'])
         self.start_time.pack(side='left', padx=6)
 
         ctk.CTkLabel(time_frame, text="До:", text_color=c['text_secondary']).pack(side='left', padx=(10, 0))
-        self.end_time = TimeEntry(time_frame, width=76, height=30, corner_radius=Config.RADIUS_SM,
+        self.end_time = TimeEntry(time_frame, width=96, height=30, corner_radius=Config.RADIUS_SM,
                                    fg_color=c['bg_secondary'], border_color=c['border'],
                                    text_color=c['text_primary'])
         self.end_time.pack(side='left', padx=6)
@@ -220,7 +220,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         self.tree.column('channel', width=140)
         self.tree.column('source', width=70, anchor='center')
-        self.tree.column('time', width=140)
+        self.tree.column('time', width=180)
         self.tree.column('days', width=90)
         self.tree.column('active', width=70, anchor='center')
         self.tree.column('status', width=100, anchor='center')
@@ -344,7 +344,7 @@ class SchedulePanel(ctk.CTkFrame):
         """Каналу — текущее время и день недели (это эфир, идёт сейчас).
         Ссылке/браузеру — нет: это не эфир по расписанию, а разовая запись
         с чётким хронометражем, привязывать её к времени на компьютере
-        только сбивает с толку. Время начала — 00:00, конец пользователь
+        только сбивает с толку. Время начала — 00:00:00, конец пользователь
         вводит сам исходя из длительности записи. День недели скрыт —
         internally берётся сегодняшний, раз запись разовая."""
         now = datetime.now()
@@ -352,15 +352,15 @@ class SchedulePanel(ctk.CTkFrame):
 
         if self.source_type_var.get() == 'channel':
             self.days_frame.pack(fill='x', padx=12, pady=6)
-            self.start_time.set_time(now.strftime("%H:%M"))
-            self.end_time.set_time((now + timedelta(minutes=30)).strftime("%H:%M"))
+            self.start_time.set_time(now.strftime("%H:%M:%S"))
+            self.end_time.set_time((now + timedelta(minutes=30)).strftime("%H:%M:%S"))
             self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
             today_idx = now.weekday()
             for idx, var in self.day_vars.items():
                 var.set(idx == today_idx)
         else:
             self.days_frame.pack_forget()
-            self.start_time.set_time("00:00")
+            self.start_time.set_time("00:00:00")
             self.end_time.set_time("")
             self.date_label.configure(text=f"Сегодня: {day_names[now.weekday()]}, {now:%d.%m.%Y}")
             for var in self.day_vars.values():
@@ -421,8 +421,9 @@ class SchedulePanel(ctk.CTkFrame):
                     self.duration_hint.configure(text=f"Не удалось определить длительность: {info.error}")
                     return
                 try:
-                    start_dt = datetime.strptime(self.start_time.get().strip(), '%H:%M')
-                except ValueError:
+                    start_dt = datetime.strptime(
+                        format_clock_time(self.start_time.get().strip()), '%H:%M:%S')
+                except (ValueError, TypeError):
                     start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                 if info.duration:
                     end_dt = start_dt + timedelta(seconds=info.duration)
@@ -432,7 +433,7 @@ class SchedulePanel(ctk.CTkFrame):
                     end_dt = start_dt + timedelta(minutes=60)
                     self.duration_hint.configure(
                         text="Прямой эфир (длительность неизвестна — окно +60 мин, поправьте при необходимости)")
-                self.end_time.set_time(end_dt.strftime('%H:%M'))
+                self.end_time.set_time(end_dt.strftime('%H:%M:%S'))
 
             self.after(0, apply)
 
@@ -453,6 +454,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         if not self._valid_form(channel_name, start, end):
             return
+        start, end = format_clock_time(start), format_clock_time(end)
 
         days = self._days_for_save()
         if not days:
@@ -490,6 +492,7 @@ class SchedulePanel(ctk.CTkFrame):
 
         if not self._valid_form(channel_name, start, end):
             return
+        start, end = format_clock_time(start), format_clock_time(end)
 
         days = self._days_for_save()
 
@@ -571,8 +574,8 @@ class SchedulePanel(ctk.CTkFrame):
             self.days_frame.pack_forget()
 
         self.channel_var.set(item.get('channel_name', ''))
-        self.start_time.set_time(item.get('start_time', ''))
-        self.end_time.set_time(item.get('end_time', ''))
+        self.start_time.set_time(format_clock_time(item.get('start_time', '')) or '')
+        self.end_time.set_time(format_clock_time(item.get('end_time', '')) or '')
         self._show_today()
 
         for idx, var in self.day_vars.items():
@@ -589,20 +592,16 @@ class SchedulePanel(ctk.CTkFrame):
 
     @staticmethod
     def _is_valid_time(value: str) -> bool:
-        try:
-            datetime.strptime(value, '%H:%M')
-            return True
-        except ValueError:
-            return False
+        return parse_clock_time(value) is not None
 
     def _valid_form(self, channel_name: str, start: str, end: str) -> bool:
         if not channel_name or not start or not end:
             messagebox.showwarning("Внимание", "Заполните все поля")
             return False
         if not self._is_valid_time(start) or not self._is_valid_time(end):
-            messagebox.showwarning("Внимание", "Введите время в формате ЧЧ:ММ, например 09:30")
+            messagebox.showwarning("Внимание", "Введите время в формате ЧЧ:ММ:СС, например 09:30:15")
             return False
-        if start == end:
+        if parse_clock_time(start) == parse_clock_time(end):
             messagebox.showwarning(
                 "Внимание",
                 "Измените время окончания: одинаковое время означало бы запись на 24 часа."

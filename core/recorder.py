@@ -16,17 +16,9 @@ from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.config import Config
 from utils.filenames import unique_media_path
 from utils.logger import logger
+from utils.timecode import format_clip_time
 
 SNAPSHOT_FPS = 4  # активных записей может быть много одновременно (1-16+) — держим частоту скромной
-
-
-def _format_clip_mmss(total_seconds: float) -> str:
-    """Секунды -> "мм:сс" — та же семантика, что и gui/app_window.py:
-    _format_mmss (позиция в ролике), задублирована здесь, чтобы core/ не
-    тянул зависимость от gui/."""
-    total = round(total_seconds)
-    minutes, seconds = divmod(total, 60)
-    return f"{minutes}:{seconds:02d}"
 
 
 class RecordingTask:
@@ -104,14 +96,14 @@ class RecordingTask:
         return f"{started_at:%d.%m.%Y · %H:%M} – {end_label}"
 
     def format_clip_range(self) -> Optional[str]:
-        """Диапазон позиций В САМОМ РОЛИКЕ ("38:30–42:30"), а не время на
+        """Диапазон позиций В САМОМ РОЛИКЕ ("00:38:30–00:42:30"), а не время на
         часах — для "Мои ссылки" с заданным "С:"/"До:". None, если это не
         такая запись (обычный канал/эфир — тогда в интерфейсе используется
         format_recording_period)."""
         if self.clip_start_seconds is None:
             return None
-        start_label = _format_clip_mmss(self.clip_start_seconds)
-        end_label = _format_clip_mmss(self.clip_end_seconds) if self.clip_end_seconds else '…'
+        start_label = format_clip_time(self.clip_start_seconds)
+        end_label = format_clip_time(self.clip_end_seconds) if self.clip_end_seconds else '…'
         return f"{start_label}–{end_label}"
 
 

@@ -12,6 +12,7 @@ from core.recorder import Recorder
 from core.storage import Storage
 from utils.config import Config
 from utils.logger import logger
+from utils.timecode import parse_clock_time
 
 
 class RecordingScheduler:
@@ -95,10 +96,10 @@ class RecordingScheduler:
         """Добавляет задачу в планировщик."""
         days = item.get('days', [])
         start_time = item.get('start_time', '00:00')
-        hour, minute = map(int, start_time.split(':'))
+        hour, minute, second = parse_clock_time(start_time)
 
         day_of_week = ','.join(self.DAYS_MAP.get(day, str(day)) for day in days) if days else '*'
-        trigger = CronTrigger(hour=hour, minute=minute, day_of_week=day_of_week)
+        trigger = CronTrigger(hour=hour, minute=minute, second=second, day_of_week=day_of_week)
         self.scheduler.add_job(
             self._pre_record_check,
             trigger=trigger,
@@ -112,12 +113,12 @@ class RecordingScheduler:
     def _end_deadline(schedule_item: dict, now: Optional[datetime] = None) -> datetime:
         """Абсолютное время «До» для текущего запуска, включая переход через полночь."""
         now = now or datetime.now()
-        start_hour, start_minute = map(int, schedule_item.get('start_time', '00:00').split(':'))
-        end_hour, end_minute = map(int, schedule_item.get('end_time', '00:30').split(':'))
-        start_minutes = start_hour * 60 + start_minute
-        end_minutes = end_hour * 60 + end_minute
-        deadline = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-        if end_minutes <= start_minutes:
+        start_hour, start_minute, start_second = parse_clock_time(schedule_item.get('start_time', '00:00'))
+        end_hour, end_minute, end_second = parse_clock_time(schedule_item.get('end_time', '00:30'))
+        start_seconds = start_hour * 3600 + start_minute * 60 + start_second
+        end_seconds = end_hour * 3600 + end_minute * 60 + end_second
+        deadline = now.replace(hour=end_hour, minute=end_minute, second=end_second, microsecond=0)
+        if end_seconds <= start_seconds:
             deadline += timedelta(days=1)
         return deadline
 
