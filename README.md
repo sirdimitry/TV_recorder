@@ -7,6 +7,10 @@ video, and scheduling recordings. It combines a compact desktop interface with
 a resilient FFmpeg pipeline designed for sources that may briefly disconnect or
 change quality.
 
+![TV Recorder 1.1.39: live preview, channel list, recording schedule, and an active recording](docs/images/tv-recorder-v1.1.39.png)
+
+Live preview, scheduled recordings, and recording progress in one window.
+
 ## Highlights
 
 - **Live channels** — import any M3U playlist, preview a channel, check its
