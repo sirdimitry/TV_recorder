@@ -50,14 +50,28 @@ changed in Settings.
 
 ## Install the macOS app
 
+**Version 1.1.39 is available as a ready-to-install DMG for Apple Silicon Macs.**
+Download [TV Recorder 1.1.39 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.39/TV.Recorder.dmg)
+or see the [release notes and SHA-256 checksum](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.39).
+
 Download the [latest ready-to-install DMG](https://github.com/sirdimitry/TV_recorder/releases/latest/download/TV.Recorder.dmg) from GitHub, open it, and drag **TV Recorder** to **Applications**.
 The [latest release page](https://github.com/sirdimitry/TV_recorder/releases/latest) lists the current version and its installer.
-The current local build is ad-hoc signed rather than Apple-notarized, so macOS
+The app is ad-hoc signed and is not Apple-notarized, so macOS
 may require **Control-click → Open** on the first launch.
 
 Screen recording fallback requires macOS permission in **System Settings →
 Privacy & Security → Screen & System Audio Recording**. Audio capture also
 requires a loopback device such as BlackHole.
+
+## Feedback and ideas
+
+You're welcome to install TV Recorder and give it a try. If you enjoy using it,
+I'd be grateful for a few words about your experience. Suggestions are welcome
+too: what could work better, or what feature would you like to see?
+Feel free to share your feedback in [GitHub Issues](https://github.com/sirdimitry/TV_recorder/issues).
+
+If you'd like to support the project, a ⭐ on GitHub would be much appreciated.
+Thank you for trying TV Recorder and helping it improve!
 
 ## Run from source
 

@@ -15,28 +15,21 @@ class M3UParser:
         "Первый канал": {
             "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_1TVSD/variant.m3u8",
         },
-        # vgtrkregion-reg.cdnvideo.ru отдаёт TLS-обрыв (Error in the pull
-        # function / End of file) на все каналы ВГТРК независимо от VPN —
-        # CDN мёртв, а не заблокирован локально (проверено curl+ffmpeg
-        # с VPN включённым и выключенным — результат одинаковый). Заменено
-        # на официальный источник ВГТРК stream.smotrim.ru — проверено вживую,
-        # ffmpeg реально получает кадр за ~1с.
+        # Ngenix/Zabava: эфир и архив проверены 07.10.2026 по кадрам и звуку.
+        # У smotrim Р1 преждевременно заканчивается, а Р24 идёт без обычной
+        # эфирной графики. Здесь обе дорожки доступны в одном HLS-источнике.
         "Россия 1": {
-            "url": "https://stream.smotrim.ru/hls2/russia_hd/playlist_6.m3u8",
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_RUSSIA1/variant.m3u8",
+            "user_agent": "WINK/1.80.1 (AndroidTV/9) HlsWinkPlayer",
             "logo": "https://iptvx.one/picons/rossia1.png"
         },
-        # У 'Россия 24' и 'Россия К' на stream.smotrim.ru видео и звук —
-        # РАЗНЫЕ HLS-рендиции (playlist_1..5 — видео разных битрейтов без
-        # звука вообще, playlist_6 — отдельно звук без видео), не как у
-        # 'Россия 1' (russia_hd), где playlist_6 — уже готовый микс обоих.
-        # Проверено напрямую ffprobe по сегментам .ts: без audio_url запись
-        # получается полностью без звука — сама дорожка отсутствует в PMT,
-        # это не баг ffmpeg/наших флагов, а структура именно этого источника.
         "Россия 24": {
-            "url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_5.m3u8",
-            "audio_url": "https://stream.smotrim.ru/hls2/russia24nl_smotrim/playlist_6.m3u8",
+            "url": "https://zabava-htlive.cdn.ngenix.net/hls/CH_RUSSIA24/variant.m3u8",
+            "audio_url": None,
+            "user_agent": "WINK/1.80.1 (AndroidTV/9) HlsWinkPlayer",
             "logo": "https://iptvx.one/picons/rossia-24.png"
         },
+        # У Россия К на smotrim видео и звук передаются отдельно.
         "Россия К": {
             "url": "https://stream.smotrim.ru/hls2/russia_k/playlist_5.m3u8",
             "audio_url": "https://stream.smotrim.ru/hls2/russia_k/playlist_6.m3u8",

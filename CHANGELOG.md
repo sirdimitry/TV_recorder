@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.40] - 2026-10-07
+
+- See the accompanying Git commit message for details.
+
+## [1.1.39] - 2026-10-07
+
+- Replace the Russia 1 and Russia 24 sources with verified Ngenix/Zabava streams containing video and audio together. Russia 24 now includes the usual on-air logo and ticker.
+- Validate both streams with five-minute recordings and archive playback at 1, 24, and 72 hours; bundled FFmpeg also records both channels with audio.
+- Add polite invitations for feedback, feature suggestions, and GitHub stars to the English and Russian READMEs.
+- Provide a ready-to-install Apple Silicon DMG in [the GitHub release](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.39), with a SHA-256 checksum. The app is ad-hoc signed and is not Apple-notarized.
+
 ## [1.1.38] - 2026-09-28
 
 - See the accompanying Git commit message for details.
