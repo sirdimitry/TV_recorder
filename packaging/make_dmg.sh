@@ -7,13 +7,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="$REPO_ROOT/packaging/dist/TV Recorder.app"
 DMG_NAME="TV Recorder"
-OUT_DMG="$REPO_ROOT/packaging/TV Recorder.dmg"
+
 VOLUME_NAME="TV Recorder"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "Не найден $APP_PATH — сначала запустите packaging/build.sh" >&2
     exit 1
 fi
+
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+OUT_DMG="$REPO_ROOT/packaging/TV_Recorder_v${APP_VERSION}_Apple_Silicon.dmg"
 
 STAGE_DIR=$(mktemp -d)
 RW_DMG=""

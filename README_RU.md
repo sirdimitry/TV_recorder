@@ -52,10 +52,10 @@ TV Recorder старается сохранить полезный файл да
 ## Установка приложения
 
 **Версия 1.1.39 доступна в виде готового DMG для Mac с Apple Silicon.**
-Скачайте [TV Recorder 1.1.39 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.39/TV.Recorder.dmg)
+Скачайте [TV Recorder 1.1.39 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.39/TV_Recorder_v1.1.39_Apple_Silicon.dmg)
 или откройте [описание релиза и контрольную сумму SHA-256](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.39).
 
-Скачайте [последний готовый DMG](https://github.com/sirdimitry/TV_recorder/releases/latest/download/TV.Recorder.dmg) с GitHub, откройте его и перетащите **TV Recorder** в **Applications**.
+Скачайте [последний готовый DMG](https://github.com/sirdimitry/TV_recorder/releases/latest) с GitHub, откройте его и перетащите **TV Recorder** в **Applications**.
 На [странице последнего релиза](https://github.com/sirdimitry/TV_recorder/releases/latest) указана актуальная версия и доступен установщик. Приложение
 подписано ad-hoc и не нотарифицировано Apple, поэтому при первом запуске
 может потребоваться **Control-клик → Открыть**.
@@ -100,7 +100,7 @@ bash packaging/build.sh
 bash packaging/make_dmg.sh
 ```
 
-Готовый файл появится по пути `packaging/TV Recorder.dmg`.
+Готовый файл появится по пути `packaging/TV_Recorder_v<версия>_Apple_Silicon.dmg`.
 
 ## Структура проекта
 
