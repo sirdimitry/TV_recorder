@@ -1,0 +1,2 @@
+# Keep the upstream playlist's CRLF bytes without flagging every line as whitespace.
+data/zabava-full.m3u whitespace=cr-at-eol

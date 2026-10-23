@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.1.49] - 2026-10-23
+
+- See the accompanying Git commit message for details.
+
+## [1.1.48] - 2026-10-23
+
+- Rebuild Archive as a compact channel browser, dated player and persistent fragment export panel; keep save, cancel, sound and transport controls visible in small windows.
+- Group time shifts, regional feeds and duplicate sources under one channel row. Expose national/time-shift versions in the channel menu and regional versions through the region filter; preserve all sources and the clip draft when switching versions.
+- Scale archive video to the available player area at 16:9 without a fixed maximum size, including the currently displayed frame; retain one decoder while resizing.
+- Show fragment duration and validation inline, separate watching from saving, and debounce catalog filtering while retaining selection and scroll position.
+
+## [1.1.47] - 2026-10-23
+
+- Recheck recording windows every five seconds, including after sleep and on app startup; recover the remaining portion, retry failed starts, and enforce the original stop time across sleep.
+- Share occurrence guards between cron and recovery to prevent duplicate recordings, including after schedule reloads; log APScheduler warnings and errors to the application log.
+- Reset archive clip boundaries to the actual channel selection time in Moscow time. Open preview near the current broadcast with a thirty-second archive delay instead of stale startup values.
+
+## [1.1.46] - 2026-10-16
+
+- Load the complete public Zabava/Wink catalog, including regional channels and time shifts; add background archive/live checks, search, region/status filters, cached catalog updates and custom Ngenix stream connections.
+- Start muted archive preview on channel selection. Clicking the preview toggles sound; remove separate watch, stop, sound and destination controls. Archive exports use the global recordings folder.
+- Add dated archive seeking, a daily timeline, skip controls and clip boundary marks from the displayed frame. Advance the broadcast clock only when decoded frames arrive.
+- Request Ngenix archives with both absolute time bounds and verify program dates, segment timestamps, coverage and video boundaries to prevent a live fallback being shown as an archive.
+
+## [1.1.45] - 2026-10-16
+
+- Add a dedicated OnTVTime Archive workspace with automatic per-channel playback checks, available dates, Moscow time ranges, preview, explicit sound control, destination folder, progress, and cancellation.
+- Port OnTVTime session, playlist, segment validation, and exact trim logic from srch-dwnld 7660027; unavailable recordings and network failures remain distinct.
+- Port VK/OK extractor compatibility fixes and additional TikTok, Webcaster, embedded Smotrim, Vipler, and direct-media fallbacks. Prefer full-quality HLS in First Channel programme playlists.
+- Support downloading a precise video time range and stop stalled downloads without blocking the interface.
+
+## [1.1.44] - 2026-10-16
+
+- Support recordings restricted to a specific calendar date and display that date in the schedule, preserving it when the entry is edited.
+
+## [1.1.43] - 2026-10-16
+
+- Restore the existing main window on macOS Dock/Finder reopen and add an explicit Show TV Recorder menu command.
+- Deliver preview frames through a single latest-frame slot polled by the UI, avoiding Tk calls from the decoder thread and queued video frames.
+- Detect stalled preview decoders, reconnect them automatically, reap stopped processes, and retain decoder errors in the log. Recording processes are independent.
+
 ## [1.1.42] - 2026-10-07
 
 - See the accompanying Git commit message for details.

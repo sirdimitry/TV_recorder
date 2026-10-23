@@ -15,6 +15,7 @@ import customtkinter as ctk
 from core.link_resolver import list_available_heights, resolve_link
 from utils.config import Config
 from utils.tk_helpers import bind_cyrillic_layout_shortcuts
+from utils.timecode import parse_clip_time
 
 RESOLUTIONS = ["1080p", "720p", "480p", "360p"]
 
@@ -23,7 +24,7 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
     c = colors
     dialog = ctk.CTkToplevel(parent)
     dialog.title("Добавить загрузку")
-    dialog.geometry("480x400")
+    dialog.geometry("520x490")
     dialog.transient(parent)
     dialog.configure(fg_color=c['bg_secondary'])
     dialog.after(100, dialog.grab_set)
@@ -150,6 +151,18 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
             messagebox.showwarning("Внимание", "Вставьте ссылку", parent=dialog)
             return
         target_height = int(resolution_var.get().rstrip('p'))
+        clip_start, clip_end = 0, None
+        if clip_from.get().strip() or clip_to.get().strip():
+            try:
+                clip_start = parse_clip_time(clip_from.get().strip() or '00:00:00')
+                clip_end = parse_clip_time(clip_to.get().strip())
+                if clip_start is None or clip_end is None:
+                    raise ValueError('Укажите начало и конец фрагмента.')
+                if clip_end <= clip_start:
+                    raise ValueError('Конец фрагмента должен быть позже начала.')
+            except ValueError as error:
+                hint.configure(text=f'Проверьте интервал: {error}')
+                return
         output_dir = Path(folder_var.get()).expanduser()
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,11 +171,24 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
             return
         Config.set_downloads_dir(output_dir)
 
-        downloader.start_download(url, target_height=target_height, output_dir=output_dir)
+        downloader.start_download(url, target_height=target_height, output_dir=output_dir,
+                                  clip_start=clip_start, clip_end=clip_end)
         dialog.destroy()
         if on_added:
             on_added()
 
+    ctk.CTkLabel(body, text='Фрагмент:', text_color=c['text_secondary']).grid(row=5, column=0, sticky='w', pady=8)
+    clip_frame = ctk.CTkFrame(body, fg_color='transparent')
+    clip_frame.grid(row=5, column=1, sticky='ew', pady=8)
+    clip_from, clip_to = tk.StringVar(), tk.StringVar()
+    for label, variable in [('С', clip_from), ('До', clip_to)]:
+        ctk.CTkLabel(clip_frame, text=label, text_color=c['text_secondary']).pack(side='left', padx=(0, 6))
+        entry = ctk.CTkEntry(clip_frame, textvariable=variable, width=112, height=32,
+                            placeholder_text='00:00:00', fg_color=c['bg_primary'], border_color=c['border'])
+        entry.pack(side='left', padx=(0, 10))
+        bind_cyrillic_layout_shortcuts(entry)
+    ctk.CTkLabel(body, text='Оставьте интервал пустым, чтобы скачать видео целиком.',
+                font=ctk.CTkFont(size=11), text_color=c['text_secondary']).grid(row=6, column=0, columnspan=2, sticky='w')
     ctk.CTkButton(body, text="Скачать", command=save, height=36, corner_radius=Config.RADIUS_SM,
                   fg_color=c['accent'], hover_color=c['accent_hover'], text_color=c['accent_text']
-                  ).grid(row=5, column=0, columnspan=2, pady=(16, 0), sticky='ew')
+                  ).grid(row=7, column=0, columnspan=2, pady=(16, 0), sticky='ew')

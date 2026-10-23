@@ -5,6 +5,7 @@ from typing import Dict, Optional
 import time
 import threading
 import json
+import sys
 import webbrowser
 from queue import Empty, Queue
 
@@ -19,6 +20,7 @@ from gui.schedule_panel import SchedulePanel, TimeEntry
 from gui.status_bar import StatusBar
 from gui.recording_panel import RecordingPanel
 from gui.tab_strip import TabStrip
+from gui.archive_panel import ArchivePanel
 from core.link_resolver import resolve_link, guess_type
 from core.storage import Storage, StorageError
 from core.scheduler import RecordingScheduler
@@ -85,8 +87,19 @@ class AppWindow:
         self._setup_ui()
         self.scheduler.set_status_callback(self.schedule_panel.update_run_status)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if sys.platform == 'darwin':
+            self.root.createcommand('::tk::mac::ReopenApplication', self._show_main_window)
         self._startup_result = Queue(maxsize=1)
         self.root.after(0, self._start_ui)
+
+    def _show_main_window(self):
+        """Dock/Finder reopen must restore the existing recording window."""
+        if self._closing:
+            return
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        logger.info("Главное окно восстановлено")
 
     def _report_callback_exception(self, exc_type, exc_value, traceback):
         """Показывает ошибки сохранения, которые возникли в Tk-callback."""
@@ -161,6 +174,7 @@ class AppWindow:
         self._refresh_data()
         self.scheduler.start()
         self._start_background_checks()
+        self.root.after(600, self.archive_panel.refresh_channels)
         threading.Thread(target=self._initialize_app, daemon=True).start()
         self.root.after(100, self._finish_initialization)
 
@@ -358,6 +372,17 @@ class AppWindow:
         edit_menu.add_command(label="Выбрать всё", accelerator="Cmd+A", command=lambda: edit_action('<<SelectAll>>'))
         menubar.add_cascade(label="Правка", menu=edit_menu)
 
+        window_menu = tk.Menu(menubar, tearoff=0)
+        window_menu.add_command(label="Показать TV Recorder", command=self._show_main_window)
+        window_menu.add_separator()
+        window_menu.add_command(label="Эфир и записи", accelerator="Cmd+1",
+                                command=lambda: self.workspace_tabs.set('live'))
+        window_menu.add_command(label="Архив", accelerator="Cmd+2",
+                                command=lambda: self.workspace_tabs.set('archive'))
+        self.root.bind('<Command-Key-1>', lambda _: self.workspace_tabs.set('live'))
+        self.root.bind('<Command-Key-2>', lambda _: self.workspace_tabs.set('archive'))
+        menubar.add_cascade(label="Окно", menu=window_menu)
+
         self.root.config(menu=menubar)
 
         # === ТУЛБАР ===
@@ -387,6 +412,11 @@ class AppWindow:
             fg_color=c['bg_tertiary'], hover_color=c['bg_hover'], text_color=c['text_primary'],
             command=self._toolbar_check_all)
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
+
+        self.workspace_tabs = TabStrip(
+            self.root, tabs=[('live', 'Эфир и записи', 'tv'), ('archive', 'Архив', 'calendar')],
+            command=self._on_workspace_changed, colors=c)
+        self.workspace_tabs.pack(fill='x', padx=18, pady=(0, 12))
 
         # === ОСНОВНАЯ ОБЛАСТЬ: 2 КОЛОНКИ ===
         self.paned = ttk.PanedWindow(self.root, orient='horizontal')
@@ -482,6 +512,20 @@ class AppWindow:
 
         self.status_bar = StatusBar(self.root)
         self.status_bar.pack(fill='x', side='bottom')
+        self.archive_panel = ArchivePanel(self.root)
+
+    def _on_workspace_changed(self, key):
+        if key == 'archive':
+            self.paned.pack_forget()
+            self.preview_panel.clear()
+            self.btn_toolbar_check.pack_forget()
+            self.archive_panel.pack(fill='both', expand=True, padx=18, pady=(0, 10), before=self.status_bar)
+            self.archive_panel.activate()
+        else:
+            self.archive_panel.deactivate()
+            self.archive_panel.pack_forget()
+            self.paned.pack(fill='both', expand=True, padx=18, pady=(0, 10), before=self.status_bar)
+            self._on_left_tab_changed(self.tab_strip.get())
 
     def _refresh_data(self):
         self.channel_list.load_channels(self.storage.get_channels())
@@ -1365,6 +1409,7 @@ class AppWindow:
         self._network_monitor_running = False
         self.root.title("TV Recorder — завершение…")
         RecordingMonitorWindow.close_if_open()
+        self.archive_panel.begin_shutdown()
         self.preview_panel.stop()
         self.scheduler.stop()
         self.download_list.begin_shutdown()
@@ -1372,6 +1417,10 @@ class AppWindow:
         finished = threading.Event()
 
         def shutdown():
+            try:
+                self.archive_panel.controller.shutdown()
+            except Exception:
+                logger.exception('Ошибка при закрытии архива')
             try:
                 MiniPlayer.stop_all()
                 self.downloader.shutdown()

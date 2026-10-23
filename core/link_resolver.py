@@ -289,6 +289,12 @@ def resolve_link(url: str, timeout: int = 15, target_height: int = TARGET_HEIGHT
             logger.info(f"LinkResolver: yt-dlp не знает '{url}', нашли поток напрямую в HTML")
         return fallback
 
+    from core.expanded_resolver import resolve_expanded
+    expanded = resolve_expanded(url, timeout, target_height, allow_browser=allow_browser_sniff)
+    if expanded is not None and expanded.ok:
+        logger.info('LinkResolver: сработал дополнительный обработчик srch-dwnld')
+        return expanded
+
     # tass.ru отдаёт открытую страницу антибот-защиты (ServicePipe) даже
     # настоящему WebKit-движку (проверено вручную) — ни yt-dlp, ни HTML-
     # скрейп, ни sniff ниже до статьи не доберутся, так что не тратим на
@@ -490,16 +496,20 @@ def _resolve_via_browser_sniff(sniff_url: str, referer: str, timeout: int) -> Op
     return stream_url, body
 
 
-def _resolve_via_ytdlp(url: str, timeout: int, target_height: int = TARGET_HEIGHT) -> LinkInfo:
+def _resolve_via_ytdlp(url: str, timeout: int, target_height: int = TARGET_HEIGHT, referer: str = '') -> LinkInfo:
     opts = {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'format': _format_selector(target_height),
         'socket_timeout': timeout,
+        **({'http_headers': {'User-Agent': _DEFAULT_UA, 'Referer': referer}} if referer else {}),
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
+            from core.yt_dlp_compat import VKIE, OdnoklassnikiIE
+            ydl.add_info_extractor(VKIE(ydl))
+            ydl.add_info_extractor(OdnoklassnikiIE(ydl))
             info = ydl.extract_info(url, download=False)
     except Exception as e:
         logger.warning(f"LinkResolver: yt-dlp не смог разобрать '{url}': {e}")
@@ -626,8 +636,12 @@ def _resolve_1tv_playlist(url: str, timeout: int) -> Optional[LinkInfo]:
             item = items[0]
         variants = {entry.get('name'): entry.get('src') for entry in item.get('mbr', [])
                     if isinstance(entry, dict) and entry.get('src')}
-        stream_url = next((variants.get(quality) for quality in ('hd', 'sd', 'ld')
-                           if variants.get(quality)), None)
+        stream_url = next((entry.get('src') for entry in item.get('sources', [])
+                           if isinstance(entry, dict) and entry.get('type') == 'application/x-mpegURL'
+                           and entry.get('src')), None)
+        if not stream_url:
+            stream_url = next((variants.get(quality) for quality in ('hd', 'sd', 'ld')
+                               if variants.get(quality)), None)
         if not stream_url:
             return None
         if stream_url.startswith('//'):

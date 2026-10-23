@@ -36,9 +36,8 @@ ln -s /Applications "$STAGE_DIR/Applications"
 RW_DMG=$(mktemp -u).dmg
 hdiutil create -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" -ov -format UDRW "$RW_DMG" >/dev/null
 
-# Без -nobrowse и со стандартной точкой монтирования /Volumes/<имя> — Finder
-# должен реально "видеть" том, иначе AppleScript ниже не найдёт `disk
-# "$VOLUME_NAME"` (проверено: с -nobrowse Finder том не индексирует вообще).
+# Finder appearance is written as metadata without driving the user's Finder.
+# Build-only dependencies: python3 -m pip install -r packaging/requirements.txt
 ATTACH_PLIST=$(mktemp)
 hdiutil attach "$RW_DMG" -readwrite -noautoopen -plist > "$ATTACH_PLIST"
 MOUNT_DEVICE=$(python3 - "$ATTACH_PLIST" <<'PY'
@@ -56,29 +55,32 @@ print(next(entity['mount-point'] for entity in entities if entity.get('mount-poi
 PY
 )
 rm -f "$ATTACH_PLIST"
-MOUNT_NAME=$(basename "$MOUNT_POINT")
-sleep 2
+python3 - "$MOUNT_POINT" <<'PYMETADATA'
+from pathlib import Path
+import sys
+from ds_store import DSStore
+from mac_alias import Alias
 
-osascript <<OSA
-tell application "Finder"
-    tell disk "$MOUNT_NAME"
-        open
-        set current view of container window to icon view
-        set toolbar visible of container window to false
-        set statusbar visible of container window to false
-        set the bounds of container window to {200, 120, 800, 605}
-        set viewOptions to the icon view options of container window
-        set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 112
-        set background picture of viewOptions to (POSIX file "$MOUNT_POINT/TV Recorder.app/Contents/Resources/dmg_background.png" as alias)
-        set position of item "TV Recorder.app" of container window to {150, 145}
-        set position of item "Applications" of container window to {450, 145}
-        close
-        open
-        update without registering applications
-    end tell
-end tell
-OSA
+volume = Path(sys.argv[1])
+background = volume / 'TV Recorder.app/Contents/Resources/dmg_background.png'
+with DSStore.open(str(volume / '.DS_Store'), 'w+') as store:
+    store['.']['bwsp'] = {
+        'ShowStatusBar': False, 'ShowToolbar': False, 'ShowPathbar': False,
+        'ShowSidebar': False, 'SidebarWidth': 0,
+        'WindowBounds': '{{200, 120}, {600, 485}}',
+    }
+    store['.']['icvp'] = {
+        'viewOptionsVersion': 1, 'backgroundType': 2,
+        'backgroundImageAlias': Alias.for_file(str(background)).to_bytes(),
+        'iconSize': 112.0, 'textSize': 12.0, 'labelOnBottom': True,
+        'arrangeBy': 'none', 'gridSpacing': 100.0, 'gridOffsetX': 0.0,
+        'gridOffsetY': 0.0, 'showItemInfo': False, 'showIconPreview': False,
+    }
+    store['.']['vSrn'] = ('long', 1)
+    store['.']['vstl'] = ('type', b'icnv')
+    store['TV Recorder.app']['Iloc'] = (150, 145)
+    store['Applications']['Iloc'] = (450, 145)
+PYMETADATA
 
 sync
 if [ -d "$MOUNT_POINT/.fseventsd" ]; then

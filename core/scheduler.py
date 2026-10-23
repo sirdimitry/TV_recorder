@@ -1,5 +1,7 @@
 # core/scheduler.py
 from datetime import datetime, timedelta
+import json
+import threading
 from typing import Callable, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -31,6 +33,11 @@ class RecordingScheduler:
         self.storage = Storage()
         self.notifier = Notifier()
         self._running = False
+        self._lock = threading.RLock()
+        self._watchdog_stop = threading.Event()
+        self._entries = []
+        self._attempts = {}
+        self._deadlines = {}
         self._status_callback: Optional[Callable[[int, str], None]] = None
 
     def set_status_callback(self, callback: Callable[[int, str], None]):
@@ -51,19 +58,25 @@ class RecordingScheduler:
             self.scheduler.start()
             self._running = True
             self._load_all_schedules()
+            self._watchdog_stop.clear()
+            threading.Thread(target=self._watch_schedules, daemon=True,
+                             name='RecordingScheduleWatchdog').start()
             logger.info("Планировщик запущен")
 
     def stop(self):
         """Останавливает планировщик."""
         if self._running:
+            with self._lock:
+                self._running = False
+                self._watchdog_stop.set()
             self.scheduler.shutdown(wait=False)
-            self._running = False
             logger.info("Планировщик остановлен")
 
     def reload_schedules(self):
         """Перезагружает все задачи из хранилища."""
-        self.scheduler.remove_all_jobs()
-        self._load_all_schedules()
+        with self._lock:
+            self.scheduler.remove_all_jobs()
+            self._load_all_schedules()
         logger.info("Расписание перезагружено")
 
     def _load_all_schedules(self):
@@ -76,6 +89,7 @@ class RecordingScheduler:
         channels_by_id = {channel.get('id'): channel for channel in channel_list if channel.get('id')}
         links_by_id = {link.get('id'): link for link in link_list if link.get('id')}
 
+        entries = []
         for index, item in enumerate(schedule_items):
             if not item.get('enabled', True):
                 continue
@@ -91,6 +105,103 @@ class RecordingScheduler:
                 continue
 
             self._add_job(index, item, target)
+            entries.append((target, item, index))
+        with self._lock:
+            self._entries = entries
+
+    @classmethod
+    def _active_window(cls, item: dict, now: datetime):
+        """Find today's or yesterday's occurrence, including overnight windows."""
+        if not item.get('enabled', True):
+            return None
+        start_time = parse_clock_time(item.get('start_time', '00:00'))
+        if start_time is None:
+            raise ValueError('Некорректное время начала записи')
+        for day in (now, now - timedelta(days=1)):
+            if item.get('recording_date'):
+                if day.strftime('%Y-%m-%d') != item['recording_date']:
+                    continue
+            elif item.get('days'):
+                weekday = cls.DAYS_MAP[day.weekday()]
+                if weekday not in [cls.DAYS_MAP.get(d, str(d)) for d in item['days']]:
+                    continue
+            start = day.replace(hour=start_time[0], minute=start_time[1],
+                                second=start_time[2], microsecond=0)
+            end = cls._end_deadline(item, start)
+            if start <= now < end:
+                return start, end
+        return None
+
+    def _watch_schedules(self):
+        # Never sleep until the next cron occurrence: macOS can pause long
+        # relative waits during system sleep. Short waits recover after wake.
+        while not self._watchdog_stop.is_set():
+            try:
+                self.scheduler.wakeup()
+                self.check_schedules()
+            except Exception:
+                logger.exception('Scheduler: ошибка контрольной проверки расписания')
+            self._watchdog_stop.wait(5)
+
+    def check_schedules(self, now=None):
+        now = now or datetime.now()
+        with self._lock:
+            if not self._running:
+                return
+            entries = list(self._entries)
+            expired = [task_id for task_id, end in self._deadlines.items() if end <= now]
+            for task_id in expired:
+                del self._deadlines[task_id]
+            self._attempts = {key: retry for key, retry in self._attempts.items()
+                              if key[1] > now - timedelta(days=2)}
+        for task_id in expired:
+            self.recorder.stop_recording(task_id)
+        for target, item, index in entries:
+            try:
+                self._run_scheduled_recording(target, item, index, now=now, background=True)
+            except Exception:
+                logger.exception('Scheduler: ошибка восстановления строки #%s', index)
+
+    def _run_scheduled_recording(self, target, item, index, *, now=None, background=False):
+        now = now or datetime.now()
+        window = self._active_window(item, now)
+        if window is None:
+            return
+        start, deadline = window
+        # Stable across row deletion/reordering/reload; shared by cron and
+        # recovery so they can never launch the same occurrence twice.
+        key = (json.dumps(item, sort_keys=True, ensure_ascii=False), start)
+        with self._lock:
+            if not self._running or (target, item, index) not in self._entries:
+                return
+            if key in self._attempts:
+                retry_at = self._attempts[key]
+                if retry_at is None or retry_at > now:
+                    return
+            self._attempts[key] = None
+
+        def record():
+            try:
+                with self._lock:
+                    if not self._running or (target, item, index) not in self._entries:
+                        return
+                if (now - start).total_seconds() > 5:
+                    logger.warning("Scheduler: восстановление пропущенного запуска '%s' "
+                                   "(%s — %s), запись оставшейся части",
+                                   target['name'], start, deadline)
+                success = self._pre_record_check(target, item, index, deadline=deadline)
+            except Exception:
+                logger.exception("Scheduler: ошибка запуска '%s'", target['name'])
+                self._notify_status(index, 'failed')
+                success = False
+            if not success:
+                with self._lock:
+                    self._attempts[key] = datetime.now() + timedelta(seconds=30)
+
+        if background:
+            threading.Thread(target=record, daemon=True, name='ScheduledRecordingRecovery').start()
+        else:
+            record()
 
     def _add_job(self, index: int, item: dict, target: dict):
         """Добавляет задачу в планировщик."""
@@ -99,15 +210,21 @@ class RecordingScheduler:
         hour, minute, second = parse_clock_time(start_time)
 
         day_of_week = ','.join(self.DAYS_MAP.get(day, str(day)) for day in days) if days else '*'
-        trigger = CronTrigger(hour=hour, minute=minute, second=second, day_of_week=day_of_week)
+        date_fields = {}
+        if item.get('recording_date'):
+            recording_date = datetime.strptime(item['recording_date'], '%Y-%m-%d')
+            date_fields = dict(year=recording_date.year, month=recording_date.month, day=recording_date.day)
+            day_of_week = '*'
+        trigger = CronTrigger(hour=hour, minute=minute, second=second,
+                              day_of_week=day_of_week, **date_fields)
         self.scheduler.add_job(
-            self._pre_record_check,
+            self._run_scheduled_recording,
             trigger=trigger,
             args=[target, item, index],
             id=f"recording_{index}",
             replace_existing=True,
         )
-        logger.info(f"Задача добавлена: {target['name']} в {start_time} ({day_of_week})")
+        logger.info(f"Задача добавлена: {target['name']} в {start_time} ({item.get('recording_date') or day_of_week})")
 
     @staticmethod
     def _end_deadline(schedule_item: dict, now: Optional[datetime] = None) -> datetime:
@@ -126,13 +243,15 @@ class RecordingScheduler:
         """Ставит остановку точно на «До» и возвращает оставшиеся секунды."""
         remaining = max(0.0, (deadline - datetime.now()).total_seconds())
         self.recorder.schedule_stop(task_id, remaining)
+        with self._lock:
+            self._deadlines[task_id] = deadline
         return remaining
 
-    def _pre_record_check(self, target: dict, schedule_item: dict, index: int):
+    def _pre_record_check(self, target: dict, schedule_item: dict, index: int, *, deadline=None):
         """Проверка перед записью, вызываемая планировщиком."""
         name = target.get('name', 'Unknown')
         source_type = schedule_item.get('source_type', 'channel')
-        deadline = self._end_deadline(schedule_item)
+        deadline = deadline or self._end_deadline(schedule_item)
         if deadline <= datetime.now():
             logger.error(f"Запись '{name}' не начата: время окончания уже прошло")
             self._notify_status(index, 'failed')
@@ -158,6 +277,9 @@ class RecordingScheduler:
                     self._notify_status(index, 'failed')
                     return
                 output_path = self.recorder.build_output_path(name)
+                with self._lock:
+                    if not self._running or (target, schedule_item, index) not in self._entries:
+                        return
                 self._notify_status(index, 'recording')
                 task_id = self.recorder.start_browser_recording(
                     channel_name=name,
@@ -166,7 +288,8 @@ class RecordingScheduler:
                     source='schedule',
                     start_deadline_timestamp=deadline.timestamp(),
                     on_complete=lambda success, n, path, early, result, idx=index:
-                        self._on_recording_complete(success, n, path, early, result, idx),
+                        self._on_recording_complete(success, n, path, early, result, idx,
+                                                    schedule_item=schedule_item),
                 )
                 if not task_id:
                     self._on_recording_error(name, 'Не удалось начать запись экрана')
@@ -175,7 +298,7 @@ class RecordingScheduler:
                 remaining = self._schedule_stop_at(task_id, deadline)
                 logger.info(f"Scheduler: '{name}' будет остановлен через {remaining:.1f}с, "
                             f"строго в {deadline:%H:%M:%S}")
-                return
+                return True
             video_url, audio_url, extra_headers = info.video_url, info.audio_url, info.headers
         else:
             status, message = self.checker.check(target)
@@ -201,6 +324,9 @@ class RecordingScheduler:
             return
 
         output_path = self.recorder.build_output_path(name)
+        with self._lock:
+            if not self._running or (target, schedule_item, index) not in self._entries:
+                return
         self._notify_status(index, 'recording')
         task_id = self.recorder.start_recording(
             channel_name=name,
@@ -208,7 +334,8 @@ class RecordingScheduler:
             output_path=str(output_path),
             source='schedule',
             on_complete=lambda success, n, path, early, result, idx=index:
-                self._on_recording_complete(success, n, path, early, result, idx),
+                self._on_recording_complete(success, n, path, early, result, idx,
+                                            schedule_item=schedule_item),
             audio_url=audio_url,
             extra_headers=extra_headers,
             duration_limit_seconds=remaining if source_type == 'link' else None,
@@ -223,10 +350,19 @@ class RecordingScheduler:
         remaining = self._schedule_stop_at(task_id, deadline)
         logger.info(f"Scheduler: '{name}' будет остановлен через {remaining:.1f}с, "
                     f"строго в {deadline:%H:%M:%S}")
+        return True
 
     def _on_recording_complete(self, success: bool, channel_name: str, file_path: str,
                                 ended_early: bool = False, result_status: str = 'completed',
-                                index: Optional[int] = None):
+                                index: Optional[int] = None, *, schedule_item=None):
+        if schedule_item is not None and (not success or ended_early):
+            now = datetime.now()
+            window = self._active_window(schedule_item, now)
+            if window is not None:
+                key = (json.dumps(schedule_item, sort_keys=True, ensure_ascii=False), window[0])
+                with self._lock:
+                    self._attempts[key] = now + timedelta(seconds=30)
+                logger.warning("Scheduler: '%s' оборвался внутри окна, повтор через 30с", channel_name)
         if result_status == 'partial':
             self.notifier.send("⚠️ Запись сохранена частично", f"{channel_name}\n{file_path}")
             if index is not None:

@@ -41,6 +41,7 @@ class NewLinkSourcesTests(unittest.TestCase):
                 patch('core.link_resolver.YTDLP_AVAILABLE', False), \
                 patch('core.link_resolver._resolve_via_html_scrape',
                       return_value=LinkInfo(ok=False, title='Page')), \
+                patch('core.expanded_resolver.resolve_expanded', return_value=None), \
                 patch('core.link_resolver._resolve_via_browser_sniff') as sniff:
             info = resolve_link('https://example.com/video', allow_browser_sniff=False)
         self.assertFalse(info.ok)

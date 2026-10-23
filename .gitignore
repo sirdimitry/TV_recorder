@@ -30,6 +30,9 @@ data/browser_links.json
 data/schedule.json
 data/settings.json
 data/downloads.json
+data/archive_status.json*
+data/archive_streams.json*
+data/backups/
 logs/
 recordings/
 downloads/
@@ -72,10 +75,12 @@ data/logos/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.sw
 
 # Сборка .app/.dmg (packaging/build.sh, packaging/make_dmg.sh) — build/ и
 # dist/ уже покрыты общим правилом Python выше (ловит packaging/build,
 # packaging/dist); тут только то, что не покрыто.
 *.dmg
+packaging/*.dmg.sha256
 packaging/ffmpeg/

@@ -38,6 +38,14 @@ def setup_logger():
     
     logger.addHandler(fh)
     logger.addHandler(ch)
+
+    # APScheduler uses its own logger. In a windowed app stderr is /dev/null,
+    # so missed jobs and executor errors must also reach our rotating file.
+    scheduler_logger = logging.getLogger('apscheduler')
+    scheduler_logger.handlers.clear()
+    scheduler_logger.addHandler(fh)
+    scheduler_logger.setLevel(logging.WARNING)
+    scheduler_logger.propagate = False
     
     return logger
 

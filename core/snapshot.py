@@ -51,7 +51,7 @@ def grab_snapshot(url: str, headers: Optional[dict] = None,
     return None
 
 
-def to_ctk_image(jpeg_bytes: bytes, size: Tuple[int, int]):
+def to_ctk_image(jpeg_bytes: bytes, size: Tuple[int, int], *, crop=True):
     """JPEG-байты -> CTkImage, вписанные в size с обрезкой по центру (не
     сжатием) — общая логика для панели записей и окна-монитора."""
     from PIL import Image
@@ -59,6 +59,12 @@ def to_ctk_image(jpeg_bytes: bytes, size: Tuple[int, int]):
 
     w, h = size
     pil_img = Image.open(io.BytesIO(jpeg_bytes)).convert('RGB')
+    if not crop:
+        from PIL import ImageOps
+        fitted = ImageOps.contain(pil_img, size, Image.Resampling.LANCZOS)
+        canvas = Image.new('RGB', size, '#0D111B')
+        canvas.paste(fitted, ((w-fitted.width)//2, (h-fitted.height)//2))
+        return ctk.CTkImage(light_image=canvas, dark_image=canvas, size=size)
     src_ratio = pil_img.width / pil_img.height
     dst_ratio = w / h
     if src_ratio > dst_ratio:

@@ -31,6 +31,7 @@ a = Analysis(
         (str(REPO_ROOT / 'VERSION'), '.'),
         (str(REPO_ROOT / 'packaging' / 'dmg_background.png'), '.'),
         (str(REPO_ROOT / 'data' / 'default_channels.json'), 'data'),
+        (str(REPO_ROOT / 'data' / 'zabava-full.m3u'), 'data'),
         *pywebview_datas,
         *customtkinter_datas,
         *playwright_datas,

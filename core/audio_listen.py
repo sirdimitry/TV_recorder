@@ -27,7 +27,8 @@ class AudioListener:
     """Один ffplay-процесс на один URL — только звук, без окна плеера."""
 
     def __init__(self, url: str, headers: Optional[dict] = None, label: str = '',
-                 on_level: Optional[Callable[[float], None]] = None):
+                 on_level: Optional[Callable[[float], None]] = None,
+                 start_offset: float = 0, duration_limit: Optional[float] = None):
         # on_level из более сложной PCM-версии больше не используется —
         # параметр оставлен только чтобы не трогать вызовы в
         # gui/preview_panel.py и gui/recording_monitor.py.
@@ -36,6 +37,8 @@ class AudioListener:
         self.label = label or url
         self._process: Optional[subprocess.Popen] = None
         self._stopping = False
+        self.start_offset = start_offset
+        self.duration_limit = duration_limit
 
     def start(self):
         if self.headers:
@@ -55,6 +58,8 @@ class AudioListener:
             *RECONNECT_OPTS, *hls_opts(self.url),
             '-headers', header_str,
             '-i', self.url,
+            *(['-ss', str(self.start_offset)] if self.start_offset else []),
+            *(['-t', str(self.duration_limit)] if self.duration_limit else []),
         ]
         try:
             self._process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

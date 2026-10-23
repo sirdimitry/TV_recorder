@@ -6,11 +6,16 @@
 байтового потока по маркерам SOI/EOI (0xFFD8...0xFFD9)."""
 import subprocess
 import threading
+import time
+from collections import deque
 from typing import Callable, Optional
 
 from core.stream_resolver import RECONNECT_OPTS, hls_opts
+from utils.logger import logger
 
 DEFAULT_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+FRAME_TIMEOUT = 30.0
+MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 
 class LiveThumbnailStream:
@@ -18,17 +23,25 @@ class LiveThumbnailStream:
     вызывается из фонового потока на каждый декодированный кадр."""
 
     def __init__(self, url: str, headers: Optional[dict], fps: float,
-                 on_frame: Callable[[bytes], None], width: int = 320):
+                 on_frame: Callable[[bytes], None], width: int = 320,
+                 start_offset: float = 0, duration_limit: Optional[float] = None,
+                 on_timed_frame=None):
         self.url = url
         self.headers = headers
         self.fps = fps
         self.width = width
         self.on_frame = on_frame
+        self.on_timed_frame = on_timed_frame
+        self.start_offset = start_offset
+        self.duration_limit = duration_limit
         self._process: Optional[subprocess.Popen] = None
         self._running = False
+        self.completed = False
         self._stop_event = threading.Event()
 
     def start(self):
+        if self._running:
+            return
         self._running = True
         self._stop_event.clear()
         threading.Thread(target=self._run, daemon=True).start()
@@ -43,6 +56,30 @@ class LiveThumbnailStream:
             except Exception:
                 pass
 
+    def _watch_stall(self, proc, last_frame, finished):
+        """A network reconnect can otherwise keep read() blocked indefinitely."""
+        while not finished.wait(1.0):
+            if self._stop_event.is_set() or time.monotonic() - last_frame[0] >= FRAME_TIMEOUT:
+                if not self._stop_event.is_set():
+                    logger.warning("LiveThumbnailStream: нет кадров 30с, перезапускаем предпросмотр")
+                try:
+                    proc.terminate()
+                    if not finished.wait(2.0):
+                        proc.kill()
+                except OSError:
+                    pass
+                return
+
+    @staticmethod
+    def _read_errors(proc, errors):
+        # Drain continuously, retaining only a bounded tail; a full stderr
+        # pipe must never stop the video decoder.
+        try:
+            for line in proc.stderr:
+                errors.append(line.decode(errors='replace').strip()[:1000])
+        except (OSError, ValueError):
+            pass
+
     def _run(self):
         if self.headers:
             header_str = ''.join(f"{k}: {v}\r\n" for k, v in self.headers.items())
@@ -50,7 +87,7 @@ class LiveThumbnailStream:
             header_str = f"User-Agent: {DEFAULT_UA}\r\n"
 
         cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-y', '-loglevel', 'error',
             *RECONNECT_OPTS, *hls_opts(self.url),
             '-headers', header_str,
             # Без явных лимитов ffmpeg по умолчанию пробует набрать до 5МБ/5с
@@ -63,9 +100,10 @@ class LiveThumbnailStream:
             # бы залпом, а не в темпе настоящего эфира.
             '-re',
             '-i', self.url,
+            *(['-ss', str(self.start_offset)] if self.start_offset else []),
+            *(['-t', str(self.duration_limit)] if self.duration_limit else []),
             '-an',
-            '-r', str(self.fps),
-            '-vf', f'scale={self.width}:-1',
+            '-vf', f'fps={self.fps},scale={self.width}:-1',
             '-q:v', '7',
             '-f', 'image2pipe',
             '-vcodec', 'mjpeg',
@@ -73,15 +111,24 @@ class LiveThumbnailStream:
         ]
         retry_delay = 1.0
         while self._running:
+            proc = None
+            finished = threading.Event()
+            errors = deque(maxlen=5)
             try:
-                self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self._process = proc
+                last_frame = [time.monotonic()]
+                threading.Thread(target=self._watch_stall, args=(proc, last_frame, finished), daemon=True).start()
+                threading.Thread(target=self._read_errors, args=(proc, errors), daemon=True).start()
                 buffer = bytearray()
+                frame_number = 0
                 while self._running:
-                    chunk = self._process.stdout.read(8192)
+                    chunk = proc.stdout.read1(8192)
                     if not chunk:
                         break
-                    retry_delay = 1.0
                     buffer.extend(chunk)
+                    if len(buffer) > MAX_FRAME_BYTES:
+                        raise ValueError("MJPEG frame exceeds 8 MiB")
                     while True:
                         start = buffer.find(b'\xff\xd8')
                         if start == -1:
@@ -95,11 +142,17 @@ class LiveThumbnailStream:
                         frame = bytes(buffer[start:end + 2])
                         del buffer[:end + 2]
                         if self._running:
-                            self.on_frame(frame)
+                            last_frame[0] = time.monotonic()
+                            retry_delay = 1.0
+                            if self.on_timed_frame is not None:
+                                self.on_timed_frame(frame, frame_number / self.fps)
+                            else:
+                                self.on_frame(frame)
+                            frame_number += 1
             except Exception:
-                pass
+                if self._running:
+                    logger.exception("LiveThumbnailStream: ошибка предпросмотра")
             finally:
-                proc = self._process
                 if proc is not None:
                     try:
                         if proc.poll() is None:
@@ -108,8 +161,19 @@ class LiveThumbnailStream:
                     except Exception:
                         try:
                             proc.kill()
+                            proc.wait(timeout=2)
                         except Exception:
                             pass
+                    for pipe in (proc.stdout, proc.stderr):
+                        if pipe is not None:
+                            pipe.close()
+                    if self.duration_limit and proc.returncode == 0:
+                        self.completed = True
+                        self._running = False
+                    if self._running:
+                        logger.warning("LiveThumbnailStream: декодер завершился (код %s), повтор через %.1fс: %s",
+                                       proc.returncode, retry_delay, '; '.join(errors) or 'без вывода')
+                finished.set()
                 self._process = None
             if self._running:
                 self._stop_event.wait(retry_delay)

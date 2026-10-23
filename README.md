@@ -54,9 +54,9 @@ changed in Settings.
 
 ## Install the macOS app
 
-**Version 1.1.39 is available as a ready-to-install DMG for Apple Silicon Macs.**
-Download [TV Recorder 1.1.39 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.39/TV_Recorder_v1.1.39_Apple_Silicon.dmg)
-or see the [release notes and SHA-256 checksum](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.39).
+**Version 1.1.48 is available as a ready-to-install DMG for Apple Silicon Macs.**
+Download [TV Recorder 1.1.48 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.48/TV_Recorder_v1.1.48_Apple_Silicon.dmg)
+or see the [release notes and SHA-256 checksum](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.48).
 
 Download the [latest ready-to-install DMG](https://github.com/sirdimitry/TV_recorder/releases/latest) from GitHub, open it, and drag **TV Recorder** to **Applications**.
 The [latest release page](https://github.com/sirdimitry/TV_recorder/releases/latest) lists the current version and its installer.

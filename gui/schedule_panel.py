@@ -291,6 +291,8 @@ class SchedulePanel(ctk.CTkFrame):
                     continue
 
             days_str = ', '.join([day_names_short[d] for d in safe_days])
+            if item.get('recording_date'):
+                days_str = datetime.strptime(item['recording_date'], '%Y-%m-%d').strftime('%d.%m.%Y')
             active_str = "✓" if item.get('enabled', True) else "—"
             source_str = self.TYPE_TO_LABEL.get(item.get('source_type', 'channel'), 'Канал')
 
@@ -507,6 +509,9 @@ class SchedulePanel(ctk.CTkFrame):
         }
 
         self.run_status.pop(index, None)
+        existing = self.storage.get_schedule()[index]
+        if existing.get('recording_date'):
+            item['recording_date'] = existing['recording_date']
         self.storage.update_schedule_item(index, item)
         self.refresh()
         self._clear_form()

@@ -47,6 +47,9 @@ class DownloadTask:
         self.created_at = datetime.now()
         self.finished_at: Optional[datetime] = None
         self.on_complete: Optional[Callable] = None
+        self.clip_start = 0.0
+        self.clip_end: Optional[float] = None
+        self.last_activity = time.monotonic()
 
     def to_dict(self) -> Dict:
         """Снимок задачи как есть — используется и для живого обновления
@@ -71,6 +74,8 @@ class DownloadTask:
             'speed_bps': self.speed_bps,
             'downloaded_bytes': self.downloaded_bytes,
             'eta_seconds': self.eta_seconds,
+            'clip_start': self.clip_start,
+            'clip_end': self.clip_end,
         }
 
 
@@ -107,10 +112,17 @@ class Downloader:
             return list(self.tasks.values())
 
     def start_download(self, url: str, target_height: int, output_dir: Path,
-                        on_complete: Optional[Callable] = None) -> str:
+                        on_complete: Optional[Callable] = None, *,
+                        clip_start: float = 0, clip_end: Optional[float] = None) -> str:
+        if clip_start < 0 or (clip_end is not None and clip_end <= clip_start):
+            raise ValueError('Конец фрагмента должен быть позже начала.')
+        if clip_start and clip_end is None:
+            raise ValueError('Укажите время окончания фрагмента.')
         task_id = uuid.uuid4().hex
         task = DownloadTask(task_id, url, target_height, Path(output_dir))
         task.on_complete = on_complete
+        task.clip_start = clip_start
+        task.clip_end = clip_end
 
         with self._lock:
             if self._closing:
@@ -193,7 +205,7 @@ class Downloader:
                 return
             task.name = info.title or task.url
             task.thumbnail = info.thumbnail or ''
-            task.duration = info.duration
+            task.duration = (task.clip_end - task.clip_start) if task.clip_end is not None else info.duration
             task.status = 'downloading'
         self._notify_ui()
 
@@ -248,6 +260,13 @@ class Downloader:
                 str(output_path)
             ]
 
+        if task.clip_end is not None:
+            # Decode to the requested position; this also works on sources
+            # without HTTP Range support. Stream copy would cut at keyframes.
+            codec_position = cmd.index('-c')
+            cmd[codec_position:codec_position+2] = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac']
+            cmd[-1:-1] = ['-ss', str(task.clip_start), '-t', str(task.clip_end - task.clip_start)]
+
         try:
             with self._lock:
                 if self._closing or task.status == 'canceled':
@@ -282,9 +301,13 @@ class Downloader:
 
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         stderr_thread.start()
+        watch_done = threading.Event()
+        task.last_activity = time.monotonic()
+        threading.Thread(target=self._watch_stall, args=(task, watch_done), daemon=True).start()
         self._watch_progress(task)
 
         task.process.wait()
+        watch_done.set()
         stderr_thread.join(timeout=1)
         returncode = task.process.returncode
 
@@ -296,6 +319,9 @@ class Downloader:
 
         process_ok = returncode == 0 or returncode == 255
         result_status, probe = classify_media(output_path, process_ok, expect_audio=bool(info.audio_url))
+        if (task.clip_end is not None and result_status == COMPLETED
+                and (probe.duration is None or probe.duration + .5 < task.duration)):
+            result_status = PARTIAL
         success = result_status == COMPLETED
         task.finished_at = datetime.now()
 
@@ -318,12 +344,12 @@ class Downloader:
                         reasons.append(f'ffmpeg завершился с кодом {returncode}')
                     if info.audio_url and not probe.has_audio:
                         reasons.append('отсутствует ожидаемая звуковая дорожка')
-                    task.error_message = '; '.join(reasons) or 'Файл сохранён не полностью'
+                    task.error_message = task.error_message or '; '.join(reasons) or 'Файл сохранён не полностью'
                     logger.warning(f"Downloader: частично сохранён '{task.name}': {task.error_message}")
                 else:
                     task.status = 'processing_error'
                     err_msg = ''.join(stderr_lines)[-500:]
-                    task.error_message = f"{probe.error}. {err_msg}".strip()
+                    task.error_message = task.error_message or f"{probe.error}. {err_msg}".strip()
                     logger.error(f"Downloader: ошибка обработки '{task.name}' (code {returncode}): {task.error_message}")
 
         if canceled:
@@ -366,6 +392,18 @@ class Downloader:
                     logger.warning(f"Downloader: не удалось удалить незавершённый файл: {error}")
         self._notify_ui()
 
+    def _watch_stall(self, task, done, timeout=90):
+        while not done.wait(1):
+            if time.monotonic() - task.last_activity >= timeout:
+                task.error_message = 'Источник не передаёт данные 90 секунд. Повторите загрузку.'
+                logger.warning('Downloader: поток загрузки остановился без новых данных')
+                process = task.process
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    if not done.wait(2) and process.poll() is None:
+                        process.kill()
+                return
+
     def _watch_progress(self, task: DownloadTask):
         """Читает key=value строки из -progress pipe:1: out_time_us даёт
         проценты от известной длительности ролика, total_size — сколько
@@ -385,7 +423,10 @@ class Downloader:
                 line = line.strip()
                 if line.startswith('out_time_us='):
                     try:
-                        task.elapsed_seconds = int(line.split('=', 1)[1]) / 1_000_000
+                        elapsed = int(line.split('=', 1)[1]) / 1_000_000
+                        if elapsed > task.elapsed_seconds:
+                            task.last_activity = time.monotonic()
+                        task.elapsed_seconds = elapsed
                     except ValueError:
                         continue
                     if task.duration:
@@ -400,6 +441,8 @@ class Downloader:
                     except ValueError:
                         continue
                     now = time.time()
+                    if total_size > last_size:
+                        task.last_activity = time.monotonic()
                     dt = now - last_size_time
                     if dt > 0 and total_size >= last_size:
                         instant_speed = (total_size - last_size) / dt
