@@ -51,6 +51,11 @@ class RecordingTask:
         self.base_output_path = output_path
         self.parts = []
         self.recovery_exhausted = False
+        self.pause_pending = False
+        self.pause_count = 0
+        self.part_number = 1
+        self.merging = False
+        self.merged_path = ''
         self.source = source
         self.process: Optional[subprocess.Popen] = None
         self.is_recording = False
@@ -238,9 +243,9 @@ class Recorder:
                 and (task.deadline is None or time.time() < task.deadline)
                 and (task.stalled or task.ended_early or not task.success))
 
-    def _restart_part(self, task):
+    def _restart_part(self, task, *, after_pause=False):
         output = Path(task.base_output_path)
-        output = output.with_name(f'{output.stem}_part{task.retry_count+1:03d}{output.suffix}')
+        output = output.with_name(f'{output.stem}_part{task.part_number+1:03d}{output.suffix}')
         if not self._check_output_directory(output):
             task.storage_error = 'Папка или свободное место не позволяют возобновить запись'
             return False
@@ -250,6 +255,15 @@ class Recorder:
                                             request_headers=task.headers)
             cmd[cmd.index('-i')+1] = fresh_url
             task.stream_url = fresh_url
+        if after_pause:
+            # Resume at the newest HLS segment rather than buffered DVR content.
+            while '-live_start_index' in cmd:
+                index = cmd.index('-live_start_index')
+                del cmd[index:index+2]
+            inputs = [i for i, value in enumerate(cmd[:-1])
+                      if value == '-i' and '.m3u8' in cmd[i+1].lower()]
+            for index in reversed(inputs):
+                cmd[index:index] = ['-live_start_index', '-1']
         remaining = task.deadline - time.time() if task.deadline is not None else None
         if remaining is not None and remaining <= 0:
             return False
@@ -268,6 +282,7 @@ class Recorder:
                     return False
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 task.process = process
+                task.part_number += 1
                 task.output_path = str(output)
                 task.capture_path, task.recovery_marker = capture, marker
                 task.duration_limit_seconds = remaining
@@ -782,7 +797,7 @@ class Recorder:
         """Снимает паузу и учитывает её длительность перед остановкой/выходом."""
         if not task.is_paused:
             return
-        if resume_process and task.process and task.process.poll() is None:
+        if resume_process and not task.is_live and task.process and task.process.poll() is None:
             # Остановленный SIGSTOP процесс сначала нужно продолжить: иначе
             # он может не обработать SIGINT/SIGTERM и не дописать контейнер.
             task.process.send_signal(signal.SIGCONT)
@@ -847,21 +862,61 @@ class Recorder:
     def pause_recording(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
-        
-        if task and task.process and task.is_recording and task.process.poll() is None:
-            if not task.is_paused:
-                task.process.send_signal(signal.SIGSTOP)
-                task.is_paused = True
-                task.pause_time = time.time()
-                self._stop_snapshot_stream(task)
-                logger.info(f"Recorder: Пауза '{task.channel_name}'")
+            if not task or task.stop_requested or self._closing:
+                return
+            if task.is_live:
+                if task.is_paused:
+                    self._leave_paused_state(task, resume_process=False)
+                    logger.info("Recorder: продолжение эфира '%s' в новой части", task.channel_name)
+                elif task.is_recording and task.process and task.process.poll() is None:
+                    task.final_duration = task.get_elapsed_time()
+                    task.pause_time = time.time()
+                    task.is_paused = True
+                    if not task.pause_pending:
+                        task.pause_count += 1
+                    task.pause_pending = True
+                    task.connection_state = 'paused'
+                    process = task.process
+                    # A live source must not remain frozen with open network reads.
+                    process.terminate()
+                    self._stop_snapshot_stream(task)
+                    def ensure_stopped():
+                        try:
+                            process.wait(timeout=progress_policy.STOP_GRACE)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                    threading.Thread(target=ensure_stopped, daemon=True, name='LivePauseStop').start()
+                    logger.info("Recorder: пауза '%s' — текущая часть завершается, эфир пропускается",
+                                task.channel_name)
+                else:
+                    return
+            elif task.process and task.is_recording and task.process.poll() is None:
+                if not task.is_paused:
+                    task.process.send_signal(signal.SIGSTOP)
+                    task.is_paused = True
+                    task.pause_time = time.time()
+                    self._stop_snapshot_stream(task)
+                else:
+                    self._leave_paused_state(task)
+                    self._start_snapshot_stream(task)
             else:
-                self._leave_paused_state(task)
-                self._start_snapshot_stream(task)
-                logger.info(f"Recorder: Возобновление '{task.channel_name}'")
-            
-            self._notify_ui()
-    
+                return
+        self._notify_ui()
+
+    def _wait_live_pause(self, task):
+        task.finished_at = None
+        task.connection_state = 'paused'
+        self._notify_ui()
+        while (task.is_paused and not task.stop_requested and not self._closing
+               and not task.storage_error and not task.finalization_error):
+            if task.deadline is not None and time.time() >= task.deadline:
+                task.stop_requested = True
+                break
+            task.retry_cancel.wait(.2)
+        return (not task.stop_requested and not self._closing and not task.storage_error
+                and not task.finalization_error
+                and (task.deadline is None or time.time() < task.deadline))
+
     def remove_task(self, task_id: str):
         with self._lock:
             if task_id in self.tasks:
@@ -878,9 +933,17 @@ class Recorder:
             while True:
                 self._finish_task(task, notify=False)
                 task.parts.append({'path': task.output_path, 'status': task.result_status,
-                                   'stalled': task.stalled, 'error': task.error_message})
+                                   'stalled': task.stalled, 'error': task.error_message,
+                                   'paused': task.pause_pending})
                 if task.disk_guard:
                     task.disk_guard.close()
+                if task.is_live and task.pause_pending:
+                    if not self._wait_live_pause(task):
+                        break
+                    task.pause_pending = False
+                    if not self._restart_part(task, after_pause=True):
+                        break
+                    continue
                 if not self._retry_allowed(task):
                     break
                 if task.retry_count >= len(progress_policy.RETRY_DELAYS):
@@ -897,7 +960,7 @@ class Recorder:
                     break
                 if not self._restart_part(task):
                     break
-            if task.retry_count:
+            if task.retry_count or task.pause_count:
                 # A later good part cannot hide a gap or loss in an earlier part.
                 readable = [part for part in task.parts if part['status'] in (COMPLETED, PARTIAL)]
                 if readable:
@@ -906,11 +969,15 @@ class Recorder:
                 else:
                     task.result_status = 'processing_error'
                 task.success = False
-                task.error_message = ('Запись сохранена отдельными частями после обрыва. '
+                task.error_message = (('Запись сохранена с паузами; эфир во время паузы пропущен. '
+                                       if task.pause_count and not task.retry_count else
+                                       'Запись сохранена отдельными частями после обрыва. ')
                                       + ('Лимит восстановления исчерпан. ' if task.recovery_exhausted else '')
                                       + (task.storage_error or task.parts[-1]['error'] or ''))
             self._notify_completion(task)
         finally:
+            self._leave_paused_state(task, resume_process=False)
+            task.finished_at = task.finished_at or datetime.now()
             task.recovering = False
             task.is_recording = False
             if task.progress_monitor:
@@ -961,7 +1028,8 @@ class Recorder:
             if callable(close):
                 close()
         returncode = task.process.returncode
-        self._leave_paused_state(task, resume_process=False)
+        if not (task.is_live and task.pause_pending):
+            self._leave_paused_state(task, resume_process=False)
         
         if task.final_duration == 0:
             task.final_duration = task.get_elapsed_time()
@@ -1005,7 +1073,7 @@ class Recorder:
                          and probe.duration is not None
                          and probe.duration >= task.duration_limit_seconds - 0.25)
         task.ended_early = (result_status == COMPLETED
-                            and not task.stop_requested and not reached_limit)
+                            and not task.stop_requested and not reached_limit and not task.pause_pending)
         if success:
             if task.ended_early:
                 logger.warning(f"Recorder: '{task.channel_name}' — источник закончился раньше окна записи")
@@ -1038,11 +1106,37 @@ class Recorder:
             self._notify_completion(task)
             self._notify_ui()
 
+    def merge_recording_parts(self, task_id):
+        from core.recording_merge import merge_mp4_parts
+        with self._lock:
+            task = self.tasks[task_id]
+            if task.is_recording or task.recovering or task.merging or self._closing:
+                raise ValueError('Дождитесь завершения записи перед объединением')
+            if task.merged_path:
+                return Path(task.merged_path)
+            if len(task.parts) < 2 or any(part['status'] not in (COMPLETED, PARTIAL) for part in task.parts):
+                raise ValueError('Не все части пригодны для объединения')
+            paths = [part['path'] for part in task.parts]
+            base = Path(task.base_output_path)
+            output = base.with_name(base.stem+'_joined.mp4')
+            task.merging = True
+            self._wait_threads.add(threading.current_thread())
+        self._notify_ui()
+        try:
+            result = merge_mp4_parts(paths, output)
+            task.merged_path = task.output_path = str(result)
+            return result
+        finally:
+            with self._lock:
+                task.merging = False
+                self._wait_threads.discard(threading.current_thread())
+            self._notify_ui()
+
     def remove_completed_tasks(self) -> int:
         """Убирает завершённые строки из интерфейса, не удаляя медиафайлы."""
         with self._lock:
             completed_ids = [task_id for task_id, task in self.tasks.items()
-                             if not task.is_recording and not task.recovering and task.result_status is not None]
+                             if not task.is_recording and not task.recovering and not task.merging and task.result_status is not None]
             for task_id in completed_ids:
                 del self.tasks[task_id]
         if completed_ids:

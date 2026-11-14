@@ -1,0 +1,313 @@
+test_aliases_are_merged_but_distinct_channels_and_formats_are_not (test_archive_catalog.ChannelGroupingTests.test_aliases_are_merged_but_distinct_channels_and_formats_are_not) ... ok
+test_choosing_other_version_preserves_time_and_clip_draft (test_archive_catalog.ChannelGroupingTests.test_choosing_other_version_preserves_time_and_clip_draft) ... ok
+test_four_by_three_broadcast_is_fitted_without_cropping (test_archive_catalog.ChannelGroupingTests.test_four_by_three_broadcast_is_fitted_without_cropping) ... ok
+test_preferred_version_respects_availability_and_summary_is_aggregate (test_archive_catalog.ChannelGroupingTests.test_preferred_version_respects_availability_and_summary_is_aggregate) ... ok
+test_preview_grows_with_window_and_always_fits_at_sixteen_by_nine (test_archive_catalog.ChannelGroupingTests.test_preview_grows_with_window_and_always_fits_at_sixteen_by_nine) ... ok
+test_shift_and_regional_versions_share_one_row_without_losing_sources (test_archive_catalog.ChannelGroupingTests.test_shift_and_regional_versions_share_one_row_without_losing_sources) ... ok
+test_version_menu_shows_main_shifts_and_selected_regional_source (test_archive_catalog.ChannelGroupingTests.test_version_menu_shows_main_shifts_and_selected_regional_source) ... ok
+test_cross_midnight_is_explicitly_next_day (test_archive_controls.ArchiveInputTests.test_cross_midnight_is_explicitly_next_day) ... ok
+test_invalid_future_and_excessive_intervals_are_rejected (test_archive_controls.ArchiveInputTests.test_invalid_future_and_excessive_intervals_are_rejected) ... ok
+test_failed_vk_does_not_scan_unrelated_embedded_players (test_archive_controls.ExpandedResolversTests.test_failed_vk_does_not_scan_unrelated_embedded_players) ... ok
+test_new_ren_route_keeps_article_referer (test_archive_controls.ExpandedResolversTests.test_new_ren_route_keeps_article_referer) ... ok
+test_new_tiktok_route_preserves_session_headers_and_duration (test_archive_controls.ExpandedResolversTests.test_new_tiktok_route_preserves_session_headers_and_duration) ... ok
+test_each_channel_click_resets_clip_times_to_actual_moscow_time (test_archive_selection_time.ArchiveSelectionTimeTests.test_each_channel_click_resets_clip_times_to_actual_moscow_time) ... ok
+test_midnight_preview_and_fragment_keep_their_correct_dates (test_archive_selection_time.ArchiveSelectionTimeTests.test_midnight_preview_and_fragment_keep_their_correct_dates) ... ok
+test_accelerated_capture_reserves_larger_final_file (test_disk_space.DiskSpaceTests.test_accelerated_capture_reserves_larger_final_file) ... ok
+test_finalization_low_space_preserves_capture_and_recovery_metadata (test_disk_space.DiskSpaceTests.test_finalization_low_space_preserves_capture_and_recovery_metadata) ... ok
+test_low_disk_stop_of_download_keeps_partial_file (test_disk_space.DiskSpaceTests.test_low_disk_stop_of_download_keeps_partial_file) ... 2026-11-14 22:37:57.029 | WARNING  | downloader:_storage_notice:104 | Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpgpxucg47: свободно 0.00 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+ok
+test_missing_directory_or_changed_volume_is_failure (test_disk_space.DiskSpaceTests.test_missing_directory_or_changed_volume_is_failure) ... ok
+test_preflight_rejects_low_space_and_tests_actual_write (test_disk_space.DiskSpaceTests.test_preflight_rejects_low_space_and_tests_actual_write) ... ok
+test_recording_and_download_do_not_launch_without_space (test_disk_space.DiskSpaceTests.test_recording_and_download_do_not_launch_without_space) ... 2026-11-14 22:37:57.031 | WARNING  | recorder:_storage_notice:181 | Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpm4cidepj: свободно 0.00 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+2026-11-14 22:37:57.032 | WARNING  | downloader:_storage_notice:104 | Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpm4cidepj: свободно 0.00 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+ok
+test_reservations_sum_concurrent_recordings_and_release (test_disk_space.DiskSpaceTests.test_reservations_sum_concurrent_recordings_and_release) ... ok
+test_warning_is_once_and_critical_stops_watcher (test_disk_space.DiskSpaceTests.test_warning_is_once_and_critical_stops_watcher) ... ok
+test_download_low_disk_is_partial_and_playable (test_disk_space.RealLowSpaceTests.test_download_low_disk_is_partial_and_playable) ... 2026-11-14 22:37:57.034 | INFO     | downloader:start_download:166 | Downloader: добавлена загрузка 'url' (id: ebb18c8820754cb981958f9ea7488efc, до 720p)
+2026-11-14 22:37:57.039 | INFO     | downloader:_run:349 | Downloader: начато скачивание 'download' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp0iwjzsjd/download_2026-11-14_22-37-57-035011_6736d445.mp4
+2026-11-14 22:38:01.054 | WARNING  | downloader:_storage_notice:104 | Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp0iwjzsjd: свободно 0.75 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+2026-11-14 22:38:01.282 | WARNING  | downloader:_run:415 | Downloader: частично сохранён 'download': Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp0iwjzsjd: свободно 0.75 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+ok
+test_low_disk_recording_stops_and_saves_playable_partial_mp4 (test_disk_space.RealLowSpaceTests.test_low_disk_recording_stops_and_saves_playable_partial_mp4) ... 2026-11-14 22:38:01.518 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'disk test' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8fh4voui/result.mp4 (source: manual)
+2026-11-14 22:38:05.536 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'disk test' (task: b9311864dc994f96b5751db51bda66c7)
+2026-11-14 22:38:05.539 | WARNING  | recorder:_storage_notice:181 | Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8fh4voui: свободно 0.75 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).
+2026-11-14 22:38:06.130 | WARNING  | recorder:_finish_task:1097 | Recorder: Частичная запись 'disk test': Недостаточно места в /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8fh4voui: свободно 0.75 ГиБ, нужно не менее 1.00 ГиБ (включая резерв для завершения файлов).; ffmpeg завершился с кодом 255
+ok
+test_deadline_during_pause_does_not_restart (test_live_pause.LivePauseIntegrationTests.test_deadline_during_pause_does_not_restart) ... 2026-11-14 22:38:06.209 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'live' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpuu9in_bv/result.mp4 (source: manual)
+2026-11-14 22:38:07.122 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:07.622 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+ok
+test_fast_resume_waits_for_old_part_to_finish (test_live_pause.LivePauseIntegrationTests.test_fast_resume_waits_for_old_part_to_finish) ... 2026-11-14 22:38:10.468 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'live' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmptmhq_o05/result.mp4 (source: manual)
+2026-11-14 22:38:11.374 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:11.375 | INFO     | recorder:pause_recording:870 | Recorder: продолжение эфира 'live' в новой части
+2026-11-14 22:38:11.892 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+2026-11-14 22:38:12.802 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'live' (task: 6a5996d9c0dc40d886ab0cf5db2362f0)
+2026-11-14 22:38:13.329 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+ok
+test_shutdown_during_pause_does_not_restart (test_live_pause.LivePauseIntegrationTests.test_shutdown_during_pause_does_not_restart) ... 2026-11-14 22:38:13.578 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'live' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpcq4ol0fd/result.mp4 (source: manual)
+2026-11-14 22:38:14.487 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:15.005 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+ok
+test_stop_during_pause_does_not_restart (test_live_pause.LivePauseIntegrationTests.test_stop_during_pause_does_not_restart) ... 2026-11-14 22:38:15.596 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'live' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpk2l_m5s7/result.mp4 (source: manual)
+2026-11-14 22:38:16.504 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:17.015 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+ok
+test_two_pauses_create_three_parts_and_lossless_join (test_live_pause.LivePauseIntegrationTests.test_two_pauses_create_three_parts_and_lossless_join) ... 2026-11-14 22:38:17.601 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'live' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp7yq0x813/result.mp4 (source: manual)
+2026-11-14 22:38:18.512 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:19.016 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+2026-11-14 22:38:19.430 | INFO     | recorder:pause_recording:870 | Recorder: продолжение эфира 'live' в новой части
+2026-11-14 22:38:20.554 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:21.067 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+2026-11-14 22:38:21.098 | INFO     | recorder:pause_recording:870 | Recorder: продолжение эфира 'live' в новой части
+2026-11-14 22:38:22.218 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'live' (task: 9b10d710bbc3405c8b57694a7d5dc253)
+2026-11-14 22:38:22.729 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'live' завершена успешно
+ok
+test_live_pause_and_fast_resume_never_freeze_process (test_live_pause.LivePauseUnitTests.test_live_pause_and_fast_resume_never_freeze_process) ... 2026-11-14 22:38:24.567 | INFO     | recorder:pause_recording:889 | Recorder: пауза 'live' — текущая часть завершается, эфир пропускается
+2026-11-14 22:38:24.567 | INFO     | recorder:pause_recording:870 | Recorder: продолжение эфира 'live' в новой части
+ok
+test_resume_after_part_exit_is_allowed (test_live_pause.LivePauseUnitTests.test_resume_after_part_exit_is_allowed) ... 2026-11-14 22:38:24.568 | INFO     | recorder:pause_recording:870 | Recorder: продолжение эфира 'live' в новой части
+ok
+test_incompatible_parts_and_existing_output_are_not_overwritten (test_live_pause.MergePartsTests.test_incompatible_parts_and_existing_output_are_not_overwritten) ... ok
+test_join_preserves_encoded_video_packets_and_originals (test_live_pause.MergePartsTests.test_join_preserves_encoded_video_packets_and_originals) ... ok
+test_no_space_keeps_parts_and_does_not_publish (test_live_pause.MergePartsTests.test_no_space_keeps_parts_and_does_not_publish) ... ok
+test_first_channel_short_show_link_uses_its_playlist (test_new_link_sources.NewLinkSourcesTests.test_first_channel_short_show_link_uses_its_playlist) ... 2026-11-14 22:38:27.509 | INFO     | link_resolver:_resolve_1tv_playlist:649 | LinkResolver/1tv: нашли поток выпуска через плейлист https://www.1tv.ru/playlist?video_id=297135
+2026-11-14 22:38:27.509 | INFO     | link_resolver:resolve_link:274 | LinkResolver: использован прямой резолвер для 'https://www.1tv.ru/-/uacgpf'
+ok
+test_passive_check_never_opens_browser_sniffer (test_new_link_sources.NewLinkSourcesTests.test_passive_check_never_opens_browser_sniffer) ... ok
+test_ren_platformcraft_url_is_direct_and_keeps_referer (test_new_link_sources.NewLinkSourcesTests.test_ren_platformcraft_url_is_direct_and_keeps_referer) ... 2026-11-14 22:38:27.511 | INFO     | link_resolver:_resolve_ren_platformcraft:677 | LinkResolver/ren: нашли MP4 через platformcraft для https://ren.tv/project/example/123-video
+2026-11-14 22:38:27.511 | INFO     | link_resolver:resolve_link:274 | LinkResolver: использован прямой резолвер для 'https://ren.tv/project/example/123-video'
+ok
+test_actual_extraction_accepts_object_and_legacy_string_metadata (test_ok_download.OkDownloadTests.test_actual_extraction_accepts_object_and_legacy_string_metadata) ... ok
+test_invalid_json_still_uses_upstream_error_handling (test_ok_download.OkDownloadTests.test_invalid_json_still_uses_upstream_error_handling) ... ok
+test_replaces_upstream_extractor_without_changing_url_routing (test_ok_download.OkDownloadTests.test_replaces_upstream_extractor_without_changing_url_routing) ... ok
+test_frame_flood_from_worker_keeps_latest_without_tk_calls (test_preview_reliability.PreviewReliabilityTests.test_frame_flood_from_worker_keeps_latest_without_tk_calls) ... ok
+test_lost_frames_change_status_once_and_polling_continues (test_preview_reliability.PreviewReliabilityTests.test_lost_frames_change_status_once_and_polling_continues) ... 2026-11-14 22:38:27.805 | WARNING  | preview_panel:_poll_frame:167 | PreviewPanel: 'test' — кадры не поступают 15с
+ok
+test_old_channel_and_shutdown_frames_are_discarded (test_preview_reliability.PreviewReliabilityTests.test_old_channel_and_shutdown_frames_are_discarded) ... ok
+test_reopen_restores_existing_window_without_stopping_recording (test_preview_reliability.PreviewReliabilityTests.test_reopen_restores_existing_window_without_stopping_recording) ... 2026-11-14 22:38:27.806 | INFO     | app_window:_show_main_window:115 | Главное окно восстановлено
+ok
+test_stalled_decoder_ignoring_terminate_is_killed_and_reaped (test_preview_reliability.PreviewReliabilityTests.test_stalled_decoder_ignoring_terminate_is_killed_and_reaped) ... 2026-11-14 22:38:28.829 | WARNING  | live_stream:_watch_stall:64 | LiveThumbnailStream: нет кадров 30с, перезапускаем предпросмотр
+2026-11-14 22:38:30.834 | WARNING  | live_stream:_run:174 | LiveThumbnailStream: декодер завершился (код -9), повтор через 1.0с: без вывода
+ok
+test_expired_deadline_prevents_new_part_process (test_recording_progress.ProgressTests.test_expired_deadline_prevents_new_part_process) ... ok
+test_manual_stop_during_backoff_cancels_recovery (test_recording_progress.ProgressTests.test_manual_stop_during_backoff_cancels_recovery) ... ok
+test_no_retry_for_vod_storage_failure_or_expired_window (test_recording_progress.ProgressTests.test_no_retry_for_vod_storage_failure_or_expired_window) ... ok
+test_progress_requires_growing_media_values_not_heartbeats (test_recording_progress.ProgressTests.test_progress_requires_growing_media_values_not_heartbeats) ... ok
+test_scheduled_vod_completion_does_not_restart_from_beginning (test_recording_progress.ProgressTests.test_scheduled_vod_completion_does_not_restart_from_beginning) ... 2026-11-14 22:38:30.865 | INFO     | scheduler:_pre_record_check:265 | Предварительная проверка: video (link)
+2026-11-14 22:38:30.866 | INFO     | scheduler:_pre_record_check:358 | Scheduler: 'video' будет остановлен через 60.0с, строго в 22:39:30
+ok
+test_scheduler_does_not_reset_recorders_retry_budget (test_recording_progress.ProgressTests.test_scheduler_does_not_reset_recorders_retry_budget) ... ok
+test_scheduler_failed_starts_are_bounded_per_occurrence (test_recording_progress.ProgressTests.test_scheduler_failed_starts_are_bounded_per_occurrence) ... 2026-11-14 22:38:30.868 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'channel' (2026-11-14 12:00:00 — 2026-11-14 13:00:00), запись оставшейся части
+2026-11-14 22:38:30.869 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'channel' (2026-11-14 12:00:00 — 2026-11-14 13:00:00), запись оставшейся части
+2026-11-14 22:38:30.869 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'channel' (2026-11-14 12:00:00 — 2026-11-14 13:00:00), запись оставшейся части
+ok
+test_startup_and_pause_have_separate_grace (test_recording_progress.ProgressTests.test_startup_and_pause_have_separate_grace) ... ok
+test_ui_states_have_valid_colors_and_recovery_keeps_task_active (test_recording_progress.ProgressTests.test_ui_states_have_valid_colors_and_recovery_keeps_task_active) ... ok
+test_early_eof_restarts_without_overwriting_previous_part (test_recording_progress.RecordingRecoveryIntegrationTests.test_early_eof_restarts_without_overwriting_previous_part) ... 2026-11-14 22:38:30.879 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'channel' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp5qyqur2z/result.mp4 (source: manual)
+2026-11-14 22:38:32.553 | WARNING  | recorder:_finish_task:1079 | Recorder: 'channel' — источник закончился раньше окна записи
+2026-11-14 22:38:36.142 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'channel' (task: 9f8e2fffbb01452a84be103a01066639)
+2026-11-14 22:38:36.658 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'channel' завершена успешно
+ok
+test_repeated_failures_exhaust_budget_even_with_no_output (test_recording_progress.RecordingRecoveryIntegrationTests.test_repeated_failures_exhaust_budget_even_with_no_output) ... 2026-11-14 22:38:36.900 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'channel' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8libzi3e/result.mp4 (source: manual)
+2026-11-14 22:38:37.000 | ERROR    | recorder:_finish_task:1059 | Recorder: исходная запись сохранена для восстановления
+Traceback (most recent call last):
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recorder.py", line 1051, in _finish_task
+    output_file = finalize_recording(task.recovery_marker)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 58, in finalize_recording
+    return _finalize_recording(marker)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 74, in _finalize_recording
+    raise RuntimeError(f'Временная запись пока не читается: {source_probe.error}')
+RuntimeError: Временная запись пока не читается: Файл не создан или слишком мал
+2026-11-14 22:38:37.001 | ERROR    | recorder:_finish_task:1103 | Recorder: Ошибка обработки 'channel' (code 254): Файл не создан или слишком мал. [in#0 @ 0x7fe1a8305780] Error opening input: No such file or directory
+Error opening input file /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8libzi3e/missing.mp4.
+Error opening input files: No such file or directory
+2026-11-14 22:38:37.161 | ERROR    | recorder:_finish_task:1059 | Recorder: исходная запись сохранена для восстановления
+Traceback (most recent call last):
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recorder.py", line 1051, in _finish_task
+    output_file = finalize_recording(task.recovery_marker)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 58, in finalize_recording
+    return _finalize_recording(marker)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 74, in _finalize_recording
+    raise RuntimeError(f'Временная запись пока не читается: {source_probe.error}')
+RuntimeError: Временная запись пока не читается: Файл не создан или слишком мал
+2026-11-14 22:38:37.162 | ERROR    | recorder:_finish_task:1103 | Recorder: Ошибка обработки 'channel' (code 254): Файл не создан или слишком мал. [in#0 @ 0x7fed30f34440] Error opening input: No such file or directory
+Error opening input file /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8libzi3e/missing.mp4.
+Error opening input files: No such file or directory
+2026-11-14 22:38:37.324 | ERROR    | recorder:_finish_task:1059 | Recorder: исходная запись сохранена для восстановления
+Traceback (most recent call last):
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recorder.py", line 1051, in _finish_task
+    output_file = finalize_recording(task.recovery_marker)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 58, in finalize_recording
+    return _finalize_recording(marker)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sirdimitry/Documents/Codex/2026-11-14/tv-recorder-6/work/TV_recorder/core/recording_recovery.py", line 74, in _finalize_recording
+    raise RuntimeError(f'Временная запись пока не читается: {source_probe.error}')
+RuntimeError: Временная запись пока не читается: Файл не создан или слишком мал
+2026-11-14 22:38:37.325 | ERROR    | recorder:_finish_task:1103 | Recorder: Ошибка обработки 'channel' (code 254): Файл не создан или слишком мал. [in#0 @ 0x7fb686904e00] Error opening input: No such file or directory
+Error opening input file /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmp8libzi3e/missing.mp4.
+Error opening input files: No such file or directory
+ok
+test_stalled_process_is_killed_and_next_part_reaches_deadline (test_recording_progress.RecordingRecoveryIntegrationTests.test_stalled_process_is_killed_and_next_part_reaches_deadline) ... 2026-11-14 22:38:37.343 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'channel' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpbro5ckak/result.mp4 (source: manual)
+2026-11-14 22:38:39.865 | WARNING  | recorder:stall:222 | Recorder: нет продвижения записи 'channel', завершаем часть
+2026-11-14 22:38:40.560 | WARNING  | recorder:_finish_task:1097 | Recorder: Частичная запись 'channel': Запись остановлена: поток перестал продвигаться; ffmpeg завершился с кодом -9
+2026-11-14 22:38:46.670 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'channel' (task: 3e0752e0a45f462884ba9938be2d763f)
+2026-11-14 22:38:47.179 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'channel' завершена успешно
+ok
+test_stop_while_waiting_prevents_any_new_process (test_recording_progress.RecordingRecoveryIntegrationTests.test_stop_while_waiting_prevents_any_new_process) ... 2026-11-14 22:38:47.515 | INFO     | recorder:start_recording:535 | Recorder: Начата запись 'channel' → /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmpw7699hyj/result.mp4 (source: manual)
+2026-11-14 22:38:49.188 | WARNING  | recorder:_finish_task:1079 | Recorder: 'channel' — источник закончился раньше окна записи
+ok
+test_accelerated_screen_recording_restores_timing (test_recording_recovery.RecoveryTests.test_accelerated_screen_recording_restores_timing) ... ok
+test_active_recordings_cannot_be_recovered (test_recording_recovery.RecoveryTests.test_active_recordings_cannot_be_recovered) ... ok
+test_audio_and_video_packets_survive_remux (test_recording_recovery.RecoveryTests.test_audio_and_video_packets_survive_remux) ... ok
+test_failed_remux_keeps_original_and_marker (test_recording_recovery.RecoveryTests.test_failed_remux_keeps_original_and_marker) ... ok
+test_failure_keeps_source_and_existing_destination (test_recording_recovery.RecoveryTests.test_failure_keeps_source_and_existing_destination) ... ok
+test_normal_capture_publishes_regular_mp4_without_reencoding (test_recording_recovery.RecoveryTests.test_normal_capture_publishes_regular_mp4_without_reencoding) ... ok
+test_sigkill_leaves_recoverable_fragments (test_recording_recovery.RecoveryTests.test_sigkill_leaves_recoverable_fragments) ... ok
+test_calendar_date_runs_once_at_requested_time (test_scheduler_dates.SchedulerDateTests.test_calendar_date_runs_once_at_requested_time) ... 2026-11-14 22:39:04.842 | INFO     | scheduler:_add_job:233 | Задача добавлена: ОТР в 20:00:00 (2026-10-16)
+ok
+test_existing_weekly_schedule_still_repeats (test_scheduler_dates.SchedulerDateTests.test_existing_weekly_schedule_still_repeats) ... 2026-11-14 22:39:04.842 | INFO     | scheduler:_add_job:233 | Задача добавлена: ОТР в 20:00:00 (fri)
+ok
+test_cron_and_watchdog_cannot_duplicate_inflight_start (test_scheduler_recovery.SchedulerRecoveryTests.test_cron_and_watchdog_cannot_duplicate_inflight_start) ... 2026-11-14 22:39:04.843 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+ok
+test_failed_start_retries_after_thirty_seconds_within_window (test_scheduler_recovery.SchedulerRecoveryTests.test_failed_start_retries_after_thirty_seconds_within_window) ... 2026-11-14 22:39:04.844 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+2026-11-14 22:39:04.844 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+ok
+test_interrupted_recording_restarts_but_manual_stop_does_not (test_scheduler_recovery.SchedulerRecoveryTests.test_interrupted_recording_restarts_but_manual_stop_does_not) ... 2026-11-14 22:39:04.845 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+2026-11-14 22:39:04.846 | WARNING  | scheduler:_on_recording_complete:372 | Scheduler: 'Звезда' оборвался внутри окна, повтор через 30с
+2026-11-14 22:39:04.846 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+ok
+test_overnight_recovery_uses_previous_days_start_and_todays_end (test_scheduler_recovery.SchedulerRecoveryTests.test_overnight_recovery_uses_previous_days_start_and_todays_end) ... 2026-11-14 22:39:04.846 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 23:50:00 — 2026-10-24 00:20:00), запись оставшейся части
+ok
+test_real_precheck_starts_remaining_portion_with_original_deadline (test_scheduler_recovery.SchedulerRecoveryTests.test_real_precheck_starts_remaining_portion_with_original_deadline) ... 2026-11-14 22:39:04.847 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+2026-11-14 22:39:04.848 | INFO     | scheduler:_pre_record_check:265 | Предварительная проверка: Звезда (channel)
+2026-11-14 22:39:04.848 | INFO     | scheduler:_pre_record_check:358 | Scheduler: 'Звезда' будет остановлен через 1020.0с, строго в 09:27:00
+ok
+test_reload_and_row_reordering_do_not_restart_same_occurrence (test_scheduler_recovery.SchedulerRecoveryTests.test_reload_and_row_reordering_do_not_restart_same_occurrence) ... 2026-11-14 22:39:04.849 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+2026-11-14 22:39:04.849 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-30 09:00:00 — 2026-10-30 09:27:00), запись оставшейся части
+ok
+test_resume_after_stop_time_stops_previous_recording_without_restart (test_scheduler_recovery.SchedulerRecoveryTests.test_resume_after_stop_time_stops_previous_recording_without_restart) ... ok
+test_shutdown_and_deleted_entries_do_not_start (test_scheduler_recovery.SchedulerRecoveryTests.test_shutdown_and_deleted_entries_do_not_start) ... ok
+test_specific_date_does_not_repeat_next_week (test_scheduler_recovery.SchedulerRecoveryTests.test_specific_date_does_not_repeat_next_week) ... 2026-11-14 22:39:04.851 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+ok
+test_wake_inside_window_recovers_once_and_keeps_original_end (test_scheduler_recovery.SchedulerRecoveryTests.test_wake_inside_window_recovers_once_and_keeps_original_end) ... 2026-11-14 22:39:04.852 | WARNING  | scheduler:record:195 | Scheduler: восстановление пропущенного запуска 'Звезда' (2026-10-23 09:00:00 — 2026-10-23 09:27:00), запись оставшейся части
+ok
+test_wrong_day_disabled_before_start_and_expired_are_ignored (test_scheduler_recovery.SchedulerRecoveryTests.test_wrong_day_disabled_before_start_and_expired_are_ignored) ... ok
+test_cancel_marks_status_before_terminating_process (test_storage_checker.DownloaderShutdownTests.test_cancel_marks_status_before_terminating_process) ... ok
+test_cancel_while_resolving_never_starts_ffmpeg (test_storage_checker.DownloaderShutdownTests.test_cancel_while_resolving_never_starts_ffmpeg) ... 2026-11-14 22:39:04.853 | INFO     | downloader:start_download:166 | Downloader: добавлена загрузка 'https://example/page' (id: a061a9e024574058b81d377507faf77b, до 720p)
+ok
+test_late_cancel_does_not_delete_completed_download (test_storage_checker.DownloaderShutdownTests.test_late_cancel_does_not_delete_completed_download) ... ok
+test_new_downloads_receive_full_unique_ids (test_storage_checker.DownloaderShutdownTests.test_new_downloads_receive_full_unique_ids) ... 2026-11-14 22:39:04.855 | INFO     | downloader:start_download:166 | Downloader: добавлена загрузка 'https://example/one' (id: af6d5be1aafc46f9a3d101f433a4f163, до 720p)
+2026-11-14 22:39:04.856 | INFO     | downloader:start_download:166 | Downloader: добавлена загрузка 'https://example/two' (id: 0c027cf9ccd0402eaef8c6b59fe4485f, до 720p)
+ok
+test_shutdown_stops_process_and_rejects_new_downloads (test_storage_checker.DownloaderShutdownTests.test_shutdown_stops_process_and_rejects_new_downloads) ... 2026-11-14 22:39:04.856 | WARNING  | downloader:start_download:162 | Downloader: новая загрузка отклонена — приложение закрывается
+ok
+test_classification_distinguishes_all_three_results (test_storage_checker.MediaProbeTests.test_classification_distinguishes_all_three_results) ... ok
+test_probe_reads_video_and_audio_streams (test_storage_checker.MediaProbeTests.test_probe_reads_video_and_audio_streams) ... ok
+test_all_external_preview_processes_are_stopped (test_storage_checker.PreviewShutdownTests.test_all_external_preview_processes_are_stopped) ... ok
+test_clear_completed_tasks_keeps_active_recordings (test_storage_checker.RecorderResourceTests.test_clear_completed_tasks_keeps_active_recordings) ... ok
+test_duration_limit_completion_is_not_an_early_end (test_storage_checker.RecorderResourceTests.test_duration_limit_completion_is_not_an_early_end) ... 2026-11-14 22:39:04.858 | INFO     | recorder:_finish_task:1081 | Recorder: Запись 'Channel' завершена успешно
+2026-11-14 22:39:04.858 | WARNING  | recorder:_finish_task:1079 | Recorder: 'Channel' — источник закончился раньше окна записи
+2026-11-14 22:39:04.859 | WARNING  | recorder:_finish_task:1079 | Recorder: 'Channel' — источник закончился раньше окна записи
+ok
+test_parallel_recording_names_and_task_ids_cannot_collide (test_storage_checker.RecorderResourceTests.test_parallel_recording_names_and_task_ids_cannot_collide) ... ok
+test_pause_and_resume_use_named_posix_signals (test_storage_checker.RecorderResourceTests.test_pause_and_resume_use_named_posix_signals) ... ok
+test_recording_does_not_start_after_schedule_deadline (test_storage_checker.RecorderResourceTests.test_recording_does_not_start_after_schedule_deadline) ... 2026-11-14 22:39:04.865 | INFO     | recorder:start_recording:429 | Recorder: запись 'Channel' ограничена 60с контента (-t)
+2026-11-14 22:39:04.865 | WARNING  | recorder:start_recording:467 | Recorder: окно записи 'Channel' закончилось до запуска ffmpeg
+ok
+test_recording_period_includes_start_date (test_storage_checker.RecorderResourceTests.test_recording_period_includes_start_date) ... ok
+test_shutdown_cancels_timers_and_stops_active_processes (test_storage_checker.RecorderResourceTests.test_shutdown_cancels_timers_and_stops_active_processes) ... 2026-11-14 22:39:04.866 | WARNING  | recorder:start_recording:358 | Recorder: запуск 'New' отклонён — приложение закрывается
+ok
+test_snapshot_stream_exists_only_while_monitor_is_open (test_storage_checker.RecorderResourceTests.test_snapshot_stream_exists_only_while_monitor_is_open) ... ok
+test_stopping_paused_process_resumes_before_termination (test_storage_checker.RecorderResourceTests.test_stopping_paused_process_resumes_before_termination) ... 2026-11-14 22:39:04.867 | INFO     | recorder:stop_recording:832 | Recorder: Остановка записи 'Channel' (task: id)
+ok
+test_deadline_crosses_midnight (test_storage_checker.SchedulerTimingTests.test_deadline_crosses_midnight) ... ok
+test_deadline_uses_absolute_end_time (test_storage_checker.SchedulerTimingTests.test_deadline_uses_absolute_end_time) ... ok
+test_screen_capture_permission_is_asked_once_per_session (test_storage_checker.ScreenCapturePermissionTests.test_screen_capture_permission_is_asked_once_per_session) ... ok
+test_atomic_save_keeps_backup_and_recovers_corrupt_file (test_storage_checker.StorageTests.test_atomic_save_keeps_backup_and_recovers_corrupt_file) ... 2026-11-14 22:39:04.869 | WARNING  | storage:_load_json:148 | /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmph2i6oz7q/items.json повреждён, данные загружены из /var/folders/yd/1bhbtg8d0rlb9zbl7cqwcq5c0000gn/T/tmph2i6oz7q/items.json.bak: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+ok
+test_batch_download_update_uses_one_atomic_save (test_storage_checker.StorageTests.test_batch_download_update_uses_one_atomic_save) ... ok
+test_clear_all_links_and_downloads (test_storage_checker.StorageTests.test_clear_all_links_and_downloads) ... 2026-11-14 22:39:04.871 | INFO     | storage:delete_all_links:254 | Все ссылки удалены
+2026-11-14 22:39:04.872 | INFO     | storage:delete_all_downloads:378 | История загрузок очищена
+ok
+test_clear_all_schedule_items (test_storage_checker.StorageTests.test_clear_all_schedule_items) ... 2026-11-14 22:39:04.873 | INFO     | storage:delete_all_schedule_items:337 | Расписание очищено
+ok
+test_concurrent_updates_do_not_overwrite_each_other (test_storage_checker.StorageTests.test_concurrent_updates_do_not_overwrite_each_other) ... ok
+test_migration_assigns_ids_and_connects_legacy_schedule (test_storage_checker.StorageTests.test_migration_assigns_ids_and_connects_legacy_schedule) ... ok
+test_rename_preserves_extra_fields_and_updates_schedule (test_storage_checker.StorageTests.test_rename_preserves_extra_fields_and_updates_schedule) ... 2026-11-14 22:39:04.888 | INFO     | storage:save_channel:225 | Канал сохранен: Новое
+ok
+test_user_channel_url_survives_online_sync_when_available (test_storage_checker.StorageTests.test_user_channel_url_survives_online_sync_when_available) ... 2026-11-14 22:39:04.889 | INFO     | app_window:_sync_channels:307 | Канал 'Первый канал': пользовательский поток сохранён (ok)
+2026-11-14 22:39:04.890 | INFO     | storage:save_channel:225 | Канал сохранен: Первый канал
+2026-11-14 22:39:04.891 | INFO     | app_window:_sync_channels:364 | ✅ Добавлено: 0, Обновлено: 1
+2026-11-14 22:39:04.891 | WARNING  | app_window:_sync_channels:309 | Канал 'Первый канал': пользовательский поток недоступен (offline), временно используем адрес из плейлиста
+2026-11-14 22:39:04.892 | INFO     | storage:save_channel:225 | Канал сохранен: Первый канал
+2026-11-14 22:39:04.893 | INFO     | app_window:_sync_channels:364 | ✅ Добавлено: 0, Обновлено: 1
+2026-11-14 22:39:04.894 | INFO     | storage:save_channel:225 | Канал сохранен: Первый канал
+2026-11-14 22:39:04.894 | INFO     | app_window:_sync_channels:307 | Канал 'Первый канал': пользовательский поток сохранён (ok)
+2026-11-14 22:39:04.894 | INFO     | app_window:_sync_channels:364 | ✅ Добавлено: 0, Обновлено: 1
+ok
+test_channel_specific_headers_override_legacy_defaults (test_storage_checker.StreamCheckerTests.test_channel_specific_headers_override_legacy_defaults) ... ok
+test_hls_uses_recording_headers_and_get_for_segment (test_storage_checker.StreamCheckerTests.test_hls_uses_recording_headers_and_get_for_segment) ... ok
+test_non_hls_check_does_not_probe_external_connectivity (test_storage_checker.StreamCheckerTests.test_non_hls_check_does_not_probe_external_connectivity) ... ok
+test_hls_retries_failed_segments (test_storage_checker.StreamReliabilityTests.test_hls_retries_failed_segments) ... ok
+test_long_1tv_news_url_uses_same_api_as_short_url (test_storage_checker.StreamReliabilityTests.test_long_1tv_news_url_uses_same_api_as_short_url) ... 2026-11-14 22:39:04.896 | INFO     | link_resolver:_resolve_1tv:611 | LinkResolver/1tv: нашли поток для 'https://www.1tv.ru/news/2025-09-21/521255-nazvany_laureaty_premii_imeni_sergeya_puskepalisa?ysclid=test' через video_materials.json
+2026-11-14 22:39:04.896 | INFO     | link_resolver:resolve_link:274 | LinkResolver: использован прямой резолвер для 'https://www.1tv.ru/news/2025-09-21/521255-nazvany_laureaty_premii_imeni_sergeya_puskepalisa?ysclid=test'
+ok
+test_smotrim_uses_player_api_before_ytdlp (test_storage_checker.StreamReliabilityTests.test_smotrim_uses_player_api_before_ytdlp) ... 2026-11-14 22:39:04.897 | INFO     | link_resolver:resolve_link:274 | LinkResolver: использован прямой резолвер для 'https://smotrim.ru/video/12345'
+ok
+test_variant_resolver_handles_parent_relative_url (test_storage_checker.StreamReliabilityTests.test_variant_resolver_handles_parent_relative_url) ... 2026-11-14 22:39:04.897 | INFO     | stream_resolver:resolve_variant_url:150 | StreamResolver: выбран вариант 720p / 2000 kbps
+ok
+test_vk_live_url_is_normalized_for_ytdlp (test_storage_checker.StreamReliabilityTests.test_vk_live_url_is_normalized_for_ytdlp) ... ok
+test_broadcast_clock_does_not_advance_without_decoded_frames (test_stream_archive.ArchiveInteractionTests.test_broadcast_clock_does_not_advance_without_decoded_frames) ... ok
+test_channel_selection_autoplays_and_resets_sound (test_stream_archive.ArchiveInteractionTests.test_channel_selection_autoplays_and_resets_sound) ... ok
+test_export_always_uses_global_recording_directory (test_stream_archive.ArchiveInteractionTests.test_export_always_uses_global_recording_directory) ... ok
+test_sound_clicks_toggle_and_unmute_starts_at_current_archive_position (test_stream_archive.ArchiveInteractionTests.test_sound_clicks_toggle_and_unmute_starts_at_current_archive_position) ... 2026-11-14 22:39:04.899 | INFO     | preview_panel:_start_listening:225 | PreviewPanel: включено прослушивание 'ТНТ'
+ok
+test_absolute_bounds_replace_sliding_or_stale_parameters (test_stream_archive.StreamArchiveTests.test_absolute_bounds_replace_sliding_or_stale_parameters) ... ok
+test_catalog_includes_all_regions_and_time_shifts (test_stream_archive.StreamArchiveTests.test_catalog_includes_all_regions_and_time_shifts) ... ok
+test_master_dropping_bounds_is_pinned_again_and_both_boundaries_checked (test_stream_archive.StreamArchiveTests.test_master_dropping_bounds_is_pinned_again_and_both_boundaries_checked) ... ok
+test_missing_end_of_archive_cannot_be_saved_as_complete (test_stream_archive.StreamArchiveTests.test_missing_end_of_archive_cannot_be_saved_as_complete) ... ok
+test_program_date_time_is_validated_and_trim_offset_preserved (test_stream_archive.StreamArchiveTests.test_program_date_time_is_validated_and_trim_offset_preserved) ... ok
+test_save_interval_has_explicit_dates_and_rejects_future_or_reversal (test_stream_archive.StreamArchiveTests.test_save_interval_has_explicit_dates_and_rejects_future_or_reversal) ... ok
+test_clip_hours_and_old_minutes_format (test_timecode.TimecodeTests.test_clip_hours_and_old_minutes_format) ... ok
+test_clock_seconds_and_old_schedule (test_timecode.TimecodeTests.test_clock_seconds_and_old_schedule) ... ok
+test_scheduler_keeps_seconds_in_trigger_and_deadline (test_timecode.TimecodeTests.test_scheduler_keeps_seconds_in_trigger_and_deadline) ... 2026-11-14 22:39:04.931 | INFO     | scheduler:_add_job:233 | Задача добавлена: Канал в 23:59:45 (*)
+ok
+test_checks_both_boundaries_and_caches_them (test_tv_archive.ArchiveAvailabilityTests.test_checks_both_boundaries_and_caches_them) ... ok
+test_expired_date_is_rejected_before_opening_player (test_tv_archive.ArchiveAvailabilityTests.test_expired_date_is_rejected_before_opening_player) ... ok
+test_http_200_error_page_is_not_a_recording (test_tv_archive.ArchiveAvailabilityTests.test_http_200_error_page_is_not_a_recording) ... ok
+test_missing_end_is_not_reported_as_available (test_tv_archive.ArchiveAvailabilityTests.test_missing_end_is_not_reported_as_available) ... ok
+test_network_failure_is_distinct_from_missing_recording (test_tv_archive.ArchiveAvailabilityTests.test_network_failure_is_distinct_from_missing_recording) ... ok
+test_stop_prevents_network_access (test_tv_archive.ArchiveAvailabilityTests.test_stop_prevents_network_access) ... ok
+test_tries_another_public_ip_and_keeps_original_tls_hostname (test_tv_archive.ArchiveTransportTests.test_tries_another_public_ip_and_keeps_original_tls_hostname) ... ok
+test_external_or_malformed_streams_are_rejected (test_tv_archive.PlaylistTests.test_external_or_malformed_streams_are_rejected) ... ok
+test_incomplete_or_gapped_recordings_are_absent (test_tv_archive.PlaylistTests.test_incomplete_or_gapped_recordings_are_absent) ... ok
+test_only_the_needed_segments_are_selected (test_tv_archive.PlaylistTests.test_only_the_needed_segments_are_selected) ... ok
+test_active_source_link (test_video_page_url.VideoPageURLTests.test_active_source_link) ... ok
+test_ambiguous_source_links (test_video_page_url.VideoPageURLTests.test_ambiguous_source_links) ... ok
+test_data_state (test_video_page_url.VideoPageURLTests.test_data_state) ... ok
+test_invalid_state_and_unsafe_source (test_video_page_url.VideoPageURLTests.test_invalid_state_and_unsafe_source) ... ok
+test_mail_variants (test_video_page_url.VideoPageURLTests.test_mail_variants) ... ok
+test_missing_selected_id (test_video_page_url.VideoPageURLTests.test_missing_selected_id) ... ok
+test_no_arbitrary_links (test_video_page_url.VideoPageURLTests.test_no_arbitrary_links) ... ok
+test_noframes_selected_id (test_video_page_url.VideoPageURLTests.test_noframes_selected_id) ... ok
+test_other_hosts_unchanged (test_video_page_url.VideoPageURLTests.test_other_hosts_unchanged) ... ok
+test_does_not_choose_recommendation_or_other_owner (test_vk_download.VKDownloadTests.test_does_not_choose_recommendation_or_other_owner) ... ok
+test_extracts_hls_formats_with_audio_and_subtitles (test_vk_download.VKDownloadTests.test_extracts_hls_formats_with_audio_and_subtitles) ... ok
+test_extracts_requested_public_video_without_legacy_api (test_vk_download.VKDownloadTests.test_extracts_requested_public_video_without_legacy_api) ... ok
+test_keeps_list_access_and_legacy_player_fallback (test_vk_download.VKDownloadTests.test_keeps_list_access_and_legacy_player_fallback) ... ok
+test_preserves_routing_and_embed_hash (test_vk_download.VKDownloadTests.test_preserves_routing_and_embed_hash) ... ok
+test_heights_without_codec (test_yandex_resolver.YandexResolverTests.test_heights_without_codec) ... ok
+test_old_handler_keeps_quality_selection (test_yandex_resolver.YandexResolverTests.test_old_handler_keeps_quality_selection) ... ok
+test_old_handler_on_missing_source (test_yandex_resolver.YandexResolverTests.test_old_handler_on_missing_source) ... 2026-11-14 22:39:05.445 | INFO     | link_resolver:resolve_link:270 | LinkResolver: новое правило Яндекса не подошло, пробуем прежний обработчик: Яндекс не отдал источник выбранного видео. Пришлите прямую ссылку с сайта видео.
+ok
+test_resolves_source_before_ytdlp (test_yandex_resolver.YandexResolverTests.test_resolves_source_before_ytdlp) ... ok
+
+----------------------------------------------------------------------
+Ran 155 tests in 68.437s
+
+OK

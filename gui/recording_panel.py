@@ -79,6 +79,10 @@ class RecordingPanel(ctk.CTkFrame):
                       width=28, height=28, corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'],
                       hover_color=c['bg_hover'], command=self._open_monitor).pack(side='right')
 
+        ctk.CTkLabel(self, text="На паузе прямой эфир пропускается.",
+                     font=ctk.CTkFont(size=10), text_color=c['text_muted'],
+                     anchor='w').pack(fill='x', padx=14, pady=(0, 4))
+
         self.list_frame = ctk.CTkScrollableFrame(self, fg_color='transparent')
         self.list_frame.pack(fill='both', expand=True, padx=6, pady=(0, 6))
 
@@ -149,8 +153,8 @@ class RecordingPanel(ctk.CTkFrame):
             widgets['accent_bar'].configure(fg_color=accent)
 
             state_text = {
-                'paused': 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
-                'partial': 'Сохранено частично', 'ended_early': 'Ended early',
+                'paused': 'Пауза' if task.is_live else 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
+                'partial': 'Сохранено с паузами' if task.pause_count and not task.retry_count else 'Сохранено частично', 'ended_early': 'Ended early',
                 'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing', 'connecting': 'Подключение',
                 'reconnecting': 'Переподключение', 'retrying': 'Восстановление',
             }[state]
@@ -165,7 +169,7 @@ class RecordingPanel(ctk.CTkFrame):
 
             pause_icon = 'play' if task.is_paused else 'pause'
             widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
-            button_state = 'normal' if task.is_recording else 'disabled'
+            button_state = 'normal' if task.is_recording or (task.is_live and task.is_paused and task.recovering) else 'disabled'
             widgets['btn_pause'].configure(state=button_state)
             widgets['btn_stop'].configure(state='normal' if task.is_recording or task.recovering else 'disabled')
 
@@ -173,6 +177,20 @@ class RecordingPanel(ctk.CTkFrame):
                 btn_open = self._icon_button(widgets['actions'], 'folder', lambda t=task: self._open_file(t))
                 btn_open.pack(side='left', padx=1, before=widgets['btn_del'])
                 widgets['btn_open'] = btn_open
+
+            if (not task.is_recording and not task.recovering and len(task.parts) > 1
+                    and 'btn_merge' not in widgets):
+                widgets['btn_pause'].pack_forget()
+                widgets['btn_stop'].pack_forget()
+                button = ctk.CTkButton(widgets['actions'], text="Объединить", width=94, height=26,
+                                       corner_radius=Config.RADIUS_SM,
+                                       command=lambda t=task: self._merge_parts(t))
+                button.pack(side='left', padx=2, before=widgets['btn_del'])
+                widgets['btn_merge'] = button
+            if 'btn_merge' in widgets:
+                widgets['btn_merge'].configure(
+                    text='Объединено' if task.merged_path else ('Сборка…' if task.merging else 'Объединить'),
+                    state='disabled' if task.merging or task.merged_path else 'normal')
 
             # Текст статуса ("Recording"/"Ended early"/...) и набор кнопок
             # (folder-кнопка появляется только тут, чуть выше) меняют
@@ -378,6 +396,21 @@ class RecordingPanel(ctk.CTkFrame):
 
     def _stop_task(self, task: RecordingTask):
         self.recorder.stop_recording(task.task_id)
+
+    def _merge_parts(self, task):
+        def worker():
+            try:
+                result = self.recorder.merge_recording_parts(task.task_id)
+            except Exception as error:
+                logger.exception('Не удалось объединить части записи')
+                text = str(error)
+                if not self.recorder._closing:
+                    self.after(0, lambda message=text: messagebox.showerror('Объединение частей', message))
+            else:
+                if not self.recorder._closing:
+                    self.after(0, lambda: messagebox.showinfo(
+                        'Объединение частей', f'Сохранено: {result}\nИсходные части оставлены. Пропуски эфира не восстанавливаются.'))
+        threading.Thread(target=worker, daemon=False, name='RecordingPartsMerge').start()
 
     def _open_file(self, task: RecordingTask):
         try:
