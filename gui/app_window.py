@@ -172,11 +172,46 @@ class AppWindow:
         if self._closing:
             return
         self._refresh_data()
+        self.root.after(250, self._offer_recording_recovery)
         self.scheduler.start()
         self._start_background_checks()
         self.root.after(600, self.archive_panel.refresh_channels)
         threading.Thread(target=self._initialize_app, daemon=True).start()
         self.root.after(100, self._finish_initialization)
+
+    def _offer_recording_recovery(self):
+        from core.recording_recovery import pending_recordings, finalize_recording
+        markers = pending_recordings()
+        # Exclude jobs launched by this instance before the dialog appeared.
+        active = {task.recovery_marker for task in self.recorder.get_all_tasks()}
+        markers = [marker for marker in markers if marker not in active]
+        if self._closing or not markers:
+            return
+        if not messagebox.askyesno(
+                "Восстановление записей",
+                f"Найдено незавершённых записей: {len(markers)}.\n"
+                "Собрать доступные фрагменты в MP4? Исходники при ошибке сохранятся.",
+                parent=self.root):
+            return
+
+        def recover():
+            restored, failures = 0, []
+            for marker in markers:
+                try:
+                    finalize_recording(marker)
+                    restored += 1
+                except Exception as error:
+                    logger.exception("Не удалось восстановить запись %s", marker.name)
+                    failures.append(str(error))
+            def show_result():
+                if not self._closing:
+                    text = f"Восстановлено записей: {restored}."
+                    if failures:
+                        text += "\nИсходники оставлены для повторной попытки.\n" + "\n".join(failures[:3])
+                    messagebox.showinfo("Восстановление записей", text, parent=self.root)
+            if not self._closing:
+                self.root.after(0, show_result)
+        threading.Thread(target=recover, daemon=False, name='RecordingRecovery').start()
 
     def _initialize_app(self):
         """Только файловая и сетевая работа: Tk должен оставаться в главном потоке."""

@@ -84,3 +84,6 @@ data/logos/
 *.dmg
 packaging/*.dmg.sha256
 packaging/ffmpeg/
+
+# Crash-recovery metadata contains user-selected recording paths
+data/pending_recordings/

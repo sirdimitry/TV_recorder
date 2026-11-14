@@ -8,6 +8,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict
+from core.recording_recovery import FRAGMENT_FLAGS, prepare_recording, finalize_recording, release_recording
 from core.live_stream import LiveThumbnailStream
 from core.media_probe import COMPLETED, PARTIAL, classify_media
 from core.screen_capture import (build_screen_capture_cmd, build_timestretch_cmd, find_loopback_audio_index,
@@ -28,6 +29,9 @@ class RecordingTask:
         self.channel_name = channel_name
         self.stream_url = stream_url
         self.output_path = output_path
+        self.recovery_marker = None
+        self.capture_path = None
+        self.finalization_error = ""
         self.source = source
         self.process: Optional[subprocess.Popen] = None
         self.is_recording = False
@@ -289,7 +293,7 @@ class Recorder:
                 '-err_detect', 'ignore_err',
                 '-fflags', '+genpts+discardcorrupt',
                 '-avoid_negative_ts', 'make_zero',
-                '-movflags', '+faststart',
+                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000',
                 str(output_file)
             ]
         else:
@@ -337,7 +341,7 @@ class Recorder:
                 '-max_error_rate', '100',
                 '-fflags', '+genpts+discardcorrupt',
                 '-avoid_negative_ts', 'make_zero',
-                '-movflags', '+faststart',
+                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000',
                 str(output_file)
             ]
 
@@ -348,10 +352,13 @@ class Recorder:
         task.clip_start_seconds = seek_seconds
         task.clip_end_seconds = clip_end_seconds
         task.duration_limit_seconds = float(duration_opts[1]) if duration_opts else None
+        task.capture_path, task.recovery_marker = prepare_recording(output_file, task_id)
+        cmd[-1] = str(task.capture_path)
 
         try:
             with self._lock:
                 if self._closing:
+                    release_recording(task.recovery_marker)
                     return ""
                 task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 task.is_recording = True
@@ -361,7 +368,7 @@ class Recorder:
             
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
-            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=True)
+            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
             wait_thread.start()
@@ -379,6 +386,7 @@ class Recorder:
             return task_id
             
         except Exception as e:
+            release_recording(task.recovery_marker)
             logger.error(f"Recorder: Ошибка запуска ffmpeg: {e}")
             return ""
 
@@ -484,9 +492,6 @@ class Recorder:
         # (setpts) видео получится дёрганым (мало исходных кадров на
         # растянутый интервал времени).
         capture_framerate = 60 if speed_confirmed else 30
-        cmd = build_screen_capture_cmd(str(output_file), screen_index, audio_index, crop=crop,
-                                        framerate=capture_framerate)
-
         if start_deadline_timestamp is not None and time.time() >= start_deadline_timestamp:
             logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска захвата экрана")
             browser_proc.terminate()
@@ -502,10 +507,19 @@ class Recorder:
         # speed_factor раз при "восстановлении".
         task.speed_factor = speed_factor if speed_confirmed else None
         task.screen_capture_has_audio = audio_index is not None
+        task.capture_path, task.recovery_marker = prepare_recording(
+            output_file, task_id, speed=task.speed_factor,
+            has_audio=task.screen_capture_has_audio)
+        cmd = build_screen_capture_cmd(str(task.capture_path), screen_index, audio_index,
+                                       crop=crop, framerate=capture_framerate)
+        flag_index = cmd.index('-movflags')
+        cmd[flag_index + 1] = FRAGMENT_FLAGS
+        cmd[-1:-1] = ['-frag_duration', '1000000']
 
         try:
             with self._lock:
                 if self._closing:
+                    release_recording(task.recovery_marker)
                     browser_proc.terminate()
                     return ""
                 task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -516,7 +530,7 @@ class Recorder:
 
             logger.info(f"Recorder: Начата запись экрана '{channel_name}' → {output_file} (source: {source})")
 
-            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=True)
+            wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
             wait_thread.start()
@@ -529,6 +543,7 @@ class Recorder:
             return task_id
 
         except Exception as e:
+            release_recording(task.recovery_marker)
             logger.error(f"Recorder: Ошибка запуска записи экрана: {e}")
             browser_proc.terminate()
             return ""
@@ -730,13 +745,18 @@ class Recorder:
         output_file = Path(task.output_path)
         with self._lock:
             closing = self._closing
-        if process_ok and task.speed_factor:
-            if closing:
-                # Многоминутное перекодирование нельзя оставлять daemon-потоку
-                # после уничтожения приложения; исходный ускоренный файл цел.
+        if task.recovery_marker:
+            release_recording(task.recovery_marker)
+            try:
+                output_file = finalize_recording(task.recovery_marker)
+            except Exception as error:
+                task.finalization_error = str(error)
+                task.output_path = str(task.capture_path)
+                output_file = task.capture_path
                 process_ok = False
-            else:
-                process_ok = self._timestretch_task_output(task)
+                logger.exception("Recorder: исходная запись сохранена для восстановления")
+        elif process_ok and task.speed_factor:
+            process_ok = self._timestretch_task_output(task)
         expect_audio = bool(task.audio_url) or (task.is_screen_capture and task.screen_capture_has_audio)
         result_status, probe = classify_media(output_file, process_ok, expect_audio=expect_audio)
         success = result_status == COMPLETED
@@ -759,7 +779,9 @@ class Recorder:
                 logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
         elif result_status == PARTIAL:
             reasons = []
-            if task.speed_factor and closing:
+            if task.finalization_error:
+                reasons.append('Сохранён временный MP4: ' + task.finalization_error)
+            elif task.speed_factor and closing:
                 reasons.append('обратное растяжение ускоренной записи отменено при закрытии приложения')
             elif not process_ok:
                 reasons.append(f'ffmpeg завершился с кодом {returncode}')
