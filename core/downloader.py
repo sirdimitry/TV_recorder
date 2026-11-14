@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from core.disk_space import DiskGuard, ensure_space
 from core.link_resolver import resolve_link
 from core.media_probe import COMPLETED, PARTIAL, classify_media
 from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
@@ -49,6 +50,8 @@ class DownloadTask:
         self.on_complete: Optional[Callable] = None
         self.clip_start = 0.0
         self.clip_end: Optional[float] = None
+        self.storage_error = ""
+        self.disk_guard = None
         self.last_activity = time.monotonic()
 
     def to_dict(self) -> Dict:
@@ -91,7 +94,37 @@ class Downloader:
         self._lock = threading.Lock()
         self._ui_callbacks: list = []
         self._closing = False
+        self._storage_callback = None
         self._workers: set[threading.Thread] = set()
+
+    def set_storage_callback(self, callback):
+        self._storage_callback = callback
+
+    def _storage_notice(self, message):
+        logger.warning(message)
+        if self._storage_callback:
+            try:
+                self._storage_callback(message)
+            except Exception:
+                logger.exception('Не удалось показать предупреждение о диске')
+
+    def _watch_task_disk(self, task):
+        def stop(message):
+            with self._lock:
+                if task.status != 'downloading' or task.process.poll() is not None:
+                    return
+                task.storage_error = message
+                task.error_message = message
+                process = task.process
+            # This is a partial save, not a user cancellation: never delete it.
+            process.terminate()
+            self._storage_notice(message)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        task.disk_guard = DiskGuard(task.output_dir, on_warning=self._storage_notice, on_stop=stop)
+        task.disk_guard.start()
 
     def set_ui_callback(self, callback: Callable):
         self._ui_callbacks.append(callback)
@@ -142,6 +175,8 @@ class Downloader:
         try:
             self._run(task)
         finally:
+            if task.disk_guard:
+                task.disk_guard.close()
             with self._lock:
                 self._workers.discard(threading.current_thread())
 
@@ -181,7 +216,26 @@ class Downloader:
             self.tasks.pop(task_id, None)
         self._notify_ui()
 
+    def _check_task_directory(self, task):
+        try:
+            task.output_dir.mkdir(parents=True, exist_ok=True)
+            ensure_space(task.output_dir, reserve=DiskGuard.reserved_bytes(task.output_dir), writable=True)
+            return True
+        except OSError as error:
+            with self._lock:
+                if self._closing or task.status == 'canceled':
+                    return False
+                task.status = 'error'
+                task.error_message = str(error)
+            self._storage_notice(task.error_message)
+            self._notify_ui()
+            if task.on_complete:
+                task.on_complete(False, task, task.error_message)
+            return False
+
     def _run(self, task: DownloadTask):
+        if not self._check_task_directory(task):
+            return
         info = resolve_link(task.url, target_height=task.target_height)
         if self._is_canceled(task):
             # Отменили, пока резолвили ссылку (ffmpeg ещё не запускался,
@@ -217,6 +271,9 @@ class Downloader:
             task.status = 'error'
             task.error_message = f'Не удалось подготовить папку загрузки: {error}'
             self._notify_ui()
+            return
+
+        if not self._check_task_directory(task):
             return
 
         headers_dict = info.headers or {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
@@ -267,6 +324,9 @@ class Downloader:
             cmd[codec_position:codec_position+2] = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac']
             cmd[-1:-1] = ['-ss', str(task.clip_start), '-t', str(task.clip_end - task.clip_start)]
 
+        if not self._check_task_directory(task):
+            return
+
         try:
             with self._lock:
                 if self._closing or task.status == 'canceled':
@@ -285,6 +345,7 @@ class Downloader:
                 task.on_complete(False, task, task.error_message)
             return
 
+        self._watch_task_disk(task)
         logger.info(f"Downloader: начато скачивание '{task.name}' → {output_path}")
 
         # stdout (прогресс) и stderr (диагностика на случай ошибки) нужно
@@ -307,6 +368,8 @@ class Downloader:
         self._watch_progress(task)
 
         task.process.wait()
+        if task.disk_guard:
+            task.disk_guard.stop_monitor()
         watch_done.set()
         stderr_thread.join(timeout=1)
         returncode = task.process.returncode
@@ -317,7 +380,7 @@ class Downloader:
             self._cleanup_canceled_file(task)
             return
 
-        process_ok = returncode == 0 or returncode == 255
+        process_ok = (returncode == 0 or returncode == 255) and not task.storage_error
         result_status, probe = classify_media(output_path, process_ok, expect_audio=bool(info.audio_url))
         if (task.clip_end is not None and result_status == COMPLETED
                 and (probe.duration is None or probe.duration + .5 < task.duration)):

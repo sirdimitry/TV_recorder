@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import uuid
 
+from core.disk_space import DiskGuard, FINALIZE_MARGIN, ensure_space
 from core.media_probe import probe_media
 from core.screen_capture import build_timestretch_cmd
 from utils.config import Config
@@ -71,6 +72,9 @@ def _finalize_recording(marker):
     source_probe = probe_media(capture)
     if not source_probe.readable or not source_probe.has_video:
         raise RuntimeError(f'Временная запись пока не читается: {source_probe.error}')
+    estimated_output = int(capture.stat().st_size * max(1, metadata.get('speed') or 1))
+    ensure_space(output.parent, reserve=max(estimated_output, DiskGuard.reserved_bytes(output.parent)),
+                 minimum=FINALIZE_MARGIN)
     temp = output.with_name(f'.{output.stem}.{uuid.uuid4().hex}.finalizing.mp4')
     try:
         if metadata.get('speed'):

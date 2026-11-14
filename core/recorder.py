@@ -8,6 +8,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict
+from core.disk_space import DiskGuard, ensure_space
 from core.recording_recovery import FRAGMENT_FLAGS, prepare_recording, finalize_recording, release_recording
 from core.live_stream import LiveThumbnailStream
 from core.media_probe import COMPLETED, PARTIAL, classify_media
@@ -32,6 +33,8 @@ class RecordingTask:
         self.recovery_marker = None
         self.capture_path = None
         self.finalization_error = ""
+        self.storage_error = ""
+        self.disk_guard = None
         self.source = source
         self.process: Optional[subprocess.Popen] = None
         self.is_recording = False
@@ -144,10 +147,47 @@ class Recorder:
         self._ui_callbacks: list = []  # несколько подписчиков (панель записей, списки каналов/ссылок)
         self._snapshot_consumers = 0
         self._closing = False
+        self._storage_callback = None
         self._stop_timers: Dict[str, threading.Timer] = {}
         self._wait_threads: set[threading.Thread] = set()
         self._screen_capture_confirmation: Optional[Callable[[str, bool, bool], bool]] = None
         self._screen_capture_error_callback: Optional[Callable[[str], None]] = None
+
+    def set_storage_callback(self, callback):
+        self._storage_callback = callback
+
+    def _storage_notice(self, message):
+        logger.warning(message)
+        if self._storage_callback:
+            try:
+                self._storage_callback(message)
+            except Exception:
+                logger.exception('Не удалось показать предупреждение о диске')
+
+    def _check_output_directory(self, output):
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            ensure_space(output.parent, reserve=DiskGuard.reserved_bytes(output.parent), writable=True)
+            return True
+        except OSError as error:
+            self._storage_notice(str(error))
+            return False
+
+    def _watch_task_disk(self, task):
+        def stop(message):
+            if not task.is_recording or task.process.poll() is not None:
+                return
+            task.storage_error = message
+            self.stop_recording(task.task_id)
+            self._storage_notice(message)
+            try:
+                task.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                task.process.kill()
+        task.disk_guard = DiskGuard(Path(task.output_path).parent,
+                                    reserve_file=task.capture_path, reserve_factor=task.speed_factor or 1,
+                                    on_warning=self._storage_notice, on_stop=stop)
+        task.disk_guard.start()
 
     def set_ui_callback(self, callback: Callable):
         """Регистрирует callback для обновления UI (вызывается из любого потока).
@@ -204,7 +244,8 @@ class Recorder:
                 return ""
         Config.init_dirs()
         output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self._check_output_directory(output_file):
+            return ""
 
         task_id = uuid.uuid4().hex
 
@@ -352,6 +393,8 @@ class Recorder:
         task.clip_start_seconds = seek_seconds
         task.clip_end_seconds = clip_end_seconds
         task.duration_limit_seconds = float(duration_opts[1]) if duration_opts else None
+        if not self._check_output_directory(output_file):
+            return ""
         task.capture_path, task.recovery_marker = prepare_recording(output_file, task_id)
         cmd[-1] = str(task.capture_path)
 
@@ -368,6 +411,7 @@ class Recorder:
             
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
+            self._watch_task_disk(task)
             wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
@@ -416,7 +460,8 @@ class Recorder:
                 return ""
         Config.init_dirs()
         output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self._check_output_directory(output_file):
+            return ""
 
         screen_index = find_screen_device_index()
         if screen_index is None:
@@ -507,6 +552,9 @@ class Recorder:
         # speed_factor раз при "восстановлении".
         task.speed_factor = speed_factor if speed_confirmed else None
         task.screen_capture_has_audio = audio_index is not None
+        if not self._check_output_directory(output_file):
+            browser_proc.terminate()
+            return ""
         task.capture_path, task.recovery_marker = prepare_recording(
             output_file, task_id, speed=task.speed_factor,
             has_audio=task.screen_capture_has_audio)
@@ -530,6 +578,7 @@ class Recorder:
 
             logger.info(f"Recorder: Начата запись экрана '{channel_name}' → {output_file} (source: {source})")
 
+            self._watch_task_disk(task)
             wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
@@ -709,6 +758,15 @@ class Recorder:
             return list(self.tasks.values())
     
     def _wait_for_task(self, task: RecordingTask):
+        try:
+            self._finish_task(task)
+        finally:
+            if task.disk_guard:
+                task.disk_guard.close()
+            with self._lock:
+                self._wait_threads.discard(threading.current_thread())
+
+    def _finish_task(self, task: RecordingTask):
         if not task.process:
             return
 
@@ -727,6 +785,8 @@ class Recorder:
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         stderr_thread.start()
         task.process.wait()
+        if task.disk_guard:
+            task.disk_guard.stop_monitor()
         stderr_thread.join(timeout=1)
         returncode = task.process.returncode
         self._leave_paused_state(task, resume_process=False)
@@ -741,7 +801,7 @@ class Recorder:
 
         # При штатной остановке кнопкой/таймером код зависит от платформы и
         # сигнала; окончательное качество всё равно определит ffprobe ниже.
-        process_ok = returncode in (0, 255) or task.stop_requested
+        process_ok = (returncode in (0, 255) or task.stop_requested) and not task.storage_error
         output_file = Path(task.output_path)
         with self._lock:
             closing = self._closing
@@ -779,6 +839,8 @@ class Recorder:
                 logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
         elif result_status == PARTIAL:
             reasons = []
+            if task.storage_error:
+                reasons.append(task.storage_error)
             if task.finalization_error:
                 reasons.append('Сохранён временный MP4: ' + task.finalization_error)
             elif task.speed_factor and closing:
@@ -793,7 +855,7 @@ class Recorder:
             stderr = b''.join(stderr_tail)
             err_msg = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
             err_msg = f"{probe.error}. {err_msg}".strip()
-            task.error_message = err_msg
+            task.error_message = (task.storage_error + ". " if task.storage_error else "") + err_msg
             logger.error(f"Recorder: Ошибка обработки '{task.channel_name}' (code {returncode}): {err_msg}")
 
         if task.on_complete:

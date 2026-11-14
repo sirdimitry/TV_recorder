@@ -78,6 +78,9 @@ class AppWindow:
         self.downloader = Downloader()
         self.scheduler = RecordingScheduler(recorder=self.recorder)
         self.notifier = Notifier()
+        self._storage_notices = set()
+        self.recorder.set_storage_callback(self._show_storage_notice)
+        self.downloader.set_storage_callback(self._show_storage_notice)
         self._network_results = Queue(maxsize=1)
         self._network_monitor_running = False
 
@@ -91,6 +94,16 @@ class AppWindow:
             self.root.createcommand('::tk::mac::ReopenApplication', self._show_main_window)
         self._startup_result = Queue(maxsize=1)
         self.root.after(0, self._start_ui)
+
+    def _show_storage_notice(self, message):
+        def show():
+            key = message.split(':', 1)[0]
+            if self._closing or key in self._storage_notices:
+                return
+            self._storage_notices.add(key)
+            messagebox.showwarning("Место на диске", message, parent=self.root)
+        if not self._closing:
+            self.root.after(0, show)
 
     def _show_main_window(self):
         """Dock/Finder reopen must restore the existing recording window."""
