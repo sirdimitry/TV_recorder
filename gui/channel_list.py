@@ -206,7 +206,7 @@ class ChannelList(ctk.CTkFrame):
         if not self.recorder:
             return
         c = self.colors
-        active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording}
+        active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording or t.recovering}
         for name, widgets in self.channel_widgets.items():
             btn = widgets['btn_record']
             if name in active_names:
@@ -225,7 +225,7 @@ class ChannelList(ctk.CTkFrame):
         self._blink_on = not self._blink_on
         if self.recorder:
             c = self.colors
-            active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording}
+            active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording or t.recovering}
             color = c['red'] if self._blink_on else c['bg_active']
             for name in active_names:
                 widgets = self.channel_widgets.get(name)

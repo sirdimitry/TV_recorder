@@ -8,7 +8,9 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict
-from core.disk_space import DiskGuard, ensure_space
+from core import recording_progress as progress_policy
+from core.recording_progress import RecordingProgress
+from core.disk_space import DiskGuard, DiskSpaceError, ensure_space
 from core.recording_recovery import FRAGMENT_FLAGS, prepare_recording, finalize_recording, release_recording
 from core.live_stream import LiveThumbnailStream
 from core.media_probe import COMPLETED, PARTIAL, classify_media
@@ -35,6 +37,20 @@ class RecordingTask:
         self.finalization_error = ""
         self.storage_error = ""
         self.disk_guard = None
+        self.progress_monitor = None
+        self.media_seconds = 0.0
+        self.recorded_bytes = 0
+        self.connection_state = 'connecting'
+        self.is_live = False
+        self.recovering = False
+        self.stalled = False
+        self.retry_count = 0
+        self.retry_cancel = threading.Event()
+        self.deadline = None
+        self.command = None
+        self.base_output_path = output_path
+        self.parts = []
+        self.recovery_exhausted = False
         self.source = source
         self.process: Optional[subprocess.Popen] = None
         self.is_recording = False
@@ -189,6 +205,90 @@ class Recorder:
                                     on_warning=self._storage_notice, on_stop=stop)
         task.disk_guard.start()
 
+    def _watch_task_progress(self, task):
+        process = task.process
+        def stall():
+            with self._lock:
+                if (task.stop_requested or task.is_paused or self._closing
+                        or process is not task.process or process.poll() is not None):
+                    return
+                task.stalled = True
+                task.connection_state = 'stalled'
+                logger.warning("Recorder: нет продвижения записи '%s', завершаем часть", task.channel_name)
+                self._terminate_task_process(task)
+            self._notify_ui()
+            try:
+                process.wait(timeout=progress_policy.STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        def deadline():
+            self.stop_recording(task.task_id)
+            try:
+                process.wait(timeout=progress_policy.STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        task.progress_monitor = RecordingProgress(
+            process, task, stall, self._notify_ui, deadline)
+        task.progress_monitor.start()
+
+    def _retry_allowed(self, task):
+        return (task.is_live and not task.stop_requested and not task.storage_error
+                and not self._closing
+                and (not task.finalization_error or task.result_status == 'processing_error')
+                and (task.deadline is None or time.time() < task.deadline)
+                and (task.stalled or task.ended_early or not task.success))
+
+    def _restart_part(self, task):
+        output = Path(task.base_output_path)
+        output = output.with_name(f'{output.stem}_part{task.retry_count+1:03d}{output.suffix}')
+        if not self._check_output_directory(output):
+            task.storage_error = 'Папка или свободное место не позволяют возобновить запись'
+            return False
+        cmd = list(task.command)
+        if not task.audio_url:
+            fresh_url = resolve_variant_url(task.source_stream_url,
+                                            request_headers=task.headers)
+            cmd[cmd.index('-i')+1] = fresh_url
+            task.stream_url = fresh_url
+        remaining = task.deadline - time.time() if task.deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            return False
+        if '-t' in cmd:
+            index = cmd.index('-t')
+            cmd[index+1] = str(remaining)
+        elif remaining is not None:
+            cmd[-1:-1] = ['-t', str(remaining)]
+        capture, marker = prepare_recording(output, uuid.uuid4().hex)
+        cmd[-1] = str(capture)
+        try:
+            with self._lock:
+                if (task.stop_requested or self._closing
+                        or (task.deadline is not None and time.time() >= task.deadline)):
+                    release_recording(marker)
+                    return False
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                task.process = process
+                task.output_path = str(output)
+                task.capture_path, task.recovery_marker = capture, marker
+                task.duration_limit_seconds = remaining
+                task.is_recording = True
+                task.finished_at = None
+                task.final_duration = 0
+                task.result_status = task.success = None
+                task.ended_early = task.stalled = False
+                task.error_message = task.finalization_error = ''
+                task.media_seconds = task.recorded_bytes = 0
+                task.connection_state = 'connecting'
+            self._watch_task_disk(task)
+            self._watch_task_progress(task)
+            self._start_snapshot_stream(task)
+            self._notify_ui()
+            return True
+        except Exception:
+            release_recording(marker)
+            logger.exception('Recorder: не удалось запустить следующую часть')
+            return False
+
     def set_ui_callback(self, callback: Callable):
         """Регистрирует callback для обновления UI (вызывается из любого потока).
         Можно вызывать несколько раз — панель записей и списки каналов/ссылок
@@ -211,7 +311,7 @@ class Recorder:
         """ID текущей активной (незавершённой) записи для этого имени, если есть."""
         with self._lock:
             for task in self.tasks.values():
-                if task.channel_name == channel_name and task.is_recording:
+                if task.channel_name == channel_name and (task.is_recording or task.recovering):
                     return task.task_id
         return None
 
@@ -248,6 +348,7 @@ class Recorder:
             return ""
 
         task_id = uuid.uuid4().hex
+        source_stream_url = stream_url
 
         if extra_headers:
             # Ссылки, разобранные через yt-dlp (core/link_resolver.py),
@@ -334,7 +435,7 @@ class Recorder:
                 '-err_detect', 'ignore_err',
                 '-fflags', '+genpts+discardcorrupt',
                 '-avoid_negative_ts', 'make_zero',
-                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000',
+                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000', '-flush_packets', '1',
                 str(output_file)
             ]
         else:
@@ -382,7 +483,7 @@ class Recorder:
                 '-max_error_rate', '100',
                 '-fflags', '+genpts+discardcorrupt',
                 '-avoid_negative_ts', 'make_zero',
-                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000',
+                '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000', '-flush_packets', '1',
                 str(output_file)
             ]
 
@@ -393,17 +494,24 @@ class Recorder:
         task.clip_start_seconds = seek_seconds
         task.clip_end_seconds = clip_end_seconds
         task.duration_limit_seconds = float(duration_opts[1]) if duration_opts else None
+        task.is_live = is_live_channel
+        task.source_stream_url = source_stream_url
+        task.deadline = start_deadline_timestamp
+        if is_live_channel and duration_limit_seconds and task.deadline is None:
+            task.deadline = time.time() + duration_limit_seconds
         if not self._check_output_directory(output_file):
             return ""
         task.capture_path, task.recovery_marker = prepare_recording(output_file, task_id)
         cmd[-1] = str(task.capture_path)
+        cmd[2:2] = ['-progress', 'pipe:1', '-nostats']
+        task.command = list(cmd)
 
         try:
             with self._lock:
                 if self._closing:
                     release_recording(task.recovery_marker)
                     return ""
-                task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 task.is_recording = True
                 task.start_time = time.time()
                 task.started_at = datetime.now()
@@ -412,6 +520,7 @@ class Recorder:
             logger.info(f"Recorder: Начата запись '{channel_name}' → {output_file} (source: {source})")
             
             self._watch_task_disk(task)
+            self._watch_task_progress(task)
             wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
@@ -545,6 +654,7 @@ class Recorder:
         task = RecordingTask(task_id, channel_name, url, str(output_file), source)
         task.on_complete = on_complete
         task.is_screen_capture = True
+        task.deadline = start_deadline_timestamp
         task.browser_proc = browser_proc
         # Растяжку по времени (см. _timestretch_task_output) включаем
         # ТОЛЬКО если ускорение подтверждено — иначе запись, реально
@@ -562,7 +672,8 @@ class Recorder:
                                        crop=crop, framerate=capture_framerate)
         flag_index = cmd.index('-movflags')
         cmd[flag_index + 1] = FRAGMENT_FLAGS
-        cmd[-1:-1] = ['-frag_duration', '1000000']
+        cmd[-1:-1] = ['-frag_duration', '1000000', '-flush_packets', '1']
+        cmd[2:2] = ['-progress', 'pipe:1', '-nostats']
 
         try:
             with self._lock:
@@ -570,7 +681,7 @@ class Recorder:
                     release_recording(task.recovery_marker)
                     browser_proc.terminate()
                     return ""
-                task.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 task.is_recording = True
                 task.start_time = time.time()
                 task.started_at = datetime.now()
@@ -579,6 +690,7 @@ class Recorder:
             logger.info(f"Recorder: Начата запись экрана '{channel_name}' → {output_file} (source: {source})")
 
             self._watch_task_disk(task)
+            self._watch_task_progress(task)
             wait_thread = threading.Thread(target=self._wait_for_task, args=(task,), daemon=False)
             with self._lock:
                 self._wait_threads.add(wait_thread)
@@ -698,6 +810,9 @@ class Recorder:
         with self._lock:
             task = self.tasks.get(task_id)
 
+        if task and (task.is_recording or task.recovering):
+            task.stop_requested = True
+            task.retry_cancel.set()
         if task and task.process and task.is_recording and task.process.poll() is None:
             logger.info(f"Recorder: Остановка записи '{task.channel_name}' (task: {task_id})")
             task.final_duration = task.get_elapsed_time()
@@ -758,15 +873,66 @@ class Recorder:
             return list(self.tasks.values())
     
     def _wait_for_task(self, task: RecordingTask):
+        task.recovering = task.is_live
         try:
-            self._finish_task(task)
+            while True:
+                self._finish_task(task, notify=False)
+                task.parts.append({'path': task.output_path, 'status': task.result_status,
+                                   'stalled': task.stalled, 'error': task.error_message})
+                if task.disk_guard:
+                    task.disk_guard.close()
+                if not self._retry_allowed(task):
+                    break
+                if task.retry_count >= len(progress_policy.RETRY_DELAYS):
+                    task.recovery_exhausted = True
+                    break
+                delay = progress_policy.RETRY_DELAYS[task.retry_count]
+                task.retry_count += 1
+                task.connection_state = 'retrying'
+                task.result_status = task.success = None
+                self._notify_ui()
+                if task.deadline is not None:
+                    delay = min(delay, max(0, task.deadline-time.time()))
+                if task.retry_cancel.wait(delay) or task.stop_requested or self._closing:
+                    break
+                if not self._restart_part(task):
+                    break
+            if task.retry_count:
+                # A later good part cannot hide a gap or loss in an earlier part.
+                readable = [part for part in task.parts if part['status'] in (COMPLETED, PARTIAL)]
+                if readable:
+                    task.output_path = readable[-1]['path']
+                    task.result_status = PARTIAL
+                else:
+                    task.result_status = 'processing_error'
+                task.success = False
+                task.error_message = ('Запись сохранена отдельными частями после обрыва. '
+                                      + ('Лимит восстановления исчерпан. ' if task.recovery_exhausted else '')
+                                      + (task.storage_error or task.parts[-1]['error'] or ''))
+            self._notify_completion(task)
         finally:
+            task.recovering = False
+            task.is_recording = False
+            if task.progress_monitor:
+                task.progress_monitor.close()
             if task.disk_guard:
                 task.disk_guard.close()
             with self._lock:
+                timer = self._stop_timers.pop(task.task_id, None)
                 self._wait_threads.discard(threading.current_thread())
+            if timer:
+                timer.cancel()
+            self._notify_ui()
 
-    def _finish_task(self, task: RecordingTask):
+    def _notify_completion(self, task):
+        if task.on_complete:
+            try:
+                task.on_complete(task.success, task.channel_name, task.output_path,
+                                 task.ended_early, task.result_status)
+            except Exception:
+                logger.exception('Recorder: ошибка callback завершения')
+
+    def _finish_task(self, task: RecordingTask, notify=True):
         if not task.process:
             return
 
@@ -785,9 +951,15 @@ class Recorder:
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         stderr_thread.start()
         task.process.wait()
+        if task.progress_monitor:
+            task.progress_monitor.close()
         if task.disk_guard:
             task.disk_guard.stop_monitor()
         stderr_thread.join(timeout=1)
+        for pipe in (task.process.stdout, task.process.stderr):
+            close = getattr(pipe, 'close', None)
+            if callable(close):
+                close()
         returncode = task.process.returncode
         self._leave_paused_state(task, resume_process=False)
         
@@ -801,7 +973,7 @@ class Recorder:
 
         # При штатной остановке кнопкой/таймером код зависит от платформы и
         # сигнала; окончательное качество всё равно определит ffprobe ниже.
-        process_ok = (returncode in (0, 255) or task.stop_requested) and not task.storage_error
+        process_ok = (returncode in (0, 255) or task.stop_requested) and not task.storage_error and not task.stalled
         output_file = Path(task.output_path)
         with self._lock:
             closing = self._closing
@@ -811,6 +983,8 @@ class Recorder:
                 output_file = finalize_recording(task.recovery_marker)
             except Exception as error:
                 task.finalization_error = str(error)
+                if isinstance(error, DiskSpaceError):
+                    task.storage_error = str(error)
                 task.output_path = str(task.capture_path)
                 output_file = task.capture_path
                 process_ok = False
@@ -839,6 +1013,8 @@ class Recorder:
                 logger.info(f"Recorder: Запись '{task.channel_name}' завершена успешно")
         elif result_status == PARTIAL:
             reasons = []
+            if task.stalled:
+                reasons.append('Запись остановлена: поток перестал продвигаться')
             if task.storage_error:
                 reasons.append(task.storage_error)
             if task.finalization_error:
@@ -858,29 +1034,20 @@ class Recorder:
             task.error_message = (task.storage_error + ". " if task.storage_error else "") + err_msg
             logger.error(f"Recorder: Ошибка обработки '{task.channel_name}' (code {returncode}): {err_msg}")
 
-        if task.on_complete:
-            try:
-                task.on_complete(success, task.channel_name, task.output_path, task.ended_early, result_status)
-            except Exception as error:
-                logger.error(f"Recorder: ошибка callback завершения '{task.channel_name}': {error}")
-
-        self._notify_ui()
+        if notify:
+            self._notify_completion(task)
+            self._notify_ui()
 
     def remove_completed_tasks(self) -> int:
         """Убирает завершённые строки из интерфейса, не удаляя медиафайлы."""
         with self._lock:
             completed_ids = [task_id for task_id, task in self.tasks.items()
-                             if not task.is_recording and task.result_status is not None]
+                             if not task.is_recording and not task.recovering and task.result_status is not None]
             for task_id in completed_ids:
                 del self.tasks[task_id]
         if completed_ids:
             self._notify_ui()
         return len(completed_ids)
-        with self._lock:
-            timer = self._stop_timers.pop(task.task_id, None)
-            self._wait_threads.discard(threading.current_thread())
-        if timer:
-            timer.cancel()
 
     def _timestretch_task_output(self, task: RecordingTask) -> bool:
         """Растягивает файл, записанный на ускоренном playbackRate, обратно
@@ -985,6 +1152,8 @@ class Recorder:
             timer.cancel()
 
         for task in tasks:
+            task.stop_requested = True
+            task.retry_cancel.set()
             if task.process and task.is_recording and task.process.poll() is None:
                 task.final_duration = task.get_elapsed_time()
                 task.stop_requested = True

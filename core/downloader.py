@@ -372,6 +372,10 @@ class Downloader:
             task.disk_guard.stop_monitor()
         watch_done.set()
         stderr_thread.join(timeout=1)
+        for pipe in (task.process.stdout, task.process.stderr):
+            close = getattr(pipe, 'close', None)
+            if callable(close):
+                close()
         returncode = task.process.returncode
 
         if self._is_canceled(task):

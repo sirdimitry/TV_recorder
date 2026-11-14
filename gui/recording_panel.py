@@ -22,6 +22,9 @@ from utils.logger import logger
 
 STATE_ACCENT = {
     'recording': 'red',
+    'connecting': 'yellow',
+    'reconnecting': 'yellow',
+    'retrying': 'yellow',
     'paused': 'yellow',
     'finalizing': 'yellow',
     'completed': 'green',
@@ -106,8 +109,14 @@ class RecordingPanel(ctk.CTkFrame):
     def _task_state(self, task: RecordingTask) -> str:
         if task.is_paused:
             return 'paused'
+        if task.connection_state == 'retrying' and task.recovering:
+            return 'retrying'
+        if task.is_recording and task.connection_state in ('connecting', 'reconnecting'):
+            return task.connection_state
         if task.is_recording:
             return 'recording'
+        if task.recovering:
+            return 'retrying'
         if task.result_status == 'partial':
             return 'partial'
         if task.result_status == 'processing_error':
@@ -142,7 +151,8 @@ class RecordingPanel(ctk.CTkFrame):
             state_text = {
                 'paused': 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
                 'partial': 'Сохранено частично', 'ended_early': 'Ended early',
-                'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing',
+                'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing', 'connecting': 'Подключение',
+                'reconnecting': 'Переподключение', 'retrying': 'Восстановление',
             }[state]
             widgets['result'].configure(text=state_text,
                                          text_color=self.colors['text_secondary'] if state == 'recording' else accent)
@@ -150,15 +160,16 @@ class RecordingPanel(ctk.CTkFrame):
             widgets['status_icon'].configure(image=get_icon(
                 {'paused': 'pause', 'recording': 'record', 'completed': 'record',
                  'partial': 'signal_off', 'ended_early': 'signal_off',
-                 'processing_error': 'close', 'failed': 'close', 'finalizing': 'record'}[state], accent, 16))
+                 'processing_error': 'close', 'failed': 'close', 'finalizing': 'record', 'connecting': 'record',
+                 'reconnecting': 'record', 'retrying': 'record'}[state], accent, 16))
 
             pause_icon = 'play' if task.is_paused else 'pause'
             widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
             button_state = 'normal' if task.is_recording else 'disabled'
             widgets['btn_pause'].configure(state=button_state)
-            widgets['btn_stop'].configure(state=button_state)
+            widgets['btn_stop'].configure(state='normal' if task.is_recording or task.recovering else 'disabled')
 
-            if not task.is_recording and 'btn_open' not in widgets:
+            if not task.is_recording and not task.recovering and 'btn_open' not in widgets:
                 btn_open = self._icon_button(widgets['actions'], 'folder', lambda t=task: self._open_file(t))
                 btn_open.pack(side='left', padx=1, before=widgets['btn_del'])
                 widgets['btn_open'] = btn_open

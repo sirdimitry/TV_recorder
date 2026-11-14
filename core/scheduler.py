@@ -37,6 +37,7 @@ class RecordingScheduler:
         self._watchdog_stop = threading.Event()
         self._entries = []
         self._attempts = {}
+        self._attempt_counts = {}
         self._deadlines = {}
         self._status_callback: Optional[Callable[[int, str], None]] = None
 
@@ -154,6 +155,8 @@ class RecordingScheduler:
                 del self._deadlines[task_id]
             self._attempts = {key: retry for key, retry in self._attempts.items()
                               if key[1] > now - timedelta(days=2)}
+            self._attempt_counts = {key: count for key, count in self._attempt_counts.items()
+                                    if key[1] > now - timedelta(days=2)}
         for task_id in expired:
             self.recorder.stop_recording(task_id)
         for target, item, index in entries:
@@ -178,6 +181,9 @@ class RecordingScheduler:
                 retry_at = self._attempts[key]
                 if retry_at is None or retry_at > now:
                     return
+            if self._attempt_counts.get(key, 0) >= 4:
+                return
+            self._attempt_counts[key] = self._attempt_counts.get(key, 0) + 1
             self._attempts[key] = None
 
         def record():
@@ -289,7 +295,7 @@ class RecordingScheduler:
                     start_deadline_timestamp=deadline.timestamp(),
                     on_complete=lambda success, n, path, early, result, idx=index:
                         self._on_recording_complete(success, n, path, early, result, idx,
-                                                    schedule_item=schedule_item),
+                                                    schedule_item=schedule_item, retry_allowed=False),
                 )
                 if not task_id:
                     self._on_recording_error(name, 'Не удалось начать запись экрана')
@@ -335,7 +341,8 @@ class RecordingScheduler:
             source='schedule',
             on_complete=lambda success, n, path, early, result, idx=index:
                 self._on_recording_complete(success, n, path, early, result, idx,
-                                            schedule_item=schedule_item),
+                                            schedule_item=schedule_item,
+                                            retry_allowed=False),
             audio_url=audio_url,
             extra_headers=extra_headers,
             duration_limit_seconds=remaining if source_type == 'link' else None,
@@ -354,8 +361,8 @@ class RecordingScheduler:
 
     def _on_recording_complete(self, success: bool, channel_name: str, file_path: str,
                                 ended_early: bool = False, result_status: str = 'completed',
-                                index: Optional[int] = None, *, schedule_item=None):
-        if schedule_item is not None and (not success or ended_early):
+                                index: Optional[int] = None, *, schedule_item=None, retry_allowed=True):
+        if retry_allowed and schedule_item is not None and (not success or ended_early):
             now = datetime.now()
             window = self._active_window(schedule_item, now)
             if window is not None:
