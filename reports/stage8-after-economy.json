@@ -1,0 +1,78 @@
+[
+  {
+    "recordings": 1,
+    "thumbnails": false,
+    "mode": "economy",
+    "wall_seconds": 15.639,
+    "cpu_seconds": 0.65,
+    "cpu_percent_one_core": 4.2,
+    "largest_child_peak_rss_mib": 27.6,
+    "statuses": [
+      "completed"
+    ],
+    "frames": [
+      0
+    ],
+    "output_bytes": 3541911
+  },
+  {
+    "recordings": 1,
+    "thumbnails": true,
+    "mode": "economy",
+    "wall_seconds": 15.738,
+    "cpu_seconds": 0.97,
+    "cpu_percent_one_core": 6.2,
+    "largest_child_peak_rss_mib": 55.8,
+    "statuses": [
+      "completed"
+    ],
+    "frames": [
+      3
+    ],
+    "output_bytes": 3541911
+  },
+  {
+    "recordings": 4,
+    "thumbnails": false,
+    "mode": "economy",
+    "wall_seconds": 15.655,
+    "cpu_seconds": 2.727,
+    "cpu_percent_one_core": 17.4,
+    "largest_child_peak_rss_mib": 27.8,
+    "statuses": [
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "frames": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "output_bytes": 14167644
+  },
+  {
+    "recordings": 4,
+    "thumbnails": true,
+    "mode": "economy",
+    "wall_seconds": 15.737,
+    "cpu_seconds": 3.61,
+    "cpu_percent_one_core": 22.9,
+    "largest_child_peak_rss_mib": 60.0,
+    "statuses": [
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "frames": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "output_bytes": 14167644
+  }
+]

@@ -20,7 +20,8 @@ from utils.icons import get_icon
 from utils.logger import logger
 
 TILE_IMG_SIZE = (220, 124)
-POLL_MS = 250  # снимки в Recorder идут непрерывно на ~4 fps — опрашиваем в том же темпе
+POLL_MS = 250
+MODE_LABELS = {'Экономичный': 'economy', 'Обычный': 'normal', 'Выключен': 'off'}
 
 
 class RecordingMonitorWindow(ctk.CTkToplevel):
@@ -31,6 +32,7 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
     @classmethod
     def show(cls, root, recorder: Recorder):
         if cls._instance is not None and cls._instance.winfo_exists():
+            cls._instance.deiconify()
             cls._instance.lift()
             cls._instance.focus_force()
             return
@@ -45,6 +47,10 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         super().__init__(root)
         self.recorder = recorder
         self._running = True
+        self._visible = True
+        self._owns_snapshots = False
+        self._refresh_pending = False
+        self._poll_id = None
         self.tile_widgets = {}
         # Прослушивание — отдельный ffplay-процесс поверх того же URL, что и
         # запись (см. core/audio_listen.py). НЕ трогает саму запись никак —
@@ -57,7 +63,7 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         c = Config.COLORS
         self.title("Мониторинг записей")
         self.geometry("900x600")
-        self.minsize(420, 300)
+        self.minsize(560, 300)
         self.configure(fg_color=c['bg_primary'])
 
         header = ctk.CTkFrame(self, fg_color='transparent')
@@ -71,25 +77,72 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
             fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
             image=get_icon('volume', c['text_secondary'], 16), command=self._toggle_mute)
         self.mute_btn.pack(side='right')
+        self.mode_picker = ctk.CTkOptionMenu(header, values=list(MODE_LABELS), width=140,
+                                            command=self._set_mode)
+        self.mode_picker.set(next(label for label, mode in MODE_LABELS.items()
+                                  if mode == self.recorder.snapshot_mode))
+        self.mode_picker.pack(side='right', padx=8)
+
 
         self.grid_frame = ctk.CTkScrollableFrame(self, fg_color='transparent')
         self.grid_frame.pack(fill='both', expand=True, padx=12, pady=(0, 12))
 
         self.recorder.set_ui_callback(self._on_recorder_update)
         self.recorder.acquire_snapshot_consumer()
+        self._owns_snapshots = True
+        self.bind('<Map>', self._mapped, add='+')
+        self.bind('<Unmap>', self._unmapped, add='+')
         self.protocol("WM_DELETE_WINDOW", self._close)
 
         self._rebuild()
         self._poll()
 
+    def _set_mode(self, label):
+        self.recorder.set_snapshot_mode(MODE_LABELS[label])
+        if MODE_LABELS[label] == 'off':
+            self._clear_images()
+
+    def _mapped(self, event):
+        if event.widget is self:
+            self._set_visible(True)
+
+    def _unmapped(self, event):
+        if event.widget is self:
+            self._set_visible(False)
+
+    def _clear_images(self, message='Миниатюры выключены'):
+        for widgets in self.tile_widgets.values():
+            widgets['img_lbl'].configure(image=None, text=message)
+            widgets['img_lbl']._img_ref = None
+            widgets['snapshot_seq'] = -1
+
+    def _set_visible(self, visible):
+        self._visible = visible and self._running
+        if self._visible and not self._owns_snapshots:
+            self.recorder.acquire_snapshot_consumer()
+            self._owns_snapshots = True
+            self._maybe_rebuild()
+            if self.recorder.snapshot_mode != 'off':
+                self._clear_images('Подключение…')
+        elif not self._visible and self._owns_snapshots:
+            self.recorder.release_snapshot_consumer()
+            self._owns_snapshots = False
+            self._stop_listening()
+            self._clear_images()
+
     def _on_recorder_update(self):
-        if self._running:
+        if self._running and self._visible and not self._refresh_pending:
+            self._refresh_pending = True
             self.after(0, self._maybe_rebuild)
 
+    def _monitor_tasks(self):
+        return [task for task in self.recorder.get_all_tasks() if task.is_recording or task.recovering]
+
     def _maybe_rebuild(self):
-        if not self._running:
+        self._refresh_pending = False
+        if not self._running or not self._visible:
             return
-        current_ids = {t.task_id for t in self.recorder.get_all_tasks()}
+        current_ids = {t.task_id for t in self._monitor_tasks()}
         if current_ids != set(self.tile_widgets.keys()):
             self._rebuild()
 
@@ -98,7 +151,7 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
             w.destroy()
         self.tile_widgets.clear()
 
-        tasks = self.recorder.get_all_tasks()
+        tasks = self._monitor_tasks()
         self.count_lbl.configure(text=f"({len(tasks)})")
 
         if self._listening_task_id and self._listening_task_id not in {t.task_id for t in tasks}:
@@ -225,7 +278,11 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
     def _poll(self):
         if not self._running:
             return
-        tasks = {t.task_id: t for t in self.recorder.get_all_tasks()}
+        if not self._visible:
+            self._poll_id = self.after(1000, self._poll)
+            return
+        profile = self.recorder.get_snapshot_profile()
+        tasks = {t.task_id: t for t in self._monitor_tasks()}
         for tid, widgets in self.tile_widgets.items():
             task = tasks.get(tid)
             if not task:
@@ -234,17 +291,20 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
             if task.last_snapshot and task.snapshot_seq != widgets['snapshot_seq']:
                 try:
                     img = to_ctk_image(task.last_snapshot, TILE_IMG_SIZE)
-                    widgets['img_lbl'].configure(image=img)
+                    widgets['img_lbl'].configure(image=img, text='')
                     widgets['img_lbl']._img_ref = img
                     widgets['snapshot_seq'] = task.snapshot_seq
                 except Exception as e:
                     logger.debug(f"RecordingMonitor: ошибка снимка: {e}")
-        self.after(POLL_MS, self._poll)
+        delay = max(POLL_MS, min(1000, round(1000/profile.fps))) if profile else 1000
+        self._poll_id = self.after(delay, self._poll)
 
     def _close(self):
         self._running = False
+        self._set_visible(False)
         self._stop_listening()
+        if self._poll_id is not None:
+            self.after_cancel(self._poll_id)
         self.recorder.remove_ui_callback(self._on_recorder_update)
-        self.recorder.release_snapshot_consumer()
         RecordingMonitorWindow._instance = None
         self.destroy()

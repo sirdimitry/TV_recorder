@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Callable, Dict
 from core import recording_progress as progress_policy
 from core.recording_progress import RecordingProgress
+from core.monitor_profile import MODES, monitor_profile
 from core.sleep_inhibitor import SleepInhibitor
 from core.disk_space import DiskGuard, DiskSpaceError, ensure_space
 from core.recording_recovery import FRAGMENT_FLAGS, prepare_recording, finalize_recording, release_recording
@@ -96,6 +97,8 @@ class RecordingTask:
         self.last_snapshot: Optional[bytes] = None  # JPEG-байты последнего пойманного кадра
         self.snapshot_seq = 0  # растёт при каждом новом кадре — по нему потребители понимают, что картинку пора перерисовать
         self.snapshot_stream: Optional[LiveThumbnailStream] = None
+        self.snapshot_profile = None
+        self.snapshot_generation = 0
         self.is_screen_capture = False  # запись через захват экрана (core/screen_capture.py), а не -c copy потока
         self.browser_proc: Optional[subprocess.Popen] = None  # окно-браузер (gui/browser_capture.py) для screen_capture
         # Позиция в САМОМ ролике ("С:"/"До:" из диалога добавления ссылки,
@@ -186,6 +189,8 @@ class Recorder:
         self._running = False
         self._ui_callbacks: list = []  # несколько подписчиков (панель записей, списки каналов/ссылок)
         self._snapshot_consumers = 0
+        saved_mode = Config._read_settings().get('snapshot_mode', 'economy')
+        self.snapshot_mode = saved_mode if saved_mode in MODES else 'economy'
         self._closing = False
         self._storage_callback = None
         self._stop_timers: Dict[str, threading.Timer] = {}
@@ -1353,44 +1358,67 @@ class Recorder:
                          f"файл остался ускоренным ({task.speed_factor:.0f}x): {e}")
             return False
 
-    def _start_snapshot_stream(self, task: RecordingTask):
-        """Запускает один поток кадров для задачи, пока открыт монитор."""
-        def on_frame(jpeg_bytes: bytes):
-            task.last_snapshot = jpeg_bytes
-            task.snapshot_seq += 1
-            # _notify_ui() здесь не дёргаем: при нескольких записях это было
-            # бы широковещательное уведомление всем подписчикам на каждый
-            # кадр каждой задачи. Окно монитора само опрашивает snapshot_seq.
-
+    def get_snapshot_profile(self):
         with self._lock:
-            if (self._snapshot_consumers <= 0 or task.is_screen_capture
-                    or not task.is_recording or task.snapshot_stream is not None):
-                return
-            task.snapshot_stream = LiveThumbnailStream(
-                task.stream_url, task.headers, fps=SNAPSHOT_FPS, on_frame=on_frame)
-            task.snapshot_stream.start()
+            count = sum(task.is_recording and not task.is_paused and not task.is_screen_capture
+                        for task in self.tasks.values())
+            return monitor_profile(self.snapshot_mode, count)
+
+    def set_snapshot_mode(self, mode, *, persist=True):
+        if mode not in MODES:
+            raise ValueError('Неизвестный режим монитора')
+        if persist:
+            Config._write_settings({'snapshot_mode': mode})
+        with self._lock:
+            self.snapshot_mode = mode
+            self._sync_snapshot_streams()
+        self._notify_ui()
+
+    def _start_snapshot_stream(self, task):
+        self._sync_snapshot_streams()
+
+    def _sync_snapshot_streams(self):
+        with self._lock:
+            profile = self.get_snapshot_profile() if self._snapshot_consumers and not self._closing else None
+            for task in self.tasks.values():
+                eligible = (profile is not None and task.is_recording and not task.is_paused
+                            and not task.is_screen_capture)
+                if not eligible:
+                    if task.snapshot_stream is not None:
+                        self._stop_snapshot_stream(task)
+                    continue
+                if task.snapshot_stream is not None and task.snapshot_profile == profile:
+                    continue
+                self._stop_snapshot_stream(task)
+                task.snapshot_profile = profile
+                generation = task.snapshot_generation
+                def on_frame(jpeg_bytes, current=task, expected=generation):
+                    with self._lock:
+                        if current.snapshot_generation != expected or current.snapshot_stream is None:
+                            return
+                        current.last_snapshot = jpeg_bytes
+                        current.snapshot_seq += 1
+                task.snapshot_stream = LiveThumbnailStream(
+                    task.stream_url, task.headers, fps=profile.fps, width=profile.width,
+                    keyframes_only=profile.keyframes_only, on_frame=on_frame)
+                task.snapshot_stream.start()
 
     def acquire_snapshot_consumer(self):
-        """Включает живые миниатюры, пока хотя бы одно окно их показывает."""
         with self._lock:
             self._snapshot_consumers += 1
-            tasks = [task for task in self.tasks.values() if task.is_recording]
-        for task in tasks:
-            self._start_snapshot_stream(task)
+            self._sync_snapshot_streams()
 
     def release_snapshot_consumer(self):
-        """Останавливает декодирование кадров после закрытия последнего окна."""
         with self._lock:
-            self._snapshot_consumers = max(0, self._snapshot_consumers - 1)
-            should_stop = self._snapshot_consumers == 0
-            tasks = list(self.tasks.values()) if should_stop else []
-        for task in tasks:
-            self._stop_snapshot_stream(task)
+            self._snapshot_consumers = max(0, self._snapshot_consumers-1)
+            self._sync_snapshot_streams()
 
-    def _stop_snapshot_stream(self, task: RecordingTask):
+    def _stop_snapshot_stream(self, task):
         with self._lock:
             stream = task.snapshot_stream
             task.snapshot_stream = None
+            task.snapshot_profile = None
+            task.snapshot_generation += 1
             task.last_snapshot = None
         if stream is not None:
             stream.stop()
@@ -1402,6 +1430,7 @@ class Recorder:
             while self._running:
                 self._sleep_guard.refresh()
                 self._screen_guard.refresh()
+                self._sync_snapshot_streams()
                 with self._lock:
                     has_active = any(t.is_recording for t in self.tasks.values())
                 

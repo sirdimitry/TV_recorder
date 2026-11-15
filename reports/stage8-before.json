@@ -1,0 +1,74 @@
+[
+  {
+    "recordings": 1,
+    "thumbnails": false,
+    "wall_seconds": 15.661,
+    "cpu_seconds": 0.726,
+    "cpu_percent_one_core": 4.6,
+    "largest_child_peak_rss_mib": 27.3,
+    "statuses": [
+      "completed"
+    ],
+    "frames": [
+      0
+    ],
+    "output_bytes": 3541911
+  },
+  {
+    "recordings": 1,
+    "thumbnails": true,
+    "wall_seconds": 15.73,
+    "cpu_seconds": 1.619,
+    "cpu_percent_one_core": 10.3,
+    "largest_child_peak_rss_mib": 95.7,
+    "statuses": [
+      "completed"
+    ],
+    "frames": [
+      29
+    ],
+    "output_bytes": 3541911
+  },
+  {
+    "recordings": 4,
+    "thumbnails": false,
+    "wall_seconds": 15.768,
+    "cpu_seconds": 2.759,
+    "cpu_percent_one_core": 17.5,
+    "largest_child_peak_rss_mib": 27.9,
+    "statuses": [
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "frames": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "output_bytes": 14167644
+  },
+  {
+    "recordings": 4,
+    "thumbnails": true,
+    "wall_seconds": 15.763,
+    "cpu_seconds": 5.641,
+    "cpu_percent_one_core": 35.8,
+    "largest_child_peak_rss_mib": 96.5,
+    "statuses": [
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "frames": [
+      29,
+      29,
+      29,
+      29
+    ],
+    "output_bytes": 14167644
+  }
+]

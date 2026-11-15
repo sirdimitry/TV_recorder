@@ -1,9 +1,7 @@
 # core/live_stream.py
-"""Непрерывный низкочастотный MJPEG-захват из потока через ffmpeg — вместо
-разового кадра раз в несколько секунд отдаёт кадры с заданным fps, пока
-поток открыт. Не декодирует полноценное видео и не тянет звук — просто
-просит ffmpeg отдавать JPEG-кадры с нужной частотой и разбирает их из
-байтового потока по маркерам SOI/EOI (0xFFD8...0xFFD9)."""
+"""Continuous JPEG thumbnails. Low output FPS alone does not avoid decoding
+intermediate video frames; keyframes_only explicitly skips those in the decoder.
+"""
 import subprocess
 import threading
 import time
@@ -25,13 +23,17 @@ class LiveThumbnailStream:
     def __init__(self, url: str, headers: Optional[dict], fps: float,
                  on_frame: Callable[[bytes], None], width: int = 320,
                  start_offset: float = 0, duration_limit: Optional[float] = None,
-                 on_timed_frame=None):
+                 on_timed_frame=None, keyframes_only: bool = False):
         self.url = url
         self.headers = headers
         self.fps = fps
         self.width = width
         self.on_frame = on_frame
         self.on_timed_frame = on_timed_frame
+        if keyframes_only and on_timed_frame is not None:
+            raise ValueError('Опорные кадры не подходят для покадровой шкалы архива')
+        self.keyframes_only = keyframes_only
+        self._worker = None
         self.start_offset = start_offset
         self.duration_limit = duration_limit
         self._process: Optional[subprocess.Popen] = None
@@ -44,7 +46,8 @@ class LiveThumbnailStream:
             return
         self._running = True
         self._stop_event.clear()
-        threading.Thread(target=self._run, daemon=True).start()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
 
     def stop(self):
         self._running = False
@@ -56,12 +59,18 @@ class LiveThumbnailStream:
             except Exception:
                 pass
 
+    def wait_stopped(self, timeout=5):
+        if self._worker and self._worker is not threading.current_thread():
+            self._worker.join(timeout=timeout)
+        return self._worker is None or not self._worker.is_alive()
+
     def _watch_stall(self, proc, last_frame, finished):
         """A network reconnect can otherwise keep read() blocked indefinitely."""
+        timeout = max(90.0, FRAME_TIMEOUT) if self.keyframes_only else FRAME_TIMEOUT
         while not finished.wait(1.0):
-            if self._stop_event.is_set() or time.monotonic() - last_frame[0] >= FRAME_TIMEOUT:
+            if self._stop_event.is_set() or time.monotonic() - last_frame[0] >= timeout:
                 if not self._stop_event.is_set():
-                    logger.warning("LiveThumbnailStream: нет кадров 30с, перезапускаем предпросмотр")
+                    logger.warning("LiveThumbnailStream: нет кадров %.0fс, перезапускаем предпросмотр", timeout)
                 try:
                     proc.terminate()
                     if not finished.wait(2.0):
@@ -99,11 +108,14 @@ class LiveThumbnailStream:
             # сеть/диск (в разы быстрее реального времени) — кадры сыпались
             # бы залпом, а не в темпе настоящего эфира.
             '-re',
+            *(['-skip_frame', 'nokey'] if self.keyframes_only else []),
             '-i', self.url,
             *(['-ss', str(self.start_offset)] if self.start_offset else []),
             *(['-t', str(self.duration_limit)] if self.duration_limit else []),
             '-an',
-            '-vf', f'fps={self.fps},scale={self.width}:-1',
+            '-vf', (f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{1/self.fps})',scale={self.width}:-1"
+                    if self.keyframes_only else f'fps={self.fps},scale={self.width}:-1'),
+            *(['-fps_mode', 'vfr'] if self.keyframes_only else []),
             '-q:v', '7',
             '-f', 'image2pipe',
             '-vcodec', 'mjpeg',
