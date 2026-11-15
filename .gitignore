@@ -87,3 +87,6 @@ packaging/ffmpeg/
 
 # Crash-recovery metadata contains user-selected recording paths
 data/pending_recordings/
+
+# Persistent local recording history
+data/recording_history/

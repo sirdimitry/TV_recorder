@@ -22,6 +22,7 @@ from utils.logger import logger
 
 STATE_ACCENT = {
     'recording': 'red',
+    'joining': 'yellow',
     'connecting': 'yellow',
     'reconnecting': 'yellow',
     'retrying': 'yellow',
@@ -63,6 +64,21 @@ class RecordingPanel(ctk.CTkFrame):
         from gui.recording_monitor import RecordingMonitorWindow
         RecordingMonitorWindow.show(self.winfo_toplevel(), self.recorder)
 
+    def _open_history(self):
+        from gui.recording_history import show_history
+        if self.recorder.history is None:
+            messagebox.showwarning('История записей', 'История недоступна в этом сеансе.')
+            return
+        show_history(self.winfo_toplevel(), self.recorder.history)
+
+    def _show_task_details(self, task):
+        from gui.recording_history import show_details
+        record = self.recorder.history.read(task.task_id) if self.recorder.history else None
+        if record:
+            show_details(self.winfo_toplevel(), record)
+        else:
+            messagebox.showinfo('Подробности записи', task.error_message or 'Подробности ещё не сохранены.')
+
     def _setup_ui(self):
         c = self.colors
         header_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -74,12 +90,15 @@ class RecordingPanel(ctk.CTkFrame):
         self.count_label = ctk.CTkLabel(header_frame, text="(0)", font=ctk.CTkFont(size=11),
                                          text_color=c['text_muted'])
         self.count_label.pack(side='left', padx=4)
+        ctk.CTkButton(header_frame, text="История", width=72, height=26,
+                      command=self._open_history).pack(side='right', padx=4)
+
 
         ctk.CTkButton(header_frame, text="", image=get_icon('grid', c['text_primary'], 15),
                       width=28, height=28, corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'],
                       hover_color=c['bg_hover'], command=self._open_monitor).pack(side='right')
 
-        ctk.CTkLabel(self, text="На паузе прямой эфир пропускается.",
+        ctk.CTkLabel(self, text="На паузе эфир пропускается. Нажмите на статус для подробностей.",
                      font=ctk.CTkFont(size=10), text_color=c['text_muted'],
                      anchor='w').pack(fill='x', padx=14, pady=(0, 4))
 
@@ -111,6 +130,8 @@ class RecordingPanel(ctk.CTkFrame):
                 self._add_task_row(task)
 
     def _task_state(self, task: RecordingTask) -> str:
+        if task.merging:
+            return 'joining'
         if task.is_paused:
             return 'paused'
         if task.connection_state == 'retrying' and task.recovering:
@@ -156,7 +177,7 @@ class RecordingPanel(ctk.CTkFrame):
                 'paused': 'Пауза' if task.is_live else 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
                 'partial': 'Сохранено с паузами' if task.pause_count and not task.retry_count else 'Сохранено частично', 'ended_early': 'Ended early',
                 'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing', 'connecting': 'Подключение',
-                'reconnecting': 'Переподключение', 'retrying': 'Восстановление',
+                'reconnecting': 'Переподключение', 'retrying': 'Восстановление', 'joining': 'Сборка файла',
             }[state]
             widgets['result'].configure(text=state_text,
                                          text_color=self.colors['text_secondary'] if state == 'recording' else accent)
@@ -165,13 +186,13 @@ class RecordingPanel(ctk.CTkFrame):
                 {'paused': 'pause', 'recording': 'record', 'completed': 'record',
                  'partial': 'signal_off', 'ended_early': 'signal_off',
                  'processing_error': 'close', 'failed': 'close', 'finalizing': 'record', 'connecting': 'record',
-                 'reconnecting': 'record', 'retrying': 'record'}[state], accent, 16))
+                 'reconnecting': 'record', 'retrying': 'record', 'joining': 'record'}[state], accent, 16))
 
             pause_icon = 'play' if task.is_paused else 'pause'
             widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
             button_state = 'normal' if task.is_recording or (task.is_live and task.is_paused and task.recovering) else 'disabled'
             widgets['btn_pause'].configure(state=button_state)
-            widgets['btn_stop'].configure(state='normal' if task.is_recording or task.recovering else 'disabled')
+            widgets['btn_stop'].configure(state='normal' if (task.is_recording or task.recovering) and not task.merging else 'disabled')
 
             if not task.is_recording and not task.recovering and 'btn_open' not in widgets:
                 btn_open = self._icon_button(widgets['actions'], 'folder', lambda t=task: self._open_file(t))
@@ -326,6 +347,8 @@ class RecordingPanel(ctk.CTkFrame):
         result_lbl = ctk.CTkLabel(row, text="Recording", font=ctk.CTkFont(size=11),
                                    text_color=c['text_secondary'])
         result_lbl.pack(side='left', pady=8)
+        result_lbl.configure(cursor='hand2')
+        result_lbl.bind('<Button-1>', lambda event, item=task: self._show_task_details(item))
 
         self.task_widgets[task.task_id] = {
             'row': row,

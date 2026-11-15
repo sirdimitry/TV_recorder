@@ -348,6 +348,9 @@ class RecordingScheduler:
             duration_limit_seconds=remaining if source_type == 'link' else None,
             start_deadline_timestamp=deadline.timestamp(),
             is_live_channel=(source_type != 'link'),
+            expect_audio=target.get('expect_audio', True) if source_type != 'link' else bool(audio_url),
+            expected_duration_seconds=(min(remaining, info.duration) if source_type == 'link'
+                and isinstance(getattr(info, 'duration', None), (int, float)) else remaining),
         )
         if not task_id:
             self._on_recording_error(name, 'Не удалось запустить запись')

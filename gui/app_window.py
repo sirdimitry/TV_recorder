@@ -69,7 +69,16 @@ class AppWindow:
             messagebox.showerror("Ошибка данных", str(error), parent=self.root)
             self.root.destroy()
             raise
-        self.recorder = Recorder()
+        from core.recording_history import RecordingHistory
+        try:
+            history = RecordingHistory(Config.DATA_DIR / 'recording_history')
+        except Exception:
+            logger.exception('История записей недоступна')
+            history = None
+            messagebox.showwarning('История записей', 'Не удалось открыть историю. Запись медиа остаётся доступной.', parent=self.root)
+        self.recorder = Recorder(history=history)
+        self.recorder.history_error_callback = lambda text: self.root.after(
+            0, lambda: not self._closing and messagebox.showwarning('История записей', text, parent=self.root))
         self._capture_permissions = {'full_screen': None, 'without_audio': None}
         self._capture_permission_lock = threading.Lock()
         self._closing = False
@@ -211,7 +220,18 @@ class AppWindow:
             restored, failures = 0, []
             for marker in markers:
                 try:
-                    finalize_recording(marker)
+                    metadata = json.loads(marker.read_text(encoding='utf-8'))
+                    output = finalize_recording(marker)
+                    if self.recorder.history is not None:
+                        try:
+                            self.recorder.history.record_recovered(metadata['capture'], output)
+                        except Exception:
+                            logger.exception('Файл восстановлен, но историю обновить не удалось')
+                            if not self._closing:
+                                try:
+                                    self.recorder.history_error_callback('Файл восстановлен, но историю обновить не удалось.')
+                                except Exception:
+                                    logger.exception('Не удалось показать ошибку истории восстановления')
                     restored += 1
                 except Exception as error:
                     logger.exception("Не удалось восстановить запись %s", marker.name)
@@ -654,7 +674,7 @@ class AppWindow:
                 on_complete=self._on_record_complete,
                 audio_url=channel.get('audio_url'),
                 extra_headers=self.recorder.channel_headers(channel),
-                is_live_channel=True
+                is_live_channel=True, expect_audio=channel.get('expect_audio', True)
             )
             if task_id:
                 logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")
@@ -746,6 +766,8 @@ class AppWindow:
                         on_complete=on_task_complete, audio_url=info.audio_url,
                         extra_headers=info.headers, seek_seconds=seek_seconds,
                         clip_end_seconds=clip_end_seconds, duration_limit_seconds=stop_after,
+                        expected_duration_seconds=(stop_after if stop_after is not None else
+                            max(0, info.duration-(seek_seconds or 0)) if info.duration is not None else None),
                     )
                     if task_id:
                         logger.info(f"Начата мгновенная запись ссылки: {name} (task: {task_id})")

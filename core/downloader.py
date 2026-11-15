@@ -20,7 +20,7 @@ from typing import Callable, Dict, Optional
 
 from core.disk_space import DiskGuard, ensure_space
 from core.link_resolver import resolve_link
-from core.media_probe import COMPLETED, PARTIAL, classify_media
+from core.media_probe import COMPLETED, PARTIAL, classify_media, assess_probe
 from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
 from utils.filenames import unique_media_path
 from utils.logger import logger
@@ -50,6 +50,8 @@ class DownloadTask:
         self.on_complete: Optional[Callable] = None
         self.clip_start = 0.0
         self.clip_end: Optional[float] = None
+        self.actual_duration = None
+        self.missing_seconds = None
         self.storage_error = ""
         self.disk_guard = None
         self.last_activity = time.monotonic()
@@ -69,6 +71,8 @@ class DownloadTask:
             'name': self.name,
             'thumbnail': self.thumbnail,
             'duration': self.duration,
+            'actual_duration': self.actual_duration,
+            'missing_seconds': self.missing_seconds,
             'target_height': self.target_height,
             'output_path': self.output_path,
             'status': self.status,
@@ -386,6 +390,9 @@ class Downloader:
 
         process_ok = (returncode == 0 or returncode == 255) and not task.storage_error
         result_status, probe = classify_media(output_path, process_ok, expect_audio=bool(info.audio_url))
+        assessment = assess_probe(probe, process_ok, expect_audio=bool(info.audio_url), expected_duration=task.duration)
+        result_status = assessment.status
+        task.actual_duration, task.missing_seconds = assessment.actual_duration, assessment.missing_seconds
         if (task.clip_end is not None and result_status == COMPLETED
                 and (probe.duration is None or probe.duration + .5 < task.duration)):
             result_status = PARTIAL
@@ -406,7 +413,7 @@ class Downloader:
                     logger.info(f"Downloader: '{task.name}' скачан → {output_path}")
                 elif result_status == PARTIAL:
                     task.status = 'partial'
-                    reasons = []
+                    reasons = list(assessment.reasons)
                     if not process_ok:
                         reasons.append(f'ffmpeg завершился с кодом {returncode}')
                     if info.audio_url and not probe.has_audio:

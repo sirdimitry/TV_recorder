@@ -148,6 +148,8 @@ class LivePauseIntegrationTests(unittest.TestCase):
                     if mode == 'repeat':
                         paths = [Path(part['path']) for part in task.parts]
                         original_hashes = [hashlib.sha256(p.read_bytes()).hexdigest() for p in paths]
+                        self.assertTrue(task.merged_path)  # No manual action required.
+                        self.assertTrue(task.output_path.endswith('_joined.mp4'))
                         merged = recorder.merge_recording_parts(tid)
                         self.assertTrue(probe_media(merged).has_audio)
                         expected = sum(probe_media(path).duration for path in paths)
