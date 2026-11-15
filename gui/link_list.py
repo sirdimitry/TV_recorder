@@ -1,6 +1,6 @@
 # gui/link_list.py
 import threading
-from tkinter import messagebox
+from gui.inline_messages import messagebox
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
@@ -343,6 +343,8 @@ class LinkList(ctk.CTkFrame):
             messagebox.showwarning("Внимание", f"У «{name}» нет ссылки")
             return
 
-        from gui.mini_player import MiniPlayer
-        logger.info(f"Открыт крупный предпросмотр: {name}")
-        MiniPlayer(self.root, name, url, large=True, resolve_via_ytdlp=True)
+        self._on_click(name)
+        widgets = self.link_widgets.get(name)
+        info = widgets.get('resolved_info') if widgets else None
+        if not (info and info.ok and info.video_url):
+            messagebox.showwarning('Предпросмотр', 'Прямая ссылка пока недоступна. Дождитесь проверки ссылки или используйте запись через браузер.', parent=self)

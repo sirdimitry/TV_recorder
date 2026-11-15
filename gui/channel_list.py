@@ -1,6 +1,6 @@
 # gui/channel_list.py
 import threading
-from tkinter import messagebox
+from gui.inline_messages import messagebox
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk

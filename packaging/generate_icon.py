@@ -3,12 +3,7 @@
 """Строит packaging/icon.icns с нуля: рисует squircle-иконку приложения
 (тот же процедурный Pillow-подход, что и у иконок интерфейса в
 utils/icons.py, но с градиентом/тенью — полноценная macOS app icon, а не
-плоский монохромный значок), раскладывает по стандартным размерам
-.iconset и компилирует через iconutil (входит в macOS, отдельно ставить
-не нужно)."""
-import shutil
-import subprocess
-import sys
+плоский монохромный значок), сохраняет стандартный ICNS средствами Pillow без запуска iconutil."""
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -88,22 +83,13 @@ def make_icon(size: int = 1024) -> Image.Image:
 
 
 def main():
-    if sys.platform != 'darwin':
-        print('generate_icon.py требует macOS (iconutil)', file=sys.stderr)
-        sys.exit(1)
-
+    # Pillow writes standard ICNS directly; no iconutil/GUI services required.
     master = make_icon(1024)
-
-    if ICONSET_DIR.exists():
-        shutil.rmtree(ICONSET_DIR)
-    ICONSET_DIR.mkdir()
-
-    for s in (16, 32, 128, 256, 512):
-        master.resize((s, s), Image.LANCZOS).save(ICONSET_DIR / f'icon_{s}x{s}.png')
-        master.resize((s * 2, s * 2), Image.LANCZOS).save(ICONSET_DIR / f'icon_{s}x{s}@2x.png')
-
-    subprocess.run(['iconutil', '-c', 'icns', str(ICONSET_DIR), '-o', str(ICNS_PATH)], check=True)
-    shutil.rmtree(ICONSET_DIR)
+    master.save(ICNS_PATH, format='ICNS')
+    with Image.open(ICNS_PATH) as result:
+        result.load()
+        if result.size != (1024, 1024):
+            raise ValueError('Некорректный размер ICNS')
     print(f'Иконка собрана: {ICNS_PATH}')
 
 

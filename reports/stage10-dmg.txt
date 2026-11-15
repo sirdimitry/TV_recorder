@@ -1,0 +1,2 @@
+hdiutil: WARNING: 'hdiutil create -volname -format ...' is deprecated. Please use 'diskutil image create from/blank --volumeName --format ...' instead.
+hdiutil: create failed - Device not configured

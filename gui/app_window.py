@@ -1,6 +1,7 @@
+from gui.inline_messages import messagebox
 # gui/app_window.py
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 from typing import Dict, Optional
 import time
 import threading
@@ -63,6 +64,8 @@ class AppWindow:
         self.root.report_callback_exception = self._report_callback_exception
 
         self.colors = Config.COLORS
+        from gui.inline_pages import InlinePageHost
+        self.root._page_host = InlinePageHost(self.root)
         try:
             self.storage = Storage()
         except StorageError as error:
@@ -879,15 +882,10 @@ class AppWindow:
             self.storage.delete_all_links()
             self._refresh_data()
 
-    def _create_dialog(self, title: str, geo: str) -> ctk.CTkToplevel:
-        c = self.colors
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title(title)
-        dialog.geometry(geo)
-        dialog.transient(self.root)
-        dialog.configure(fg_color=c['bg_secondary'])
-        dialog.after(100, dialog.grab_set)
-        return dialog
+    def _create_dialog(self, title: str, geo: str):
+        # geo retained for callers; pages use the existing window's dimensions.
+        page = self.root._page_host.open(title)
+        return page.body
 
     def _add_channel_dialog(self):
         c = self.colors
@@ -932,7 +930,7 @@ class AppWindow:
             if channel['name'] and channel['url']:
                 self.storage.save_channel(channel)
                 self._refresh_data()
-                dialog.destroy()
+                dialog._inline_page.destroy()
             else:
                 messagebox.showwarning("Внимание", "Заполните название и URL", parent=dialog)
 
@@ -984,7 +982,7 @@ class AppWindow:
                     updated['audio_url'] = None
                 self.storage.save_channel(updated)
                 self._refresh_data()
-                dialog.destroy()
+                dialog._inline_page.destroy()
             else:
                 messagebox.showwarning("Внимание", "Заполните название и URL", parent=dialog)
 
@@ -1100,10 +1098,10 @@ class AppWindow:
 
         def on_url_change(*_):
             if debounce['after_id']:
-                dialog.after_cancel(debounce['after_id'])
+                dialog._inline_page.after_cancel(debounce['after_id'])
             # Не дёргаем yt-dlp на каждое нажатие при ручном наборе ссылки —
             # ждём короткую паузу после последнего изменения поля.
-            debounce['after_id'] = dialog.after(600, start_detection)
+            debounce['after_id'] = dialog._inline_page.after(600, start_detection)
 
         def start_detection():
             url = url_var.get().strip()
@@ -1164,7 +1162,7 @@ class AppWindow:
                                              "укажите «До:» сами, либо оставьте пустым, чтобы писать "
                                              "до ручной остановки)")
 
-                self.root.after(0, apply)
+                dialog._inline_page.after(0, apply)
 
             threading.Thread(target=resolve_async, daemon=True).start()
 
@@ -1244,7 +1242,7 @@ class AppWindow:
             # "Загрузки" (строка сразу же в статусе "resolving").
             initial_name = name or url
             finish(initial_name)
-            dialog.destroy()
+            dialog._inline_page.destroy()
 
             if not name:
                 def resolve_and_rename():
@@ -1306,7 +1304,7 @@ class AppWindow:
             if updated['name'] and updated['url']:
                 self.storage.save_link(updated)
                 self._refresh_data()
-                dialog.destroy()
+                dialog._inline_page.destroy()
             else:
                 messagebox.showwarning("Внимание", "Заполните название и ссылку", parent=dialog)
 
@@ -1349,7 +1347,7 @@ class AppWindow:
                 Config.set_downloads_dir(downloads_dir.get())
                 logger.info(f"Recording folder changed to: {Config.get_recordings_dir()}")
                 logger.info(f"Downloads folder changed to: {Config.get_downloads_dir()}")
-                dialog.destroy()
+                dialog._inline_page.destroy()
             except OSError as error:
                 messagebox.showerror("Пути", f"Не удалось использовать папку:\n{error}", parent=dialog)
 
@@ -1360,7 +1358,6 @@ class AppWindow:
     def _show_about(self):
         c = self.colors
         dialog = self._create_dialog("TV Recorder — About / О программе", "660x560")
-        dialog.minsize(600, 520)
 
         shell = ctk.CTkFrame(dialog, fg_color='transparent')
         shell.pack(fill='both', expand=True, padx=28, pady=24)
@@ -1439,7 +1436,7 @@ class AppWindow:
                       height=36, width=120, corner_radius=Config.RADIUS_SM,
                       fg_color=c['bg_tertiary'], hover_color=c['bg_hover'],
                       text_color=c['text_primary']).pack(side='left')
-        ctk.CTkButton(actions, text="Close / Закрыть", command=dialog.destroy, height=36, width=150,
+        ctk.CTkButton(actions, text="Close / Закрыть", command=dialog._inline_page.destroy, height=36, width=150,
                       corner_radius=Config.RADIUS_SM, fg_color=c['accent'], hover_color=c['accent_hover'],
                       text_color=c['accent_text']).pack(side='right')
 
@@ -1481,6 +1478,8 @@ class AppWindow:
             return
         self._closing = True
         self._network_monitor_running = False
+        messagebox.cancel(self.root)
+        self.root._page_host.close()
         self.root.title("TV Recorder — завершение…")
         RecordingMonitorWindow.close_if_open()
         self.archive_panel.begin_shutdown()

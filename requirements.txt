@@ -1,19 +1,2 @@
-requests>=2.31.0
-httpx>=0.28.1
-truststore>=0.10
-apscheduler>=3.10.0
-# YouTube changes frequently break older yt-dlp releases (extraction errors
-# like "Sign in to confirm you're not a bot" or "Requested format is not
-# available") — if links stop resolving, `pip install --upgrade yt-dlp` first.
-yt-dlp>=2025.06.01
-plyer>=2.1.0
-pyinstaller>=6.0.0
-customtkinter>=6.0.0
-Pillow>=10.0.0
-# Окно встроенного браузера для "режима браузера" (core/screen_capture.py) —
-# на macOS тянет за собой pyobjc и использует системный WKWebView.
-pywebview>=5.0
-# core/tass_provider.py — запускает собственный (не системный) Chromium
-# для tass.ru, куда обычный HTTP-запрос не пускает антибот-защита. После
-# установки пакета один раз выполнить: playwright install chromium
-playwright>=1.50.0
+# Application runtime; build tools are installed separately.
+-r requirements/runtime.txt

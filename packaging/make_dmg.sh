@@ -3,6 +3,7 @@
 # Recorder.app (см. packaging/build.sh) в обычный macOS drag-to-Applications
 # .dmg, только встроенными утилитами (hdiutil) — без установки create-dmg.
 set -euo pipefail
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="$REPO_ROOT/packaging/dist/TV Recorder.app"
@@ -33,6 +34,13 @@ trap cleanup EXIT
 cp -R "$APP_PATH" "$STAGE_DIR/"
 ln -s /Applications "$STAGE_DIR/Applications"
 
+if [ "${DMG_SIMPLE:-0}" = "1" ]; then
+    hdiutil create -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" -ov -format UDZO "$OUT_DMG"
+    shasum -a 256 "$OUT_DMG" > "$OUT_DMG.sha256"
+    echo "Готов тестовый DMG без оформления Finder: $OUT_DMG"
+    exit 0
+fi
+
 RW_DMG=$(mktemp -u).dmg
 hdiutil create -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" -ov -format UDRW "$RW_DMG" >/dev/null
 
@@ -40,14 +48,14 @@ hdiutil create -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" -ov -format UDRW 
 # Build-only dependencies: python3 -m pip install -r packaging/requirements.txt
 ATTACH_PLIST=$(mktemp)
 hdiutil attach "$RW_DMG" -readwrite -noautoopen -plist > "$ATTACH_PLIST"
-MOUNT_DEVICE=$(python3 - "$ATTACH_PLIST" <<'PY'
+MOUNT_DEVICE=$("$PYTHON_BIN" - "$ATTACH_PLIST" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], 'rb') as source:
     entities = plistlib.load(source).get('system-entities', [])
 print(next(entity['dev-entry'] for entity in entities if entity.get('mount-point')))
 PY
 )
-MOUNT_POINT=$(python3 - "$ATTACH_PLIST" <<'PY'
+MOUNT_POINT=$("$PYTHON_BIN" - "$ATTACH_PLIST" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], 'rb') as source:
     entities = plistlib.load(source).get('system-entities', [])
@@ -55,7 +63,7 @@ print(next(entity['mount-point'] for entity in entities if entity.get('mount-poi
 PY
 )
 rm -f "$ATTACH_PLIST"
-python3 - "$MOUNT_POINT" <<'PYMETADATA'
+"$PYTHON_BIN" - "$MOUNT_POINT" <<'PYMETADATA'
 from pathlib import Path
 import sys
 from ds_store import DSStore
@@ -94,4 +102,5 @@ hdiutil convert "$RW_DMG" -format UDZO -o "$OUT_DMG" >/dev/null
 rm -f "$RW_DMG"
 RW_DMG=""
 
+shasum -a 256 "$OUT_DMG" > "$OUT_DMG.sha256"
 echo "Готово: $OUT_DMG"

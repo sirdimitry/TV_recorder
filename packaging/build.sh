@@ -5,6 +5,7 @@
 # самодостаточные бинарники), ad-hoc подпись. Результат: packaging/dist/TV
 # Recorder.app — готов для packaging/make_dmg.sh.
 set -euo pipefail
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$REPO_ROOT/packaging"
@@ -12,15 +13,17 @@ DIST_DIR="$PACKAGING_DIR/dist"
 BUILD_DIR="$PACKAGING_DIR/build"
 FFMPEG_CACHE="$PACKAGING_DIR/ffmpeg"
 APP_PATH="$DIST_DIR/TV Recorder.app"
+# Keep build cache local, including in restricted/CI environments.
+export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$BUILD_DIR/cache}"
 
 cd "$REPO_ROOT"
 
 echo "==> Иконка"
-python3 packaging/generate_icon.py
-python3 packaging/generate_dmg_background.py
+"$PYTHON_BIN" packaging/generate_icon.py
+"$PYTHON_BIN" packaging/generate_dmg_background.py
 
 echo "==> PyInstaller (--distpath/--workpath внутрь packaging/, не трогаем корень репозитория)"
-python3 -m PyInstaller packaging/TVRecorder.spec --noconfirm \
+"$PYTHON_BIN" -m PyInstaller packaging/TVRecorder.spec --noconfirm \
     --distpath "$DIST_DIR" --workpath "$BUILD_DIR"
 
 echo "==> Статические ffmpeg/ffplay/ffprobe (обе архитектуры — не спрашиваем, какой Mac у друга)"

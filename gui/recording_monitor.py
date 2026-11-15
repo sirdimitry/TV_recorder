@@ -1,10 +1,9 @@
 # gui/recording_monitor.py
-"""Отдельное окно-монитор: сетка живых миниатюр всех активных записей —
+"""Встроенный монитор: сетка живых миниатюр всех активных записей —
 для случаев, когда одновременно пишется много каналов (условно 1-16) и
 хочется видеть общую картину сразу, а не листать список по одной строке.
 
-Обычное окно с рамкой (НЕ overrideredirect) — тот баг был именно в
-безрамочных Toplevel на macOS, обычные окна отрисовываются нормально.
+Монитор размещается на странице внутри основного окна.
 Кадры не захватывает сам — читает то, что Recorder и так собирает
 централизованно на каждую активную задачу (core/recorder.py), поэтому
 открытие монитора не удваивает нагрузку поверх панели записей."""
@@ -24,19 +23,20 @@ POLL_MS = 250
 MODE_LABELS = {'Экономичный': 'economy', 'Обычный': 'normal', 'Выключен': 'off'}
 
 
-class RecordingMonitorWindow(ctk.CTkToplevel):
-    """Одно окно на всё приложение — повторный вызов просто поднимает его."""
+class RecordingMonitorWindow(ctk.CTkFrame):
+    """Встроенная страница; имя класса сохранено для совместимости."""
 
     _instance = None
 
     @classmethod
     def show(cls, root, recorder: Recorder):
         if cls._instance is not None and cls._instance.winfo_exists():
-            cls._instance.deiconify()
-            cls._instance.lift()
-            cls._instance.focus_force()
+            cls._instance.master.lift()
             return
-        cls._instance = RecordingMonitorWindow(root, recorder)
+        page = root._page_host.open('Монитор записей', scroll=False)
+        cls._instance = RecordingMonitorWindow(page.body, recorder)
+        cls._instance.pack(fill='both', expand=True)
+        page.on_close = cls._instance._close
 
     @classmethod
     def close_if_open(cls):
@@ -61,9 +61,6 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         self._muted = False
 
         c = Config.COLORS
-        self.title("Мониторинг записей")
-        self.geometry("900x600")
-        self.minsize(560, 300)
         self.configure(fg_color=c['bg_primary'])
 
         header = ctk.CTkFrame(self, fg_color='transparent')
@@ -92,7 +89,6 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         self._owns_snapshots = True
         self.bind('<Map>', self._mapped, add='+')
         self.bind('<Unmap>', self._unmapped, add='+')
-        self.protocol("WM_DELETE_WINDOW", self._close)
 
         self._rebuild()
         self._poll()
@@ -300,6 +296,8 @@ class RecordingMonitorWindow(ctk.CTkToplevel):
         self._poll_id = self.after(delay, self._poll)
 
     def _close(self):
+        if not self._running:
+            return
         self._running = False
         self._set_visible(False)
         self._stop_listening()

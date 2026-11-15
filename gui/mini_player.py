@@ -1,6 +1,6 @@
 # gui/mini_player.py
 import tkinter as tk
-from tkinter import messagebox
+from gui.inline_messages import messagebox
 import subprocess
 import shutil
 import threading

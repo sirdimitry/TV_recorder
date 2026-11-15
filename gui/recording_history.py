@@ -1,6 +1,5 @@
 """Read-only presentation of durable recording history."""
 from datetime import datetime
-import customtkinter as ctk
 
 STATUS_LABELS = {
     'completed': 'Завершено', 'partial': 'Сохранено частично',
@@ -67,43 +66,3 @@ def format_record(record):
             label += f" (попытка {detail.get('attempt')}, через {detail.get('delay')} с)"
         lines.append(date_label(event.get('at'))+' — '+label)
     return '\n'.join(lines)
-
-
-def show_details(parent, record):
-    window = ctk.CTkToplevel(parent)
-    window.title('Подробности записи')
-    window.geometry('780x560')
-    box = ctk.CTkTextbox(window, wrap='word')
-    box.pack(fill='both', expand=True, padx=12, pady=12)
-    box.insert('1.0', format_record(record))
-    box.configure(state='disabled')
-    window.after(100, window.lift)
-    return window
-
-
-def show_history(parent, history):
-    window = ctk.CTkToplevel(parent)
-    window.title('История записей')
-    window.geometry('800x560')
-    toolbar = ctk.CTkFrame(window, fg_color='transparent')
-    toolbar.pack(fill='x', padx=12, pady=10)
-    ctk.CTkLabel(toolbar, text='Последние 100 записей · исходные файлы не изменяются').pack(side='left')
-    content = ctk.CTkScrollableFrame(window)
-    content.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-    def refresh():
-        for child in content.winfo_children():
-            child.destroy()
-        records = history.list_records()
-        if not records:
-            ctk.CTkLabel(content, text='История пока пуста').pack(pady=20)
-        for record in records:
-            session = record['session']
-            name = session.get('name', 'Запись')[:70]
-            label = (name+'\n'+date_label(session.get('started_at'))+' · '
-                     +STATUS_LABELS.get(session.get('state'), session.get('state', '—')))
-            ctk.CTkButton(content, text=label, anchor='w', height=52,
-                          command=lambda item=record: show_details(window, item)).pack(fill='x', pady=3)
-    ctk.CTkButton(toolbar, text='Обновить', width=90, command=refresh).pack(side='right')
-    refresh()
-    window.after(100, window.lift)
-    return window

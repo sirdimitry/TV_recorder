@@ -1,3 +1,13 @@
+## Unreleased — stage 10 candidate
+
+- Keep monitor, forms, settings, about and confirmations in the main window.
+- Use embedded link preview; cancel delayed form results on navigation.
+- Extract RecordingTask from recording orchestration without changing imports.
+- Separate runtime/build dependencies and record tested direct versions.
+- Add macOS reliability CI, isolated QA profiles and local build cache.
+- Fix PyInstaller webview collection and generate ICNS without iconutil.
+- Add simple test-DMG mode and SHA-256 output for image builds.
+
 # Changelog
 
 All notable changes to this project are documented in this file.

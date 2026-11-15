@@ -13,7 +13,7 @@ block_cipher = None
 REPO_ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
 
-pywebview_datas, pywebview_binaries, pywebview_hidden = collect_all('pywebview')
+pywebview_datas, pywebview_binaries, pywebview_hidden = collect_all('webview')
 customtkinter_datas = collect_data_files('customtkinter')
 # playwright (core/tass_provider.py) — collect_all нужен, чтобы подхватить
 # его собственный Node-бинарник и JS-драйвер (playwright/driver/**), они не

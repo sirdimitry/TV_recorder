@@ -483,7 +483,7 @@ class DownloadList(ctk.CTkFrame):
     def _clear_all(self):
         if not self.row_widgets and not (self.storage and self.storage.get_downloads()):
             return
-        from tkinter import messagebox
+        from gui.inline_messages import messagebox
         if not messagebox.askyesno(
                 "Очистить загрузки",
                 "Очистить всю историю загрузок?\nАктивные загрузки будут отменены, готовые файлы останутся на диске.",

@@ -1,0 +1,12 @@
+test_completed_callback_is_not_cancelled_again (test_single_window.SingleWindowTests.test_completed_callback_is_not_cancelled_again) ... ok
+test_isolated_profile_does_not_move_bundled_resources (test_single_window.SingleWindowTests.test_isolated_profile_does_not_move_bundled_resources) ... ok
+test_leaving_monitor_releases_consumers_and_callbacks_once (test_single_window.SingleWindowTests.test_leaving_monitor_releases_consumers_and_callbacks_once) ... ok
+test_navigation_cancels_pending_work_and_rejects_late_worker_results (test_single_window.SingleWindowTests.test_navigation_cancels_pending_work_and_rejects_late_worker_results) ... ok
+test_new_page_replaces_previous_and_cancels_confirmation (test_single_window.SingleWindowTests.test_new_page_replaces_previous_and_cancels_confirmation) ... ok
+test_normal_application_routes_cannot_create_secondary_windows (test_single_window.SingleWindowTests.test_normal_application_routes_cannot_create_secondary_windows) ... ok
+test_shutdown_cancels_confirmation_instead_of_waiting_forever (test_single_window.SingleWindowTests.test_shutdown_cancels_confirmation_instead_of_waiting_forever) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.063s
+
+OK

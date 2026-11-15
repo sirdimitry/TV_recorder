@@ -108,12 +108,29 @@ If a supported website stops resolving after a site update, upgrade yt-dlp:
 python3 -m pip install --upgrade yt-dlp
 ```
 
+## One main window
+
+Monitor, settings, about and editing forms are pages inside the existing window.
+Use **Back** to return; workspace widgets and recording jobs remain alive.
+Leaving a form cancels unsaved input. Notifications and confirmations are inline.
+Link thumbnails use the embedded preview. OS file/folder pickers remain native;
+screen recording still requires a browser window containing the source video.
+
 ## Build a DMG
 
 ```bash
+python3 -m pip install -r requirements/build.txt -c requirements/tested-constraints.txt
 bash packaging/build.sh
+python3 -m pip install -r packaging/requirements.txt
 bash packaging/make_dmg.sh
 ```
+
+Set `PYTHON_BIN` to select the Python interpreter. PyInstaller's cache stays in
+the build directory. `DMG_SIMPLE=1` skips Finder styling for a test image.
+Both image modes require macOS disk-image services. The direct versions in
+`requirements/tested-constraints.txt` describe the tested environment, not a full
+transitive lock. The macOS GitHub Actions workflow runs the reliability suite.
+Use `TV_RECORDER_HOME` for an isolated data/log/media profile during QA.
 
 The result is written to `packaging/TV_Recorder_v<version>_Apple_Silicon.dmg`.
 

@@ -1,5 +1,6 @@
 # utils/config.py
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,14 @@ class Config:
         LOG_FILE = BASE_DIR / "logs" / "tv_recorder.log"
         RECORDINGS_DIR = BASE_DIR / "recordings"
         DOWNLOADS_DIR = BASE_DIR / "downloads"
+
+    # Explicit isolated profile for QA/portable runs. Never changes resource paths.
+    if os.environ.get('TV_RECORDER_HOME'):
+        _PROFILE_DIR = Path(os.environ['TV_RECORDER_HOME']).expanduser().resolve()
+        DATA_DIR = _PROFILE_DIR / 'data'
+        LOG_FILE = _PROFILE_DIR / 'logs' / 'tv_recorder.log'
+        RECORDINGS_DIR = _PROFILE_DIR / 'recordings'
+        DOWNLOADS_DIR = _PROFILE_DIR / 'downloads'
 
     VERSION_FILE = BASE_DIR / "VERSION"
     APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "0.0.0"

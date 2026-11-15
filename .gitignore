@@ -90,3 +90,8 @@ data/pending_recordings/
 
 # Persistent local recording history
 data/recording_history/
+
+# Isolated local UI/profile and installer build cache
+work-ui/
+packaging/.build-deps/
+packaging/*.zip.sha256

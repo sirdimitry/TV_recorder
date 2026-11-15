@@ -1,7 +1,8 @@
+from gui.inline_messages import messagebox
 # gui/schedule_panel.py
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from typing import Callable, Dict, List, Optional
 from datetime import datetime, timedelta
 

@@ -1,0 +1,12 @@
+test_accelerated_screen_recording_restores_timing (test_recording_recovery.RecoveryTests.test_accelerated_screen_recording_restores_timing) ... ok
+test_active_recordings_cannot_be_recovered (test_recording_recovery.RecoveryTests.test_active_recordings_cannot_be_recovered) ... ok
+test_audio_and_video_packets_survive_remux (test_recording_recovery.RecoveryTests.test_audio_and_video_packets_survive_remux) ... ok
+test_failed_remux_keeps_original_and_marker (test_recording_recovery.RecoveryTests.test_failed_remux_keeps_original_and_marker) ... ok
+test_failure_keeps_source_and_existing_destination (test_recording_recovery.RecoveryTests.test_failure_keeps_source_and_existing_destination) ... ok
+test_normal_capture_publishes_regular_mp4_without_reencoding (test_recording_recovery.RecoveryTests.test_normal_capture_publishes_regular_mp4_without_reencoding) ... ok
+test_sigkill_leaves_recoverable_fragments (test_recording_recovery.RecoveryTests.test_sigkill_leaves_recoverable_fragments) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 14.019s
+
+OK

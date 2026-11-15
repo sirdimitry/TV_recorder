@@ -5,7 +5,7 @@ import subprocess
 import threading
 import unicodedata
 from pathlib import Path
-from tkinter import messagebox
+from gui.inline_messages import messagebox
 from typing import Dict, Optional
 
 import customtkinter as ctk

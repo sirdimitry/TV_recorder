@@ -1,3 +1,4 @@
+from gui.inline_messages import messagebox
 # gui/download_dialog.py
 """Диалог "Добавить загрузку" — отдельным файлом, а не ещё одним методом
 gui/app_window.py (тот и так уже больше тысячи строк). Копирует проверенный
@@ -8,7 +9,7 @@ _add_link_dialog): поле URL с debounce-автоопределением н�
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -22,12 +23,8 @@ RESOLUTIONS = ["1080p", "720p", "480p", "360p"]
 
 def show_add_download_dialog(parent, colors, storage, downloader, on_added=None):
     c = colors
-    dialog = ctk.CTkToplevel(parent)
-    dialog.title("Добавить загрузку")
-    dialog.geometry("520x490")
-    dialog.transient(parent)
-    dialog.configure(fg_color=c['bg_secondary'])
-    dialog.after(100, dialog.grab_set)
+    page = parent.winfo_toplevel()._page_host.open('Добавить загрузку')
+    dialog = page.body
 
     body = ctk.CTkFrame(dialog, fg_color='transparent')
     body.pack(fill='both', expand=True, padx=20, pady=20)
@@ -87,8 +84,8 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
 
     def on_url_change(*_):
         if debounce['after_id']:
-            dialog.after_cancel(debounce['after_id'])
-        debounce['after_id'] = dialog.after(600, start_detection)
+            dialog._inline_page.after_cancel(debounce['after_id'])
+        debounce['after_id'] = dialog._inline_page.after(600, start_detection)
 
     def start_detection():
         url = url_var.get().strip()
@@ -118,7 +115,7 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
                 duration_part = f", ~{minutes} мин" if minutes else ""
                 hint.configure(text=f"Найдено: {info.title}{duration_part}")
 
-            dialog.after(0, apply)
+            dialog._inline_page.after(0, apply)
 
             # Список доступных качеств — отдельным (более медленным) шагом
             # после основного превью, чтобы название/превью не ждали лишний
@@ -139,7 +136,7 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
                         available = ", ".join(f"{h}p" for h in heights)
                         quality_hint.configure(text=f"Доступные качества: {available}")
 
-                dialog.after(0, apply_quality)
+                dialog._inline_page.after(0, apply_quality)
 
         threading.Thread(target=resolve_async, daemon=True).start()
 
@@ -173,7 +170,7 @@ def show_add_download_dialog(parent, colors, storage, downloader, on_added=None)
 
         downloader.start_download(url, target_height=target_height, output_dir=output_dir,
                                   clip_start=clip_start, clip_end=clip_end)
-        dialog.destroy()
+        page.destroy()
         if on_added:
             on_added()
 
