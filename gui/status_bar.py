@@ -30,6 +30,17 @@ class StatusBar(ctk.CTkFrame):
                                        text_color=c['text_secondary'])
         self.net_label.pack(side='left')
 
+    def show_notice(self, message, severity='yellow'):
+        if not hasattr(self, 'notice_label'):
+            self.notice_label = ctk.CTkLabel(self, text='', font=ctk.CTkFont(size=10), anchor='e')
+            self.notice_label.pack(side='right', padx=14)
+        self.notice_label.configure(text='Диск: '+(message[:65]+'…' if len(message)>65 else message),
+                                    text_color=self.colors.get(severity, self.colors['yellow']))
+
+    def clear_notice(self):
+        if hasattr(self, 'notice_label'):
+            self.notice_label.configure(text='')
+
     def update_vpn_status(self, active: bool):
         color = self.colors['green'] if active else self.colors['text_muted']
         self.vpn_icon.configure(image=get_icon('shield', color, 12))

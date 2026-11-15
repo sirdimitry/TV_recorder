@@ -38,6 +38,14 @@ class RecordingTask:
         self.capture_path = None
         self.finalization_error = ""
         self.storage_error = ""
+        self.storage_warning = ''
+        self.disk_free_bytes = None
+        self.disk_reserved_bytes = 0
+        self.disk_error = ''
+        self.file_size_bytes = None
+        self.output_available = False
+        self.merge_error = ''
+        self.phase = 'connecting'
         self.disk_guard = None
         self.progress_monitor = None
         self.media_seconds = 0.0
@@ -290,7 +298,42 @@ class Recorder:
             self._storage_notice(str(error))
             return False
 
+    def _refresh_task_metrics(self, task):
+        # Called by recording workers/timer, never by a Tk callback.
+        current = task.output_path
+        try:
+            if task.capture_path and Path(task.capture_path).is_file():
+                current = task.capture_path
+        except OSError:
+            pass
+        paths = ([task.merged_path] if task.merged_path else
+                 [part['path'] for part in task.parts]+[current])
+        sizes = []
+        for path in {Path(path) for path in paths if path}:
+            try:
+                if path.is_file():
+                    sizes.append(path.stat().st_size)
+            except OSError:
+                pass
+        task.file_size_bytes = sum(sizes) if sizes else (task.recorded_bytes or None)
+        try:
+            task.output_available = Path(task.output_path).is_file()
+        except OSError:
+            task.output_available = False
+        guard = task.disk_guard
+        if guard is not None:
+            task.disk_free_bytes = guard.last_free_bytes
+            task.disk_reserved_bytes = guard.last_reserved_bytes
+            task.disk_error = guard.last_error
+            if (guard.last_free_bytes is not None and
+                    guard.last_free_bytes >= 3*1024**3+guard.last_reserved_bytes):
+                task.storage_warning = ''
+
     def _watch_task_disk(self, task):
+        def warning(message):
+            task.storage_warning = message
+            self._storage_notice(message)
+            self._notify_ui()
         def stop(message):
             if not task.is_recording or task.process.poll() is not None:
                 return
@@ -303,7 +346,7 @@ class Recorder:
                 task.process.kill()
         task.disk_guard = DiskGuard(Path(task.output_path).parent,
                                     reserve_file=task.capture_path, reserve_factor=task.speed_factor or 1,
-                                    on_warning=self._storage_notice, on_stop=stop)
+                                    on_warning=warning, on_stop=stop)
         task.disk_guard.start()
 
     def _watch_task_progress(self, task):
@@ -315,6 +358,7 @@ class Recorder:
                     return
                 task.stalled = True
                 task.connection_state = 'stalled'
+                task.phase = 'stopping'
                 self._history_event(task, 'stalled', state='reconnecting')
                 logger.warning("Recorder: нет продвижения записи '%s', завершаем часть", task.channel_name)
                 self._terminate_task_process(task)
@@ -393,6 +437,7 @@ class Recorder:
                 task.error_message = task.finalization_error = ''
                 task.media_seconds = task.recorded_bytes = 0
                 task.connection_state = 'connecting'
+                task.phase = 'connecting'
             self._history_event(task, 'part_started', {'number': task.part_number}, state='connecting')
             self._watch_task_disk(task)
             self._watch_task_progress(task)
@@ -941,6 +986,7 @@ class Recorder:
             task = self.tasks.get(task_id)
 
         if task and (task.is_recording or task.recovering):
+            task.phase = 'stopping'
             task.stop_requested = True
             task.stop_timestamp = task.stop_timestamp or time.time()
             task.retry_cancel.set()
@@ -994,6 +1040,7 @@ class Recorder:
                         task.pause_count += 1
                     task.pause_pending = True
                     task.connection_state = 'paused'
+                    task.phase = 'paused'
                     self._history_event(task, 'paused', state='paused')
                     process = task.process
                     # A live source must not remain frozen with open network reads.
@@ -1025,6 +1072,7 @@ class Recorder:
     def _wait_live_pause(self, task):
         task.finished_at = None
         task.connection_state = 'paused'
+        task.phase = 'paused'
         self._notify_ui()
         while (task.is_paused and not task.stop_requested and not self._closing
                and not task.storage_error and not task.finalization_error):
@@ -1082,6 +1130,7 @@ class Recorder:
                 delay = progress_policy.RETRY_DELAYS[task.retry_count]
                 task.retry_count += 1
                 task.connection_state = 'retrying'
+                task.phase = 'retrying'
                 self._history_event(task, 'retry_scheduled', {'attempt': task.retry_count, 'delay': delay}, state='retrying')
                 task.result_status = task.success = None
                 self._notify_ui()
@@ -1108,6 +1157,8 @@ class Recorder:
             task.finished_at = datetime.now()
             self._update_session_assessment(task)
             self._auto_join_parts(task)
+            task.phase = task.result_status
+            self._refresh_task_metrics(task)
             self._history_event(task, 'completed', state=task.result_status)
             self._notify_completion(task)
         finally:
@@ -1140,6 +1191,7 @@ class Recorder:
         base = Path(task.base_output_path)
         output = base.with_name(base.stem+'_joined.mp4')
         task.merging = True
+        task.phase = 'joining'
         self._history_event(task, 'parts_merge_started', state='finalizing')
         self._notify_ui()
         try:
@@ -1204,6 +1256,8 @@ class Recorder:
         if task.browser_proc and task.browser_proc.poll() is None:
             task.browser_proc.terminate()
 
+        task.phase = 'finalizing'
+        self._notify_ui()
         # При штатной остановке кнопкой/таймером код зависит от платформы и
         # сигнала; окончательное качество всё равно определит ffprobe ниже.
         process_ok = (returncode in (0, 255) or task.stop_requested) and not task.storage_error and not task.stalled
@@ -1226,6 +1280,8 @@ class Recorder:
             process_ok = self._timestretch_task_output(task)
         expect_audio = (task.expected_audio if task.expected_audio is not None else
                         bool(task.audio_url) or (task.is_screen_capture and task.screen_capture_has_audio))
+        task.phase = 'checking'
+        self._notify_ui()
         result_status, probe = classify_media(output_file, process_ok, expect_audio=expect_audio)
         expected = None
         if (task.is_live or task.is_screen_capture) and task.part_started_wall:
@@ -1280,6 +1336,8 @@ class Recorder:
             logger.error(f"Recorder: Ошибка обработки '{task.channel_name}' (code {returncode}): {err_msg}")
 
         if notify:
+            task.phase = task.result_status
+            self._refresh_task_metrics(task)
             self._notify_completion(task)
             self._notify_ui()
 
@@ -1297,6 +1355,7 @@ class Recorder:
             base = Path(task.base_output_path)
             output = base.with_name(base.stem+'_joined.mp4')
             task.merging = True
+            task.merge_error = ''
             self._sleep_guard.acquire('merge:'+task.task_id)
             self._wait_threads.add(threading.current_thread())
         self._notify_ui()
@@ -1309,6 +1368,7 @@ class Recorder:
             self._sleep_guard.release('merge:'+task.task_id)
             with self._lock:
                 task.merging = False
+                self._refresh_task_metrics(task)
                 self._wait_threads.discard(threading.current_thread())
             if self.history is not None:
                 self.history.release(task.task_id)
@@ -1432,7 +1492,14 @@ class Recorder:
                 self._screen_guard.refresh()
                 self._sync_snapshot_streams()
                 with self._lock:
-                    has_active = any(t.is_recording for t in self.tasks.values())
+                    metric_tasks = list(self.tasks.values())
+                for task in metric_tasks:
+                    if (task.is_recording or task.recovering or task.merging
+                            or task.phase in ('stopping', 'finalizing', 'checking')):
+                        self._refresh_task_metrics(task)
+                with self._lock:
+                    has_active = any(t.is_recording or t.recovering or t.merging
+                                     or t.phase in ('stopping', 'finalizing', 'checking') for t in self.tasks.values())
                 
                 if has_active:
                     self._notify_ui()

@@ -20,20 +20,7 @@ from utils.icons import get_icon
 from utils.logger import logger
 
 
-STATE_ACCENT = {
-    'recording': 'red',
-    'joining': 'yellow',
-    'connecting': 'yellow',
-    'reconnecting': 'yellow',
-    'retrying': 'yellow',
-    'paused': 'yellow',
-    'finalizing': 'yellow',
-    'completed': 'green',
-    'partial': 'yellow',
-    'ended_early': 'yellow',
-    'processing_error': 'red',
-    'failed': 'red',
-}
+from gui.recording_presenter import STATE_ACCENT, task_state, card_model, visible_tasks, summary_label
 
 
 class RecordingPanel(ctk.CTkFrame):
@@ -49,6 +36,11 @@ class RecordingPanel(ctk.CTkFrame):
 
         self.task_widgets: Dict[str, dict] = {}
         self.empty_label: Optional[ctk.CTkLabel] = None
+        self._refresh_pending = False
+        self._view = 'list'
+        self._view_generation = 0
+        self._filter = 'Все'
+        self.notice_dismiss_callback = None
         # Общий инстанс шрифта имени — измеряется тем же инстансом, которым
         # реально рисуется текст (см. _elide_text/_update_name_width), для
         # пиксель-в-пиксель точной обрезки под реальную ширину строки.
@@ -58,167 +50,197 @@ class RecordingPanel(ctk.CTkFrame):
         self.refresh()
 
     def _schedule_refresh(self):
-        self.after(0, self._update_timers_only)
+        if not self._refresh_pending:
+            self._refresh_pending = True
+            self.after(0, self._update_timers_only)
 
     def _open_monitor(self):
         from gui.recording_monitor import RecordingMonitorWindow
         RecordingMonitorWindow.show(self.winfo_toplevel(), self.recorder)
 
+    def _show_list(self):
+        self._view_generation += 1
+        self._view = 'list'
+        self.list_frame.tkraise()
+        self.filter_bar.pack(fill='x', padx=12, pady=(0, 6), before=self.body)
+        self.refresh()
+
     def _open_history(self):
-        from gui.recording_history import show_history
-        if self.recorder.history is None:
-            messagebox.showwarning('История записей', 'История недоступна в этом сеансе.')
-            return
-        show_history(self.winfo_toplevel(), self.recorder.history)
+        from gui.recording_history import STATUS_LABELS, date_label
+        self._view_generation += 1
+        generation = self._view_generation
+        self._view = 'history'
+        self.filter_bar.pack_forget()
+        self.history_frame.tkraise()
+        for child in self.history_frame.winfo_children():
+            child.destroy()
+        toolbar = ctk.CTkFrame(self.history_frame, fg_color='transparent')
+        toolbar.pack(fill='x', pady=6)
+        ctk.CTkButton(toolbar, text='К записям', width=100, command=self._show_list).pack(side='left')
+        ctk.CTkButton(toolbar, text='Обновить', width=90, command=self._open_history).pack(side='right')
+        content = ctk.CTkFrame(self.history_frame, fg_color='transparent')
+        content.pack(fill='both', expand=True)
+        ctk.CTkLabel(content, text='Загрузка истории…').pack(pady=20)
+        def read():
+            try:
+                records = self.recorder.history.list_records() if self.recorder.history else []
+                error = '' if self.recorder.history else 'История недоступна в этом сеансе'
+            except Exception as exc:
+                records, error = [], str(exc)
+            def apply():
+                if generation != self._view_generation or not self.winfo_exists():
+                    return
+                for child in content.winfo_children():
+                    child.destroy()
+                if not records:
+                    ctk.CTkLabel(content, text=error or 'История пока пуста').pack(pady=20)
+                for record in records:
+                    session = record['session']
+                    name = session.get('name', 'Запись')
+                    name = name[:45]+'…' if len(name)>46 else name
+                    label = (name+'\n'+date_label(session.get('started_at'))+' · '
+                             +STATUS_LABELS.get(session.get('state'), session.get('state', '—')))
+                    ctk.CTkButton(content, text=label, height=52, anchor='w',
+                                  command=lambda item=record: self._show_record(item, self._open_history)).pack(fill='x', pady=3)
+            if not self.recorder._closing:
+                self.after(0, apply)
+        threading.Thread(target=read, daemon=True, name='RecordingHistoryRead').start()
+
+    def _show_record(self, record, back):
+        from gui.recording_history import format_record
+        self._view_generation += 1
+        self._view = 'details'
+        self.filter_bar.pack_forget()
+        for child in self.details_frame.winfo_children():
+            child.destroy()
+        ctk.CTkButton(self.details_frame, text='Назад', width=90, command=back).pack(anchor='w', padx=8, pady=8)
+        box = ctk.CTkTextbox(self.details_frame, wrap='word', fg_color=self.colors['bg_secondary'])
+        box.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        box.insert('1.0', format_record(record))
+        box.configure(state='disabled')
+        self.details_frame.tkraise()
 
     def _show_task_details(self, task):
-        from gui.recording_history import show_details
-        record = self.recorder.history.read(task.task_id) if self.recorder.history else None
-        if record:
-            show_details(self.winfo_toplevel(), record)
-        else:
-            messagebox.showinfo('Подробности записи', task.error_message or 'Подробности ещё не сохранены.')
+        self._view_generation += 1
+        generation = self._view_generation
+        fallback = dict(session=dict(name=task.channel_name, state=task_state(task),
+            output_path=task.output_path, expected_seconds=task.expected_seconds,
+            actual_seconds=task.actual_seconds, missing_seconds=task.missing_seconds,
+            retries=task.retry_count, pauses=task.pause_count, parts=list(task.parts),
+            error=task.error_message or task.storage_warning or task.storage_error), events=[])
+        def read():
+            try:
+                record = self.recorder.history.read(task.task_id) if self.recorder.history else None
+            except Exception:
+                record = None
+            def apply():
+                if generation == self._view_generation and self.winfo_exists():
+                    self._show_record(record or fallback, self._show_list)
+            if not self.recorder._closing:
+                self.after(0, apply)
+        threading.Thread(target=read, daemon=True, name='RecordingDetailsRead').start()
+
+    def _dismiss_notice(self):
+        self.notice.pack_forget()
+        if self.notice_dismiss_callback:
+            self.notice_dismiss_callback()
+
+    def show_notice(self, message, severity='yellow'):
+        self.notice_text.configure(text=message, text_color=self.colors.get(severity, self.colors['yellow']))
+        self.notice.pack(fill='x', padx=12, pady=(0, 6), before=self.body)
+
+    def _set_filter(self, selection):
+        self._filter = selection
+        self.refresh()
 
     def _setup_ui(self):
         c = self.colors
-        header_frame = ctk.CTkFrame(self, fg_color='transparent')
-        header_frame.pack(fill='x', padx=14, pady=(12, 6))
-
-        ctk.CTkLabel(header_frame, text="АКТИВНЫЕ ЗАПИСИ", font=ctk.CTkFont(size=12, weight='bold'),
+        header = ctk.CTkFrame(self, fg_color='transparent')
+        header.pack(fill='x', padx=12, pady=(10, 4))
+        ctk.CTkLabel(header, text='ЗАПИСИ', font=ctk.CTkFont(size=12, weight='bold'),
                      text_color=c['text_secondary']).pack(side='left')
-
-        self.count_label = ctk.CTkLabel(header_frame, text="(0)", font=ctk.CTkFont(size=11),
-                                         text_color=c['text_muted'])
-        self.count_label.pack(side='left', padx=4)
-        ctk.CTkButton(header_frame, text="История", width=72, height=26,
-                      command=self._open_history).pack(side='right', padx=4)
-
-
-        ctk.CTkButton(header_frame, text="", image=get_icon('grid', c['text_primary'], 15),
-                      width=28, height=28, corner_radius=Config.RADIUS_SM, fg_color=c['bg_tertiary'],
-                      hover_color=c['bg_hover'], command=self._open_monitor).pack(side='right')
-
-        ctk.CTkLabel(self, text="На паузе эфир пропускается. Нажмите на статус для подробностей.",
-                     font=ctk.CTkFont(size=10), text_color=c['text_muted'],
-                     anchor='w').pack(fill='x', padx=14, pady=(0, 4))
-
-        self.list_frame = ctk.CTkScrollableFrame(self, fg_color='transparent')
-        self.list_frame.pack(fill='both', expand=True, padx=6, pady=(0, 6))
+        ctk.CTkButton(header, text='История', width=74, height=28, command=self._open_history).pack(side='right', padx=(5, 0))
+        ctk.CTkButton(header, text='Монитор', width=82, height=28, command=self._open_monitor).pack(side='right')
+        self.count_label = ctk.CTkLabel(self, text='', anchor='w', font=ctk.CTkFont(size=10), text_color=c['text_muted'])
+        self.count_label.pack(fill='x', padx=12, pady=(0, 6))
+        self.notice = ctk.CTkFrame(self, fg_color=c['bg_tertiary'], corner_radius=8)
+        self.notice.grid_columnconfigure(0, weight=1)
+        self.notice_text = ctk.CTkLabel(self.notice, text='', wraplength=360, justify='left', anchor='w', font=ctk.CTkFont(size=11))
+        self.notice_text.grid(row=0, column=0, sticky='ew', padx=10, pady=8)
+        ctk.CTkButton(self.notice, text='×', width=26, height=26, command=self._dismiss_notice).grid(row=0, column=1, padx=5)
+        self.notice.bind('<Configure>', lambda e: self.notice_text.configure(wraplength=max(120, e.width-55)))
+        self.filter_bar = ctk.CTkFrame(self, fg_color='transparent')
+        self.filter_bar.pack(fill='x', padx=12, pady=(0, 6))
+        self.filter_picker = ctk.CTkSegmentedButton(self.filter_bar, values=['Все', 'Активные', 'Требуют внимания'], command=self._set_filter)
+        self.filter_picker.set('Все')
+        self.filter_picker.pack(fill='x')
+        self.body = ctk.CTkFrame(self, fg_color='transparent')
+        self.body.pack(fill='both', expand=True, padx=6, pady=(0, 6))
+        self.body.grid_columnconfigure(0, weight=1)
+        self.body.grid_rowconfigure(0, weight=1)
+        self.list_frame = ctk.CTkScrollableFrame(self.body, fg_color='transparent')
+        self.history_frame = ctk.CTkScrollableFrame(self.body, fg_color='transparent')
+        self.details_frame = ctk.CTkFrame(self.body, fg_color='transparent')
+        for view in (self.list_frame, self.history_frame, self.details_frame):
+            view.grid(row=0, column=0, sticky='nsew')
+        self.list_frame.tkraise()
 
     def refresh(self):
-        current_ids = {t.task_id for t in self.recorder.get_all_tasks()}
-
-        for tid in list(self.task_widgets.keys()):
-            if tid not in current_ids:
-                self.task_widgets[tid]['row'].destroy()
-                del self.task_widgets[tid]
-
         tasks = self.recorder.get_all_tasks()
-        self.count_label.configure(text=f"({len(tasks)})")
-
-        if not tasks:
-            if self.empty_label is None:
-                self.empty_label = ctk.CTkLabel(self.list_frame, text="Нет активных записей",
-                                                 font=ctk.CTkFont(size=11), text_color=self.colors['text_muted'])
-                self.empty_label.pack(pady=18)
-        elif self.empty_label is not None:
+        self.count_label.configure(text=summary_label(tasks))
+        if self._view != 'list':
+            return
+        tasks = visible_tasks(tasks, self._filter)
+        current_ids = {task.task_id for task in tasks}
+        for tid in list(self.task_widgets):
+            if tid not in current_ids:
+                self.task_widgets.pop(tid)['row'].destroy()
+        if not tasks and self.empty_label is None:
+            self.empty_label = ctk.CTkLabel(self.list_frame, text='Здесь пока нет записей', text_color=self.colors['text_muted'])
+            self.empty_label.pack(pady=20)
+        elif tasks and self.empty_label is not None:
             self.empty_label.destroy()
             self.empty_label = None
-
         for task in tasks:
             if task.task_id not in self.task_widgets:
                 self._add_task_row(task)
+            self._render_task(task, self.task_widgets[task.task_id])
 
-    def _task_state(self, task: RecordingTask) -> str:
-        if task.merging:
-            return 'joining'
-        if task.is_paused:
-            return 'paused'
-        if task.connection_state == 'retrying' and task.recovering:
-            return 'retrying'
-        if task.is_recording and task.connection_state in ('connecting', 'reconnecting'):
-            return task.connection_state
-        if task.is_recording:
-            return 'recording'
-        if task.recovering:
-            return 'retrying'
-        if task.result_status == 'partial':
-            return 'partial'
-        if task.result_status == 'processing_error':
-            return 'processing_error'
-        if task.success is True:
-            return 'ended_early' if task.ended_early else 'completed'
-        if task.success is False:
-            return 'failed'
-        return 'finalizing'
+    def _task_state(self, task):
+        return task_state(task)
 
     def _update_timers_only(self):
-        tasks = {t.task_id: t for t in self.recorder.get_all_tasks()}
+        self._refresh_pending = False
+        self.refresh()
 
-        current_ids = set(tasks.keys())
-        widget_ids = set(self.task_widgets.keys())
-
-        if current_ids != widget_ids:
-            self.refresh()
+    def _render_task(self, task, widgets):
+        model = card_model(task)
+        fingerprint = (tuple(model.items()), task.format_elapsed_time(), task.format_clip_range() or task.format_recording_period())
+        if widgets.get('fingerprint') == fingerprint:
             return
-
-        for tid, widgets in self.task_widgets.items():
-            task = tasks.get(tid)
-            if not task:
-                continue
-
-            widgets['timer'].configure(text=task.format_elapsed_time())
-            widgets['period'].configure(text=task.format_clip_range() or task.format_recording_period())
-            state = self._task_state(task)
-            accent = self.colors[STATE_ACCENT[state]]
-            widgets['accent_bar'].configure(fg_color=accent)
-
-            state_text = {
-                'paused': 'Пауза' if task.is_live else 'Paused', 'recording': 'Recording', 'completed': 'Завершено',
-                'partial': 'Сохранено с паузами' if task.pause_count and not task.retry_count else 'Сохранено частично', 'ended_early': 'Ended early',
-                'processing_error': 'Ошибка обработки', 'failed': 'Failed', 'finalizing': 'Finalizing', 'connecting': 'Подключение',
-                'reconnecting': 'Переподключение', 'retrying': 'Восстановление', 'joining': 'Сборка файла',
-            }[state]
-            widgets['result'].configure(text=state_text,
-                                         text_color=self.colors['text_secondary'] if state == 'recording' else accent)
-
-            widgets['status_icon'].configure(image=get_icon(
-                {'paused': 'pause', 'recording': 'record', 'completed': 'record',
-                 'partial': 'signal_off', 'ended_early': 'signal_off',
-                 'processing_error': 'close', 'failed': 'close', 'finalizing': 'record', 'connecting': 'record',
-                 'reconnecting': 'record', 'retrying': 'record', 'joining': 'record'}[state], accent, 16))
-
-            pause_icon = 'play' if task.is_paused else 'pause'
-            widgets['btn_pause'].configure(image=get_icon(pause_icon, self.colors['text_primary'], 18))
-            button_state = 'normal' if task.is_recording or (task.is_live and task.is_paused and task.recovering) else 'disabled'
-            widgets['btn_pause'].configure(state=button_state)
-            widgets['btn_stop'].configure(state='normal' if (task.is_recording or task.recovering) and not task.merging else 'disabled')
-
-            if not task.is_recording and not task.recovering and 'btn_open' not in widgets:
-                btn_open = self._icon_button(widgets['actions'], 'folder', lambda t=task: self._open_file(t))
-                btn_open.pack(side='left', padx=1, before=widgets['btn_del'])
-                widgets['btn_open'] = btn_open
-
-            if (not task.is_recording and not task.recovering and len(task.parts) > 1
-                    and 'btn_merge' not in widgets):
-                widgets['btn_pause'].pack_forget()
-                widgets['btn_stop'].pack_forget()
-                button = ctk.CTkButton(widgets['actions'], text="Объединить", width=94, height=26,
-                                       corner_radius=Config.RADIUS_SM,
-                                       command=lambda t=task: self._merge_parts(t))
-                button.pack(side='left', padx=2, before=widgets['btn_del'])
-                widgets['btn_merge'] = button
-            if 'btn_merge' in widgets:
-                widgets['btn_merge'].configure(
-                    text='Объединено' if task.merged_path else ('Сборка…' if task.merging else 'Объединить'),
-                    state='disabled' if task.merging or task.merged_path else 'normal')
-
-            # Текст статуса ("Recording"/"Ended early"/...) и набор кнопок
-            # (folder-кнопка появляется только тут, чуть выше) меняют
-            # ширину — пересчитываем, сколько реально осталось имени,
-            # каждый тик, а не только при ресайзе окна (row.bind('<Configure>')
-            # в _add_task_row не видит изменение контента дочерних виджетов).
-            self._update_name_width(tid)
+        widgets['fingerprint'] = fingerprint
+        c = self.colors
+        widgets['timer'].configure(text=fingerprint[1])
+        widgets['period'].configure(text=fingerprint[2])
+        widgets['result'].configure(text=model['label'], text_color=c[model['color']])
+        widgets['accent_bar'].configure(fg_color=c[model['color']])
+        widgets['metrics'].configure(text=model['metrics'])
+        disk_color = c['text_muted'] if model['disk_color']=='muted' else c[model['disk_color']]
+        widgets['disk'].configure(text=model['disk'], text_color=disk_color)
+        widgets['message'].configure(text=model['reason'], text_color=c['red'] if model['disk_color']=='red' else c['yellow'])
+        if model['reason']:
+            widgets['message'].grid()
+        else:
+            widgets['message'].grid_remove()
+        widgets['btn_pause'].configure(text='▶' if task.is_paused else 'Ⅱ', state='normal' if model['can_pause'] else 'disabled')
+        widgets['btn_stop'].configure(state='normal' if model['can_stop'] else 'disabled')
+        widgets['btn_del'].configure(state='normal' if model['can_remove'] else 'disabled')
+        widgets['btn_open'].configure(state='normal' if model['can_open'] else 'disabled')
+        if model['can_merge']:
+            widgets['btn_merge'].grid()
+        else:
+            widgets['btn_merge'].grid_remove()
+        self._update_name_width(task.task_id)
 
     def _icon_button(self, parent, icon_name, command, color=None):
         c = self.colors
@@ -291,115 +313,68 @@ class RecordingPanel(ctk.CTkFrame):
         cropped = resized.crop((left, top, left + w, top + h))
         return ctk.CTkImage(light_image=cropped, dark_image=cropped, size=(w, h))
 
-    def _add_task_row(self, task: RecordingTask):
+    def _add_task_row(self, task):
         c = self.colors
-        row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=Config.RADIUS_SM,
-                            height=self.ROW_HEIGHT)
-        row.pack(fill='x', pady=3, padx=2)
-        row.pack_propagate(False)
-
-        # Кнопки управления пакуем первыми (side='right') — они должны
-        # оставаться видимыми всегда, а не выталкиваться за край строки
-        # длинным названием канала/ссылки (имя вместо этого обрезаем ниже).
+        row = ctk.CTkFrame(self.list_frame, fg_color=c['bg_secondary'], corner_radius=10)
+        row.pack(fill='x', pady=4, padx=2)
+        row.grid_columnconfigure(2, weight=1)
+        accent = ctk.CTkFrame(row, width=3, fg_color=c['accent'], corner_radius=2)
+        accent.grid(row=0, column=0, rowspan=5, sticky='ns', padx=(0, 8), pady=8)
+        logo = ctk.CTkLabel(row, text='', width=48, height=34, image=get_icon('tv', c['text_muted'], 20))
+        logo.grid(row=0, column=1, rowspan=2, sticky='nw', padx=(0, 8), pady=10)
+        self._load_task_logo(task.channel_name, logo)
+        title = ctk.CTkFrame(row, fg_color='transparent')
+        title.grid(row=0, column=2, sticky='ew', pady=(8, 0))
+        title.grid_columnconfigure(0, weight=1)
+        name = ctk.CTkLabel(title, text=task.channel_name, font=self._name_font, anchor='w', width=1)
+        name.grid(row=0, column=0, sticky='ew')
+        timer = ctk.CTkLabel(title, text='', font=('Menlo', 11), width=68, anchor='e', text_color=c['accent'])
+        timer.grid(row=0, column=1, padx=(6, 0))
+        status = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=11, weight='bold'), anchor='w')
+        status.grid(row=1, column=2, sticky='ew', pady=(0, 3))
+        status.configure(cursor='hand2')
+        status.bind('<Button-1>', lambda event, item=task: self._show_task_details(item))
         actions = ctk.CTkFrame(row, fg_color='transparent')
-        actions.pack(side='right', padx=6, pady=6)
+        actions.grid(row=0, column=3, rowspan=3, sticky='ne', padx=8, pady=8)
+        def button(text, command, r, col, icon=None):
+            item = ctk.CTkButton(actions, text=text, image=get_icon(icon, c['text_secondary'], 14) if icon else None,
+                                width=28, height=26, corner_radius=6, fg_color=c['bg_tertiary'],
+                                hover_color=c['bg_hover'], command=command)
+            item.grid(row=r, column=col, padx=1, pady=1)
+            return item
+        pause = button('Ⅱ', lambda: self._toggle_pause(task), 0, 0)
+        stop = button('', lambda: self._stop_task(task), 0, 1, 'stop')
+        delete = button('×', lambda: self._remove_task(task), 0, 2)
+        folder = button('', lambda: self._open_file(task), 1, 0, 'folder')
+        button('i', lambda: self._show_task_details(task), 1, 1)
+        merge = ctk.CTkButton(actions, text='Объединить', width=88, height=26,
+                              command=lambda: self._merge_parts(task))
+        merge.grid(row=2, column=0, columnspan=3, pady=(4, 0))
+        metrics = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w', justify='left', text_color=c['text_secondary'])
+        metrics.grid(row=2, column=2, sticky='ew', pady=(1, 2))
+        period = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w', text_color=c['text_muted'])
+        period.grid(row=3, column=2, columnspan=2, sticky='ew', pady=(0, 2), padx=(0, 8))
+        disk = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w')
+        disk.grid(row=4, column=2, columnspan=2, sticky='ew', pady=(0, 5), padx=(0, 8))
+        message = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w', justify='left', wraplength=300)
+        message.grid(row=5, column=1, columnspan=3, sticky='ew', padx=(0, 10), pady=(0, 8))
+        self.task_widgets[task.task_id] = dict(row=row, title=title, name_lbl=name, full_name=task.channel_name,
+            logo_lbl=logo, timer=timer, result=status, accent_bar=accent, actions=actions,
+            metrics=metrics, period=period, disk=disk, message=message,
+            btn_pause=pause, btn_stop=stop, btn_del=delete, btn_open=folder, btn_merge=merge)
+        row.bind('<Configure>', lambda event, tid=task.task_id: self._update_name_width(tid))
 
-        btn_del = self._icon_button(actions, 'close', lambda t=task: self._remove_task(t))
-        btn_del.pack(side='right', padx=1)
-
-        btn_stop = self._icon_button(actions, 'stop', lambda t=task: self._stop_task(t))
-        btn_stop.pack(side='right', padx=1)
-
-        btn_pause = self._icon_button(actions, 'pause', lambda t=task: self._toggle_pause(t))
-        btn_pause.pack(side='right', padx=1)
-
-        accent_bar = ctk.CTkFrame(row, fg_color=c['red'], width=4, corner_radius=2)
-        accent_bar.pack(side='left', fill='y', padx=(0, 8), pady=6)
-
-        logo_lbl = ctk.CTkLabel(row, text="", width=self.THUMB_SIZE[0], height=self.THUMB_SIZE[1],
-                                 corner_radius=6, fg_color=c['bg_tertiary'])
-        logo_lbl.pack(side='left', padx=(2, 8), pady=6)
-        self._load_task_logo(task.channel_name, logo_lbl)
-
-        source_icon = 'bolt' if task.source == 'manual' else 'calendar'
-        source_lbl = ctk.CTkLabel(row, text="", image=get_icon(source_icon, c['text_muted'], 13))
-        source_lbl.place(in_=logo_lbl, relx=1.0, rely=1.0, x=-1, y=-1, anchor='se')
-
-        status_icon = ctk.CTkLabel(row, text="", image=get_icon('record', c['red'], 16))
-        status_icon.pack(side='left', padx=(0, 6), pady=8)
-
-        name_lbl = ctk.CTkLabel(row, text=task.channel_name, font=self._name_font,
-                                 text_color=c['text_primary'])
-        name_lbl.pack(side='left', padx=(0, 10), pady=8)
-
-        timer_lbl = ctk.CTkLabel(row, text=task.format_elapsed_time(), font=('Menlo', 12),
-                                  text_color=c['accent'], width=64, anchor='w')
-        timer_lbl.pack(side='left', padx=(0, 10), pady=8)
-
-        # Для "Мои ссылки" с заданным "С:" показываем позицию В РОЛИКЕ
-        # ("38:30–42:30"), а не время на часах начала/конца записи — час
-        # начала сам по себе ничего не говорит про то, какой фрагмент
-        # ролика пишется (см. core/recorder.py: format_clip_range).
-        period_lbl = ctk.CTkLabel(row, text=task.format_clip_range() or task.format_recording_period(),
-                                   font=ctk.CTkFont(size=11), text_color=c['text_secondary'])
-        period_lbl.pack(side='left', padx=(0, 8), pady=8)
-
-        result_lbl = ctk.CTkLabel(row, text="Recording", font=ctk.CTkFont(size=11),
-                                   text_color=c['text_secondary'])
-        result_lbl.pack(side='left', pady=8)
-        result_lbl.configure(cursor='hand2')
-        result_lbl.bind('<Button-1>', lambda event, item=task: self._show_task_details(item))
-
-        self.task_widgets[task.task_id] = {
-            'row': row,
-            'logo_lbl': logo_lbl,
-            'accent_bar': accent_bar,
-            'status_icon': status_icon,
-            'name_lbl': name_lbl,
-            'full_name': task.channel_name,
-            'timer': timer_lbl,
-            'period': period_lbl,
-            'result': result_lbl,
-            'actions': actions,
-            'btn_pause': btn_pause,
-            'btn_stop': btn_stop,
-            'btn_del': btn_del,
-        }
-
-        # "Recording"/итоговый статус — последнее, что пакуется слева, и
-        # раньше первым же обрезалось краем строки на длинных названиях
-        # (имя обрезалось по фиксированному числу символов, не по реальной
-        # ширине — на широких мониторах оставался запас, на уже собранном
-        # приложении с более узким окном текст статуса просто вылезал под
-        # кнопки управления). Теперь имя подстраивается под то, что реально
-        # осталось от ширины строки, а не наоборот.
-        row.bind('<Configure>', lambda e, tid=task.task_id: self._update_name_width(tid))
-
-        self._reveal_new_row(row)
-
-    def _update_name_width(self, task_id: str):
+    def _update_name_width(self, task_id):
         widgets = self.task_widgets.get(task_id)
         if not widgets:
             return
-        row = widgets['row']
-        row.update_idletasks()
-        row_width = row.winfo_width()
-        if row_width <= 1:
-            return
-        # Всё, что в строке НЕ имя — фиксированного размера и всегда должно
-        # уместиться целиком; имени достаётся то, что осталось.
-        fixed_width = (
-            widgets['accent_bar'].winfo_reqwidth() + widgets['logo_lbl'].winfo_reqwidth()
-            + widgets['status_icon'].winfo_reqwidth() + widgets['timer'].winfo_reqwidth()
-            + widgets['period'].winfo_reqwidth() + widgets['result'].winfo_reqwidth()
-            + widgets['actions'].winfo_reqwidth()
-        )
-        # Суммарные padx вокруг перечисленных виджетов + запас на бортики
-        # самой карточки (см. pack(...) выше: 8+10+6+10+8+0 между виджетами,
-        # плюс 6 у actions с обеих сторон и небольшой общий запас).
-        padding_budget = 8 + 10 + 6 + 10 + 8 + 12 + 16
-        available = row_width - fixed_width - padding_budget
-        widgets['name_lbl'].configure(text=_elide_text(self._name_font, widgets['full_name'], available))
+        width = widgets['title'].winfo_width()
+        row_width = widgets['row'].winfo_width()
+        if width > 1:
+            available = max(20, width-80)
+            widgets['name_lbl'].configure(text=_elide_text(self._name_font, widgets['full_name'], available))
+            widgets['metrics'].configure(wraplength=max(80, width))
+        widgets['message'].configure(wraplength=max(120, row_width-35))
 
     def _reveal_new_row(self, row: ctk.CTkFrame):
         """Прокручивает список к только что появившейся строке и на секунду
@@ -428,11 +403,11 @@ class RecordingPanel(ctk.CTkFrame):
                 logger.exception('Не удалось объединить части записи')
                 text = str(error)
                 if not self.recorder._closing:
-                    self.after(0, lambda message=text: messagebox.showerror('Объединение частей', message))
+                    task.merge_error = text
+                    self.after(0, lambda message=text: self.show_notice(message, 'red'))
             else:
                 if not self.recorder._closing:
-                    self.after(0, lambda: messagebox.showinfo(
-                        'Объединение частей', f'Сохранено: {result}\nИсходные части оставлены. Пропуски эфира не восстанавливаются.'))
+                    self.after(0, lambda: self.show_notice('Единый файл сохранён. Исходные части оставлены.', 'green'))
         threading.Thread(target=worker, daemon=False, name='RecordingPartsMerge').start()
 
     def _open_file(self, task: RecordingTask):

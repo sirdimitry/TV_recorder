@@ -99,6 +99,7 @@ class AppWindow:
 
         self._apply_ttk_theme()
         self._setup_ui()
+        self.recording_panel.notice_dismiss_callback = self.status_bar.clear_notice
         self.scheduler.set_status_callback(self.schedule_panel.update_run_status)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if sys.platform == 'darwin':
@@ -112,7 +113,8 @@ class AppWindow:
             if self._closing or key in self._storage_notices:
                 return
             self._storage_notices.add(key)
-            messagebox.showwarning("Место на диске", message, parent=self.root)
+            self.recording_panel.show_notice(message)
+            self.status_bar.show_notice(message)
         if not self._closing:
             self.root.after(0, show)
 

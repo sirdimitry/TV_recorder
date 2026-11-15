@@ -47,6 +47,9 @@ class RecordingProgress:
             self.last_progress = now
             self.has_progress = True
             self.task.connection_state = 'recording'
+            if (not self.task.stop_requested and not self.task.is_paused
+                    and self.task.phase not in ('stopping', 'finalizing', 'checking')):
+                self.task.phase = 'recording'
 
     def check(self, now=None):
         now = time.monotonic() if now is None else now

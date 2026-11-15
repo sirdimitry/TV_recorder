@@ -66,6 +66,9 @@ class DiskGuard:
         self._done = threading.Event()
         self._warned = False
         self._thread = None
+        self.last_free_bytes = None
+        self.last_reserved_bytes = 0
+        self.last_error = ''
         try:
             self._device = self.directory.stat().st_dev
         except OSError:
@@ -115,6 +118,9 @@ class DiskGuard:
             raise DiskSpaceError(f'Папка записи недоступна: {self.directory}. {error}') from error
         reserve = self.reserved_bytes(self.directory)
         free = ensure_space(self.directory, reserve=reserve)
+        self.last_free_bytes = free
+        self.last_reserved_bytes = reserve
+        self.last_error = ''
         if free < WARN_FREE + reserve and not self._warned:
             self._warned = True
             self.on_warning(
@@ -127,6 +133,8 @@ class DiskGuard:
             try:
                 self.check()
             except DiskSpaceError as error:
+                self.last_free_bytes = None
+                self.last_error = str(error)
                 self._done.set()
                 self.on_stop(str(error))
                 return

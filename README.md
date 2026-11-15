@@ -40,6 +40,19 @@ No recorder can recover media that the source never delivered. Signed stream
 URLs may also expire during a very long recording, but short outages and bad
 segments are handled automatically.
 
+## Recording cards
+
+The recording panel shows connection, recording, reconnection, MP4 finalization,
+validation and joining as separate states. Each card includes recorded size,
+part/retry/pause counts and available disk space during recording. In-progress
+sizes include source parts; after joining, the displayed size is the final MP4
+alone. Disk warnings remain visible in the panel and status bar.
+
+Use **All**, **Active** or **Needs attention** to filter simultaneous tasks.
+**History** and the **i** button display saved session details within the panel;
+**Back** returns to the recordings. Processing tasks stay active until the final
+file has been checked, with unavailable actions disabled.
+
 ## Supported workflow
 
 1. Open **Channels**, **My Links**, or **Downloads**.
