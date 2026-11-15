@@ -1,6 +1,7 @@
 import hashlib
 import shutil
 import signal
+import sys
 import subprocess
 import tempfile
 import threading
@@ -107,6 +108,9 @@ class LivePauseIntegrationTests(unittest.TestCase):
                     else:
                         self.wait_for(lambda: len(task.parts) == 1 and not task.is_recording)
                         self.assertTrue(task.is_paused)
+                        self.assertIn(tid, recorder._sleep_guard._leases)
+                        if sys.platform == 'darwin':
+                            self.assertTrue(recorder._sleep_guard.active)
                         self.assertFalse(callback.called)
                         self.assertTrue(probe_media(task.parts[0]['path']).has_audio)
                         count = len(processes)
@@ -133,6 +137,7 @@ class LivePauseIntegrationTests(unittest.TestCase):
                         recorder.stop_recording(tid)
                     self.wait_for(lambda: callback.called, timeout=10)
                     self.wait_for(lambda: not task.recovering)
+                    self.assertFalse(recorder._sleep_guard.active)
                     callback.assert_called_once()
                     self.assertEqual(task.retry_count, 0)
                     self.assertEqual(task.pause_count, 2 if mode == 'repeat' else 1)

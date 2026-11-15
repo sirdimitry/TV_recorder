@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Callable, Dict
 from core import recording_progress as progress_policy
 from core.recording_progress import RecordingProgress
+from core.sleep_inhibitor import SleepInhibitor
 from core.disk_space import DiskGuard, DiskSpaceError, ensure_space
 from core.recording_recovery import FRAGMENT_FLAGS, prepare_recording, finalize_recording, release_recording
 from core.live_stream import LiveThumbnailStream
@@ -176,6 +177,9 @@ class Recorder:
         self.auto_join = auto_join
         self.history = history
         self.history_error_callback = None
+        self.power_error_callback = None
+        self._sleep_guard = SleepInhibitor(on_error=self._power_notice)
+        self._screen_guard = SleepInhibitor(on_error=self._power_notice, keep_display_awake=True)
         self.tasks: Dict[str, RecordingTask] = {}
         self._lock = threading.RLock()
         self._timer_thread: Optional[threading.Thread] = None
@@ -188,6 +192,10 @@ class Recorder:
         self._wait_threads: set[threading.Thread] = set()
         self._screen_capture_confirmation: Optional[Callable[[str, bool, bool], bool]] = None
         self._screen_capture_error_callback: Optional[Callable[[str], None]] = None
+
+    def _power_notice(self, message):
+        if self.power_error_callback and not self._closing:
+            self.power_error_callback(message)
 
     def _history_event(self, task, event, detail=None, *, state=None):
         if self.history is None:
@@ -617,6 +625,7 @@ class Recorder:
                 if self._closing:
                     release_recording(task.recovery_marker)
                     return ""
+                self._sleep_guard.acquire(task.task_id)
                 task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 task.is_recording = True
                 task.start_time = time.time()
@@ -648,6 +657,7 @@ class Recorder:
             
         except Exception as e:
             release_recording(task.recovery_marker)
+            self._sleep_guard.release(task.task_id)
             logger.error(f"Recorder: Ошибка запуска ffmpeg: {e}")
             return ""
 
@@ -790,6 +800,8 @@ class Recorder:
                     release_recording(task.recovery_marker)
                     browser_proc.terminate()
                     return ""
+                self._sleep_guard.acquire(task.task_id)
+                self._screen_guard.acquire(task.task_id)
                 task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 task.is_recording = True
                 task.start_time = time.time()
@@ -816,6 +828,8 @@ class Recorder:
 
         except Exception as e:
             release_recording(task.recovery_marker)
+            self._sleep_guard.release(task.task_id)
+            self._screen_guard.release(task.task_id)
             logger.error(f"Recorder: Ошибка запуска записи экрана: {e}")
             browser_proc.terminate()
             return ""
@@ -1092,6 +1106,8 @@ class Recorder:
             self._history_event(task, 'completed', state=task.result_status)
             self._notify_completion(task)
         finally:
+            self._sleep_guard.release(task.task_id)
+            self._screen_guard.release(task.task_id)
             self._leave_paused_state(task, resume_process=False)
             task.finished_at = task.finished_at or datetime.now()
             task.recovering = False
@@ -1276,6 +1292,7 @@ class Recorder:
             base = Path(task.base_output_path)
             output = base.with_name(base.stem+'_joined.mp4')
             task.merging = True
+            self._sleep_guard.acquire('merge:'+task.task_id)
             self._wait_threads.add(threading.current_thread())
         self._notify_ui()
         try:
@@ -1284,6 +1301,7 @@ class Recorder:
             self._history_event(task, 'parts_merged', {'path': str(result)}, state=task.result_status)
             return result
         finally:
+            self._sleep_guard.release('merge:'+task.task_id)
             with self._lock:
                 task.merging = False
                 self._wait_threads.discard(threading.current_thread())
@@ -1382,6 +1400,8 @@ class Recorder:
         
         def loop():
             while self._running:
+                self._sleep_guard.refresh()
+                self._screen_guard.refresh()
                 with self._lock:
                     has_active = any(t.is_recording for t in self.tasks.values())
                 
@@ -1398,6 +1418,8 @@ class Recorder:
         self._running = False
         with self._lock:
             self._closing = True
+            self._sleep_guard.close()
+            self._screen_guard.close()
             timers = list(self._stop_timers.values())
             self._stop_timers.clear()
             tasks = list(self.tasks.values())

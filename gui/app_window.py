@@ -82,6 +82,8 @@ class AppWindow:
         self._capture_permissions = {'full_screen': None, 'without_audio': None}
         self._capture_permission_lock = threading.Lock()
         self._closing = False
+        self.recorder.power_error_callback = lambda text: self.root.after(
+            0, lambda: not self._closing and messagebox.showwarning('Защита от сна', text, parent=self.root))
         self.recorder.set_screen_capture_callbacks(
             self._confirm_screen_capture_mode, self._show_screen_capture_unavailable)
         self.downloader = Downloader()

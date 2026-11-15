@@ -1,0 +1,8 @@
+{
+  "helper_pid": 39491,
+  "idle_sleep_assertion_confirmed": true,
+  "assertion_lines": [
+    "pid 39491(caffeinate): [0x0007d144000187c1] 00:00:00 PreventUserIdleSystemSleep named: \"caffeinate command-line tool\""
+  ],
+  "released": true
+}
