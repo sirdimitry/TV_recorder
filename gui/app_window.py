@@ -627,8 +627,12 @@ class AppWindow:
         if page is not None:
             page.tkraise()
         if key == 'downloads':
+            self.preview_panel.clear()
+            self.preview_panel.pack_forget()
             self.btn_toolbar_check.pack_forget()
         else:
+            if not self.preview_panel.winfo_manager():
+                self.preview_panel.pack(fill='x', padx=4, pady=(4, 0), before=self.tab_strip)
             if not self.btn_toolbar_check.winfo_manager():
                 self.btn_toolbar_check.pack(side='right', padx=(6, 0))
             self.btn_toolbar_check.configure(
@@ -1499,6 +1503,7 @@ class AppWindow:
                 self.downloader.shutdown()
                 self.recorder.stop_all()
                 self.download_list.wait_for_persistence()
+                self.storage.save_downloads([task.to_dict() for task in self.downloader.get_all_downloads()])
             except Exception:
                 logger.exception("Ошибка при завершении приложения")
             finally:

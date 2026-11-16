@@ -150,6 +150,11 @@ class DownloadList(ctk.CTkFrame):
         # приложения, который прервали закрытием — тогда живой задачи с
         # таким id уже нет и не будет, значит это тихая ошибка, а не
         # "качается" навечно.
+        if self.downloader:
+            for item in items:
+                restored = self.downloader.restore_download(item)
+                if restored is not None:
+                    item.update(restored.to_dict())
         live_ids = {t.task_id for t in self.downloader.get_all_downloads()} if self.downloader else set()
         for item in items:
             if item.get('status') == 'downloading' and item.get('id') not in live_ids:
@@ -277,6 +282,10 @@ class DownloadList(ctk.CTkFrame):
                                lambda d=download_id: self._open_folder(d))
         btn_folder.pack(side='left', padx=1)
 
+        btn_pause = ctk.CTkButton(actions, text='Пауза', width=100, height=30,
+                                  command=lambda d=download_id: self._on_pause(d))
+        btn_pause.pack(side='left', padx=3)
+
         btn_cancel = icon_btn(actions, 'stop', c['red'], lambda d=download_id: self._on_cancel(d))
         btn_cancel.pack(side='left', padx=1)
 
@@ -287,7 +296,7 @@ class DownloadList(ctk.CTkFrame):
             'row': row, 'thumb_label': thumb_label, 'label_name': label_name, 'badge': badge,
             'status_dot': status_dot, 'error_label': error_label, 'progress_bar': progress_bar,
             'progress_label': progress_label, 'progress_strip': progress_strip,
-            'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'item': item,
+            'btn_folder': btn_folder, 'btn_cancel': btn_cancel, 'btn_pause': btn_pause, 'item': item,
             'thumbnail_loaded': False, 'progress_shown': False, 'error_shown': False,
             'full_name': name, 'full_error': '', 'bar_mode': 'determinate',
         }
@@ -328,11 +337,22 @@ class DownloadList(ctk.CTkFrame):
             'resolving': c['text_muted'], 'downloading': c['accent'],
             'done': c['green'], 'partial': c['yellow'],
             'error': c['red'], 'processing_error': c['red'], 'canceled': c['text_muted'],
+            'paused': c['yellow'], 'pausing': c['yellow'], 'retrying': c['yellow'], 'processing': c['accent'],
         }
         dot_color = colors_by_status.get(status, c['text_muted'])
         widgets['status_dot'].configure(image=get_icon('record', dot_color, 10))
 
-        error_message = item.get('error_message') if status in ('partial', 'error', 'processing_error') else ''
+        labels = {'resolving': 'Подключение', 'downloading': 'Загрузка', 'retrying': 'Повтор подключения',
+                  'pausing': 'Остановка передачи…', 'paused': 'На паузе', 'processing': 'Сборка и проверка MP4',
+                  'done': 'Готово', 'partial': 'Сохранено частично', 'error': 'Ошибка',
+                  'processing_error': 'Ошибка обработки', 'canceled': 'Отменено'}
+        widgets['btn_pause'].configure(text='Продолжить' if status == 'paused' else 'Пауза',
+            state='normal' if item.get('resume_supported') and (
+                status in ('resolving', 'downloading', 'retrying') or
+                status == 'paused' and not item.get('worker_active')) else 'disabled')
+        widgets['badge'].configure(text=(
+            'MP4'+(f' · {duration_label}' if duration_label else '')+' · '+labels.get(status, status)))
+        error_message = item.get('error_message') if status in ('partial', 'error', 'processing_error', 'paused', 'retrying') else ''
         if error_message:
             widgets['full_error'] = error_message
             info_width = widgets['label_name'].master.winfo_width()
@@ -360,7 +380,7 @@ class DownloadList(ctk.CTkFrame):
         # переключаем полоску в неопределённый (бегущий) режим и показываем
         # реальный счётчик скачанных байт вместо статичного "подключение…".
         progress = item.get('progress')
-        show_progress = status == 'downloading'
+        show_progress = status in ('downloading', 'retrying', 'pausing', 'paused')
         if show_progress:
             downloaded = item.get('downloaded_bytes')
             if progress is not None:
@@ -370,6 +390,12 @@ class DownloadList(ctk.CTkFrame):
                     widgets['bar_mode'] = 'determinate'
                 widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
                 parts = [f"{progress:.0f}%"]
+            elif status in ('paused', 'pausing', 'retrying'):
+                widgets['progress_bar'].stop()
+                widgets['progress_bar'].configure(mode='determinate')
+                widgets['bar_mode'] = 'determinate'
+                widgets['progress_bar'].set(0)
+                parts = [_format_size(downloaded)] if downloaded else ['Части сохранены']
             elif downloaded:
                 if widgets['bar_mode'] != 'indeterminate':
                     widgets['progress_bar'].configure(mode='indeterminate')
@@ -403,7 +429,7 @@ class DownloadList(ctk.CTkFrame):
 
         widgets['btn_folder'].configure(state='normal' if status in ('done', 'partial') else 'disabled')
         widgets['btn_cancel'].configure(
-            state='normal' if status in ('resolving', 'downloading') else 'disabled')
+            state='normal' if status in ('resolving', 'downloading', 'retrying', 'pausing', 'paused', 'processing') else 'disabled')
 
         # Превью появляется только после resolve — при создании строки
         # (status='resolving') его ещё нет, а на этот момент вызывается
@@ -455,12 +481,27 @@ class DownloadList(ctk.CTkFrame):
         else:
             subprocess.run(['open', str(Path(output_path).parent)])
 
+    def _on_pause(self, download_id):
+        if self.downloader:
+            item = self.row_widgets.get(download_id, {}).get('item', {})
+            if item.get('status') == 'paused':
+                self.downloader.resume_download(download_id)
+            else:
+                self.downloader.pause_download(download_id)
+
     def _on_cancel(self, download_id: str):
         # cancel_download() сам зовёт _notify_ui() -> _refresh_from_downloader,
         # который и обновит строку, и сохранит новый статус через storage —
         # отдельно дублировать это здесь незачем.
         if self.downloader:
+            item = self.row_widgets.get(download_id, {}).get('item', {})
+            if item.get('resume_supported'):
+                from gui.inline_messages import messagebox
+                if not messagebox.askyesno('Отменить загрузку',
+                        'Отменить загрузку и удалить её временные части? Для сохранения частей используйте «Пауза».', parent=self.root):
+                    return False
             self.downloader.cancel_download(download_id)
+        return True
 
     def _on_delete(self, download_id: str):
         # "Удалить" убирает строку из списка — файл уже готовой загрузки не
@@ -468,8 +509,9 @@ class DownloadList(ctk.CTkFrame):
         # закачки — здесь только чистим саму задачу/историю).
         item = self.row_widgets.get(download_id, {}).get('item', {})
         if self.downloader:
-            if item.get('status') in ('resolving', 'downloading'):
-                self.downloader.cancel_download(download_id)
+            if item.get('status') in ('resolving', 'downloading', 'retrying', 'pausing', 'paused', 'processing'):
+                if self._on_cancel(download_id) is False:
+                    return
             self.downloader.remove_task(download_id)
         # Дожидаемся ранее поставленной в очередь пакетной записи, иначе она
         # могла бы вернуть только что удалённую строку обратно в JSON.
@@ -486,13 +528,13 @@ class DownloadList(ctk.CTkFrame):
         from gui.inline_messages import messagebox
         if not messagebox.askyesno(
                 "Очистить загрузки",
-                "Очистить всю историю загрузок?\nАктивные загрузки будут отменены, готовые файлы останутся на диске.",
+                "Очистить всю историю загрузок?\nНезавершённые загрузки и временные части будут удалены. Готовые файлы останутся на диске.",
                 parent=self.root):
             return
 
         if self.downloader:
             for task in self.downloader.get_all_downloads():
-                if task.status in ('resolving', 'downloading'):
+                if task.status in ('resolving', 'downloading', 'retrying', 'pausing', 'paused', 'processing'):
                     self.downloader.cancel_download(task.task_id)
                 self.downloader.remove_task(task.task_id)
 
@@ -511,7 +553,7 @@ class DownloadList(ctk.CTkFrame):
             return
         items = [task.to_dict() for task in self.downloader.get_all_downloads()]
         terminal_changed = any(
-            item.get('status') in ('done', 'partial', 'error', 'processing_error', 'canceled')
+            item.get('status') in ('done', 'partial', 'error', 'processing_error', 'canceled', 'paused')
             and self._last_queued_status.get(item.get('id')) != item.get('status')
             for item in items
         )

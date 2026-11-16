@@ -44,6 +44,11 @@ if __name__ == '__main__':
 
     _inject_bundled_ffmpeg_path()
 
+    if len(sys.argv) > 1 and sys.argv[1] == '--youtube-transfer-worker':
+        sys.argv = ['youtube_transfer.py'] + sys.argv[2:]
+        from core.youtube_transfer import main as transfer_main
+        sys.exit(transfer_main())
+
     from gui.app_window import AppWindow
     from utils.config import Config
     from utils.logger import logger

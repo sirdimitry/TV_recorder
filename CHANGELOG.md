@@ -1,3 +1,10 @@
+## 1.1.50 — candidate, 2026-11-16
+
+- Pause/resume new full YouTube downloads using yt-dlp partial files and refreshed URLs.
+- Pin video and format identity before resuming; preserve data when retries are exhausted.
+- Restore interrupted resumable tasks as paused after app restart.
+- Hide and stop preview in Downloads; give the list the available workspace.
+
 ## Unreleased — stage 10 candidate
 
 - Keep monitor, forms, settings, about and confirmations in the main window.

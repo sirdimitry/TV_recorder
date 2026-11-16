@@ -1,0 +1,17 @@
+test_network_failure_exhausts_attempts_and_leaves_manual_resume (test_youtube_resume.RealResumeTests.test_network_failure_exhausts_attempts_and_leaves_manual_resume) ... 2026-11-16 09:48:30.838 | INFO     | downloader:start_download:188 | Downloader: добавлена загрузка 'https://youtu.be/test' (id: 9302acae4fe042b399ca59abdd1239c2, до 720p)
+ok
+test_pause_restart_app_and_resume_uses_range_and_preserves_exact_bytes (test_youtube_resume.RealResumeTests.test_pause_restart_app_and_resume_uses_range_and_preserves_exact_bytes) ... 2026-11-16 09:48:33.822 | INFO     | downloader:start_download:188 | Downloader: добавлена загрузка 'https://youtu.be/test' (id: 70571b5a79c44b81a8a50dcd508a4ac7, до 720p)
+ok
+test_separate_video_and_audio_resume_then_merge_validates_both_tracks (test_youtube_resume.RealResumeTests.test_separate_video_and_audio_resume_then_merge_validates_both_tracks) ... 2026-11-16 09:48:36.646 | INFO     | downloader:start_download:188 | Downloader: добавлена загрузка 'https://youtu.be/test' (id: b51e494f987240d2994d82865ff8563b, до 720p)
+ok
+test_changed_format_or_content_is_never_appended (test_youtube_resume.ResumePolicyTests.test_changed_format_or_content_is_never_appended) ... ok
+test_download_tab_stops_and_hides_preview_then_restores_it (test_youtube_resume.ResumePolicyTests.test_download_tab_stops_and_hides_preview_then_restores_it) ... ok
+test_only_full_youtube_videos_use_resumable_engine (test_youtube_resume.ResumePolicyTests.test_only_full_youtube_videos_use_resumable_engine) ... ok
+test_pause_and_cancel_have_different_disk_semantics (test_youtube_resume.ResumePolicyTests.test_pause_and_cancel_have_different_disk_semantics) ... ok
+test_pause_cannot_interrupt_merging_or_resume_twice (test_youtube_resume.ResumePolicyTests.test_pause_cannot_interrupt_merging_or_resume_twice) ... ok
+test_restore_is_paused_and_never_launches_network (test_youtube_resume.ResumePolicyTests.test_restore_is_paused_and_never_launches_network) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 11.387s
+
+OK

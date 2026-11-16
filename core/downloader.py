@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import uuid
+import shutil
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,11 @@ class DownloadTask:
         self.storage_error = ""
         self.disk_guard = None
         self.last_activity = time.monotonic()
+        self.resume_supported = False
+        self.work_dir = str(self.output_dir / ('.tv-download-'+task_id))
+        self.pause_requested = threading.Event()
+        self.worker_active = False
+        self.stream_progress = {}
 
     def to_dict(self) -> Dict:
         """Снимок задачи как есть — используется и для живого обновления
@@ -83,6 +89,10 @@ class DownloadTask:
             'eta_seconds': self.eta_seconds,
             'clip_start': self.clip_start,
             'clip_end': self.clip_end,
+            'resume_supported': self.resume_supported,
+            'output_dir': str(self.output_dir),
+            'stream_progress': dict(self.stream_progress),
+            'worker_active': self.worker_active,
         }
 
 
@@ -115,13 +125,19 @@ class Downloader:
     def _watch_task_disk(self, task):
         def stop(message):
             with self._lock:
-                if task.status != 'downloading' or task.process.poll() is not None:
+                active = (task.status in ('resolving', 'downloading', 'processing')
+                          if task.resume_supported else task.status == 'downloading')
+                if not active or task.process is None or task.process.poll() is not None:
                     return
                 task.storage_error = message
                 task.error_message = message
                 process = task.process
             # This is a partial save, not a user cancellation: never delete it.
-            process.terminate()
+            if task.resume_supported:
+                from core.resumable_download import stop_process
+                stop_process(task)
+            else:
+                process.terminate()
             self._storage_notice(message)
             try:
                 process.wait(timeout=10)
@@ -160,6 +176,8 @@ class Downloader:
         task.on_complete = on_complete
         task.clip_start = clip_start
         task.clip_end = clip_end
+        from core.youtube_transfer import supported
+        task.resume_supported = supported(url, clip_end)
 
         with self._lock:
             if self._closing:
@@ -172,31 +190,101 @@ class Downloader:
         worker = threading.Thread(target=self._run_worker, args=(task,), daemon=True)
         with self._lock:
             self._workers.add(worker)
+            task.worker_active = True
         worker.start()
         return task_id
 
     def _run_worker(self, task: DownloadTask):
         try:
-            self._run(task)
+            if task.resume_supported:
+                from core.resumable_download import run
+                run(self, task)
+            else:
+                self._run(task)
         finally:
             if task.disk_guard:
                 task.disk_guard.close()
             with self._lock:
+                task.worker_active = False
                 self._workers.discard(threading.current_thread())
+            if task.status == 'canceled' and task.resume_supported:
+                shutil.rmtree(task.work_dir, ignore_errors=True)
+            self._notify_ui()
+
+    def pause_download(self, task_id):
+        from core.resumable_download import stop_process
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if (not task or not task.resume_supported or
+                    task.status not in ('resolving', 'downloading', 'retrying')):
+                return False
+            task.pause_requested.set()
+            task.status = 'pausing'
+            task.error_message = 'Загрузка на паузе. Части сохранены.'
+        stop_process(task)
+        self._notify_ui()
+        return True
+
+    def resume_download(self, task_id):
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if (not task or not task.resume_supported or self._closing
+                    or task.worker_active or task.status != 'paused'):
+                return False
+            task.pause_requested.clear()
+            task.status, task.error_message = 'resolving', ''
+            task.worker_active = True
+            worker = threading.Thread(target=self._run_worker, args=(task,), daemon=True)
+            self._workers.add(worker)
+        worker.start()
+        self._notify_ui()
+        return True
+
+    def restore_download(self, item):
+        """Restore resumable descriptors as paused; never start network IO here."""
+        from core.youtube_transfer import supported
+        import re
+        task_id = item.get('id', '')
+        if (not item.get('resume_supported') or not re.fullmatch(r'[a-f0-9]{32}', task_id)
+                or not supported(item.get('url', ''), item.get('clip_end'))):
+            return None
+        with self._lock:
+            if task_id in self.tasks:
+                return self.tasks[task_id]
+            if item.get('status') in ('done', 'canceled'):
+                return None
+            folder = item.get('output_dir')
+            if not folder:
+                return None
+            task = DownloadTask(task_id, item['url'], item.get('target_height', 720), Path(folder))
+            for key in ('name', 'thumbnail', 'duration', 'output_path', 'progress', 'downloaded_bytes', 'stream_progress'):
+                if key in item:
+                    setattr(task, key, item[key])
+            task.resume_supported = True
+            task.status = 'paused'
+            task.error_message = 'Загрузка приостановлена. Нажмите «Продолжить», чтобы докачать сохранённые части.'
+            self.tasks[task_id] = task
+            return task
 
     def cancel_download(self, task_id: str):
         with self._lock:
             task = self.tasks.get(task_id)
             if not task:
                 return
-            if task.status not in ('resolving', 'downloading'):
+            if task.status not in ('resolving', 'downloading', 'retrying', 'processing', 'pausing', 'paused'):
                 return
             # Статус и ссылка на процесс фиксируются одной атомарной секцией.
             # Иначе worker мог запустить ffmpeg между проверкой process=None
             # и выставлением canceled, после чего процесс оставался без хозяина.
             task.status = 'canceled'
             process = task.process
-        if process and process.poll() is None:
+        if task.resume_supported:
+            from core.resumable_download import stop_process
+            task.pause_requested.set()
+            stop_process(task)
+            if not task.worker_active:
+                shutil.rmtree(task.work_dir, ignore_errors=True)
+        elif process and process.poll() is None:
             process.terminate()
         # Оборванный на середине файл (moov в конце из-за +faststart)
         # всё равно не воспроизведётся — не оставляем мусор в папке загрузок.
@@ -205,6 +293,8 @@ class Downloader:
 
     @staticmethod
     def _cleanup_canceled_file(task: DownloadTask):
+        if task.resume_supported:
+            return
         if task.output_path:
             try:
                 Path(task.output_path).unlink(missing_ok=True)
@@ -441,12 +531,19 @@ class Downloader:
             tasks = list(self.tasks.values())
             workers = list(self._workers)
             for task in tasks:
-                if task.status in ('resolving', 'downloading'):
+                if task.resume_supported and task.status not in ('done', 'canceled'):
+                    task.pause_requested.set()
+                    task.status = 'pausing' if task.worker_active else 'paused'
+                elif task.status in ('resolving', 'downloading'):
                     task.status = 'canceled'
 
         for task in tasks:
             if task.process and task.process.poll() is None:
-                task.process.terminate()
+                if task.resume_supported:
+                    from core.resumable_download import stop_process
+                    stop_process(task)
+                else:
+                    task.process.terminate()
 
         deadline = time.monotonic() + timeout
         for worker in workers:
@@ -459,7 +556,7 @@ class Downloader:
                     task.process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     pass
-            if task.status == 'canceled' and task.output_path:
+            if task.status == 'canceled' and task.output_path and not task.resume_supported:
                 try:
                     Path(task.output_path).unlink(missing_ok=True)
                 except OSError as error:
