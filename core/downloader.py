@@ -61,6 +61,8 @@ class DownloadTask:
         self.pause_requested = threading.Event()
         self.worker_active = False
         self.stream_progress = {}
+        self.total_bytes = None
+        self.total_is_estimate = False
 
     def to_dict(self) -> Dict:
         """Снимок задачи как есть — используется и для живого обновления
@@ -91,7 +93,9 @@ class DownloadTask:
             'clip_end': self.clip_end,
             'resume_supported': self.resume_supported,
             'output_dir': str(self.output_dir),
-            'stream_progress': dict(self.stream_progress),
+            'stream_progress': {key: dict(value) for key, value in self.stream_progress.items()},
+            'total_bytes': self.total_bytes,
+            'total_is_estimate': self.total_is_estimate,
             'worker_active': self.worker_active,
         }
 
@@ -257,7 +261,7 @@ class Downloader:
             if not folder:
                 return None
             task = DownloadTask(task_id, item['url'], item.get('target_height', 720), Path(folder))
-            for key in ('name', 'thumbnail', 'duration', 'output_path', 'progress', 'downloaded_bytes', 'stream_progress'):
+            for key in ('name', 'thumbnail', 'duration', 'output_path', 'progress', 'downloaded_bytes', 'stream_progress', 'total_bytes', 'total_is_estimate'):
                 if key in item:
                     setattr(task, key, item[key])
             task.resume_supported = True

@@ -64,6 +64,7 @@ def main():
         emit('progress', format_id=details.get('format_id', 'media'),
              downloaded=data.get('downloaded_bytes', 0),
              total=data.get('total_bytes') or data.get('total_bytes_estimate'),
+             estimated=not bool(data.get('total_bytes')), finished=data.get('status') == 'finished',
              speed=data.get('speed'), eta=data.get('eta'))
 
     opts = dict(format=selector, outtmpl=str(folder/'media.%(ext)s'), noplaylist=True,
@@ -86,7 +87,15 @@ def main():
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, checkpoint)
-            emit('metadata', title=info.get('title'), thumbnail=info.get('thumbnail'), duration=info.get('duration'))
+            streams = []
+            for item in info.get('requested_formats') or [info]:
+                size = item.get('filesize') or item.get('filesize_approx')
+                if not size and item.get('tbr') and info.get('duration'):
+                    size = item['tbr']*1000*info['duration']/8
+                streams.append(dict(id=item.get('format_id', 'media'), total=size,
+                                    estimated=not bool(item.get('filesize'))))
+            emit('metadata', title=info.get('title'), thumbnail=info.get('thumbnail'),
+                 duration=info.get('duration'), streams=streams)
             ydl.process_info(info)
             emit('finished')
     except KeyboardInterrupt:

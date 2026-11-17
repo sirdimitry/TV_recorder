@@ -77,7 +77,7 @@ class ResumePolicyTests(unittest.TestCase):
         app._tab_pages = {'downloads': Mock(), 'channels': Mock()}
         app.preview_panel = Mock()
         app.btn_toolbar_check = Mock()
-        app.tab_strip = Mock()
+        app.tab_pages = Mock()
         app.right_paned = 'right'
         app.paned = Mock()
         app.paned.panes.return_value = ['right']

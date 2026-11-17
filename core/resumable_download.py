@@ -10,7 +10,7 @@ import threading
 import time
 
 from core.media_probe import assess_probe, probe_media, COMPLETED
-from utils.config import Config
+from core.download_progress import configure_streams, update_progress
 
 ACTIVE = ('resolving', 'downloading', 'retrying', 'pausing', 'processing')
 RETRY_DELAYS = (2, 5, 10)
@@ -70,17 +70,14 @@ def run(owner, task):
                         task.name = event.get('title') or task.name
                         task.thumbnail = event.get('thumbnail') or ''
                         task.duration = event.get('duration')
+                        configure_streams(task, event.get('streams', []))
                         if not task.output_path:
                             task.output_path = str(build_download_path(task.name, task.output_dir))
                     elif kind == 'progress':
                         if task.pause_requested.is_set():
                             continue
                         task.status = 'downloading'
-                        task.stream_progress[event['format_id']] = dict(downloaded=event.get('downloaded') or 0, total=event.get('total'))
-                        task.downloaded_bytes = sum(item['downloaded'] for item in task.stream_progress.values())
-                        # A stream reaching 100% is not the complete video+audio.
-                        task.progress = None
-                        task.speed_bps, task.eta_seconds = event.get('speed'), event.get('eta')
+                        update_progress(task, event)
                     elif kind == 'failed':
                         task.error_message = event.get('message', '')
                         if event.get('fatal'):

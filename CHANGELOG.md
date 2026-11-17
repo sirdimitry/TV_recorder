@@ -1,3 +1,10 @@
+## 1.1.51 — candidate, 2026-11-17
+
+- Move My Links and Downloads into the main navigation beside Live and Archive.
+- Remove the nested tab row; retain full-width Downloads without preview.
+- Show aggregate video/audio download progress, total size, speed and ETA.
+- Add Cmd+3 / Cmd+4 shortcuts for My Links / Downloads.
+
 ## 1.1.50 — candidate, 2026-11-16
 
 - Pause/resume new full YouTube downloads using yt-dlp partial files and refreshed URLs.

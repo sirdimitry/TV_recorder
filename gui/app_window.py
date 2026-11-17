@@ -456,6 +456,8 @@ class AppWindow:
                                 command=lambda: self.workspace_tabs.set('archive'))
         self.root.bind('<Command-Key-1>', lambda _: self.workspace_tabs.set('live'))
         self.root.bind('<Command-Key-2>', lambda _: self.workspace_tabs.set('archive'))
+        self.root.bind('<Command-Key-3>', lambda _: self.workspace_tabs.set('links'))
+        self.root.bind('<Command-Key-4>', lambda _: self.workspace_tabs.set('downloads'))
         menubar.add_cascade(label="Окно", menu=window_menu)
 
         self.root.config(menu=menubar)
@@ -489,7 +491,8 @@ class AppWindow:
         self.btn_toolbar_check.pack(side='right', padx=(6, 0))
 
         self.workspace_tabs = TabStrip(
-            self.root, tabs=[('live', 'Эфир и записи', 'tv'), ('archive', 'Архив', 'calendar')],
+            self.root, tabs=[('live', 'Эфир и записи', 'tv'), ('archive', 'Архив', 'calendar'),
+                             ('links', 'Мои ссылки', 'link'), ('downloads', 'Загрузки', 'download')],
             command=self._on_workspace_changed, colors=c)
         self.workspace_tabs.pack(fill='x', padx=18, pady=(0, 12))
 
@@ -503,21 +506,6 @@ class AppWindow:
 
         self.preview_panel = PreviewPanel(left_frame)
         self.preview_panel.pack(fill='x', padx=4, pady=(4, 0))
-
-        # Иконки вместо текстовых вкладок — встроенный CTkTabview этого не
-        # умеет (его CTkSegmentedButton без слота под картинку), поэтому
-        # свой компактный переключатель (gui/tab_strip.py) + страницы,
-        # уложенные в одну ячейку grid и переключаемые через .tkraise() —
-        # обычный tkinter-приём для "вкладок" без стороннего виджета.
-        self.tab_strip = TabStrip(
-            left_frame,
-            tabs=[
-                ('channels', 'Каналы', 'tv'),
-                ('links', 'Мои ссылки', 'link'),
-                ('downloads', 'Загрузки', 'download'),
-            ],
-            command=self._on_left_tab_changed, colors=c)
-        self.tab_strip.pack(fill='x', padx=4, pady=(8, 6))
 
         self.tab_pages = ctk.CTkFrame(left_frame, fg_color='transparent')
         self.tab_pages.pack(fill='both', expand=True, padx=4, pady=(0, 4))
@@ -600,7 +588,7 @@ class AppWindow:
             self.archive_panel.deactivate()
             self.archive_panel.pack_forget()
             self.paned.pack(fill='both', expand=True, padx=18, pady=(0, 10), before=self.status_bar)
-            self._on_left_tab_changed(self.tab_strip.get())
+            self._on_left_tab_changed('channels' if key == 'live' else key)
 
     def _refresh_data(self):
         self.channel_list.load_channels(self.storage.get_channels())
@@ -610,13 +598,13 @@ class AppWindow:
 
     def _add_download_dialog(self):
         show_add_download_dialog(self.root, self.colors, self.storage, self.downloader,
-                                  on_added=lambda: self.tab_strip.set('downloads'))
+                                  on_added=lambda: self.workspace_tabs.set('downloads'))
 
     def _check_all_channels(self):
         self.channel_list.check_all()
 
     def _toolbar_check_all(self):
-        key = self.tab_strip.get()
+        key = self.workspace_tabs.get()
         if key == 'links':
             self.link_list.load_links(self.storage.get_links())
         else:
@@ -632,7 +620,7 @@ class AppWindow:
             self.btn_toolbar_check.pack_forget()
         else:
             if not self.preview_panel.winfo_manager():
-                self.preview_panel.pack(fill='x', padx=4, pady=(4, 0), before=self.tab_strip)
+                self.preview_panel.pack(fill='x', padx=4, pady=(4, 0), before=self.tab_pages)
             if not self.btn_toolbar_check.winfo_manager():
                 self.btn_toolbar_check.pack(side='right', padx=(6, 0))
             self.btn_toolbar_check.configure(

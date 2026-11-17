@@ -380,7 +380,7 @@ class DownloadList(ctk.CTkFrame):
         # переключаем полоску в неопределённый (бегущий) режим и показываем
         # реальный счётчик скачанных байт вместо статичного "подключение…".
         progress = item.get('progress')
-        show_progress = status in ('downloading', 'retrying', 'pausing', 'paused')
+        show_progress = status in ('downloading', 'retrying', 'pausing', 'paused', 'processing')
         if show_progress:
             downloaded = item.get('downloaded_bytes')
             if progress is not None:
@@ -389,7 +389,10 @@ class DownloadList(ctk.CTkFrame):
                     widgets['progress_bar'].configure(mode='determinate')
                     widgets['bar_mode'] = 'determinate'
                 widgets['progress_bar'].set(max(0.0, min(1.0, progress / 100)))
-                parts = [f"{progress:.0f}%"]
+                prefix = '~' if item.get('total_is_estimate') else ''
+                parts = [prefix+f"{progress:.0f}%"]
+                if item.get('total_bytes'):
+                    parts.append(_format_size(downloaded or 0)+' / '+prefix+_format_size(item['total_bytes']))
             elif status in ('paused', 'pausing', 'retrying'):
                 widgets['progress_bar'].stop()
                 widgets['progress_bar'].configure(mode='determinate')
@@ -409,6 +412,8 @@ class DownloadList(ctk.CTkFrame):
                     widgets['bar_mode'] = 'determinate'
                 widgets['progress_bar'].set(0)
                 parts = ["подключение…"]
+            if status == 'processing':
+                parts.append('Сборка и проверка MP4')
             speed_text = _format_speed(item.get('speed_bps'))
             if speed_text:
                 parts.append(speed_text)
