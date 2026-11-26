@@ -113,7 +113,13 @@ class RecordingTask:
         return int(time.time() - self.start_time - self.total_paused_duration)
     
     def format_elapsed_time(self) -> str:
-        seconds = self.get_elapsed_time()
+        durations = [part.get('container_duration') for part in self.parts
+                     if part.get('status') in ('completed', 'partial')]
+        if self.result_status is not None and not self.is_recording and not self.recovering and durations and all(
+                duration is not None for duration in durations):
+            seconds = int(sum(durations) + 0.5)
+        else:
+            seconds = self.get_elapsed_time()
         h = seconds // 3600
         m = (seconds % 3600) // 60
         s = seconds % 60

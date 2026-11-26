@@ -3,7 +3,6 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from core.checker import StreamStatus
 from core.scheduler import RecordingScheduler
 
 
@@ -136,7 +135,7 @@ class SchedulerRecoveryTests(unittest.TestCase):
     def test_real_precheck_starts_remaining_portion_with_original_deadline(self):
         s = self.make_scheduler()
         s._pre_record_check = RecordingScheduler._pre_record_check.__get__(s)
-        s.checker.check = Mock(return_value=(StreamStatus.GREEN, 'ok'))
+        s.recorder.channel_headers.return_value = {}
         s.recorder.start_recording.return_value = 'recording-id'
         with patch('core.scheduler.datetime') as clock:
             clock.now.return_value = self.now
@@ -144,6 +143,7 @@ class SchedulerRecoveryTests(unittest.TestCase):
         kwargs = s.recorder.start_recording.call_args.kwargs
         self.assertEqual(kwargs['start_deadline_timestamp'],
                          self.now.replace(minute=27).timestamp())
+        self.assertEqual(kwargs['expected_duration_seconds'], 27 * 60)
         s.recorder.schedule_stop.assert_called_once_with('recording-id', 17 * 60)
         self.assertEqual(s._deadlines['recording-id'], self.now.replace(minute=27))
 

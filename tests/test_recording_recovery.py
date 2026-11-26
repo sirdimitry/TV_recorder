@@ -100,6 +100,15 @@ class RecoveryTests(unittest.TestCase):
         self.assertGreater(probe.video_duration, 2.9)
         self.assertGreater(probe.audio_duration, 2.9)
 
+    def test_finalization_caps_buffered_media_to_schedule_duration(self):
+        output, source, marker = self.capture()
+        metadata = json.loads(marker.read_text())
+        metadata['max_duration'] = 1
+        marker.write_text(json.dumps(metadata))
+        release_recording(marker)
+        finalize_recording(marker)
+        self.assertAlmostEqual(probe_media(output).duration, 1, delta=.15)
+
     def test_sigkill_leaves_recoverable_fragments(self):
         output, source, marker = self.capture(crash=True)
         release_recording(marker)

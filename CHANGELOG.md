@@ -1,3 +1,9 @@
+## 1.1.53 — 2026-11-26
+
+- Prepare HLS channel variants before the scheduled start and use the original playlist if preparation is still pending.
+- Stop scheduled TV captures at the wall-clock deadline and assess the full scheduled window.
+- Show saved media duration and place available recording actions on one line.
+
 ## 1.1.52 — 2026-11-26
 
 - Show live and completed recording cards in the right panel, and restore the list when starting a channel from Live.

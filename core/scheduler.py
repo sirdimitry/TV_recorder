@@ -7,11 +7,11 @@ from typing import Callable, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from core.checker import StreamChecker, StreamStatus
 from core.link_resolver import resolve_link
 from core.notifier import Notifier
 from core.recorder import Recorder
 from core.storage import Storage
+from core.stream_resolver import resolve_variant_url
 from utils.config import Config
 from utils.logger import logger
 from utils.timecode import parse_clock_time
@@ -28,7 +28,6 @@ class RecordingScheduler:
 
     def __init__(self, recorder: Recorder | None = None):
         self.scheduler = BackgroundScheduler()
-        self.checker = StreamChecker()
         self.recorder = recorder or Recorder()
         self.storage = Storage()
         self.notifier = Notifier()
@@ -39,6 +38,7 @@ class RecordingScheduler:
         self._attempts = {}
         self._attempt_counts = {}
         self._deadlines = {}
+        self._prepared_channels = {}
         self._status_callback: Optional[Callable[[int, str], None]] = None
 
     def set_status_callback(self, callback: Callable[[int, str], None]):
@@ -161,9 +161,34 @@ class RecordingScheduler:
             self.recorder.stop_recording(task_id)
         for target, item, index in entries:
             try:
+                self._prepare_channel(target, item, now)
                 self._run_scheduled_recording(target, item, index, now=now, background=True)
             except Exception:
                 logger.exception('Scheduler: ошибка восстановления строки #%s', index)
+
+    def _prepare_channel(self, target, item, now):
+        url = target.get('url', '')
+        if item.get('source_type', 'channel') != 'channel' or target.get('audio_url') or '.m3u8' not in url.lower():
+            return
+        window = self._active_window(item, now + timedelta(seconds=25))
+        if window is None or window[0] <= now:
+            return
+        headers = self.recorder.channel_headers(target)
+        key = (url, tuple(sorted(headers.items())), window[0])
+        with self._lock:
+            self._prepared_channels = {k: v for k, v in self._prepared_channels.items()
+                                       if k[2] > now - timedelta(minutes=5)}
+            if key in self._prepared_channels:
+                return
+            self._prepared_channels[key] = url
+
+        def prepare():
+            selected = resolve_variant_url(url, request_headers=headers)
+            with self._lock:
+                if key in self._prepared_channels:
+                    self._prepared_channels[key] = selected
+
+        threading.Thread(target=prepare, daemon=True, name='ScheduledPlaylistPreparation').start()
 
     def _run_scheduled_recording(self, target, item, index, *, now=None, background=False):
         now = now or datetime.now()
@@ -307,15 +332,6 @@ class RecordingScheduler:
                 return True
             video_url, audio_url, extra_headers = info.video_url, info.audio_url, info.headers
         else:
-            status, message = self.checker.check(target)
-            if status == StreamStatus.RED:
-                logger.error(f"Запись отменена: {name} — {message}")
-                self.notifier.send("❌ Запись отменена", f"{name}\n{message}")
-                self._notify_status(index, 'failed')
-                return
-            if status == StreamStatus.YELLOW:
-                logger.warning(f"Запись с предупреждением: {name} — {message}")
-                self.notifier.send("⚠️ Запись начата с предупреждением", f"{name}\n{message}")
             # audio_url — для каналов, у которых видео и звук на CDN лежат
             # раздельными HLS-рендициями (см. MANUAL_FIXES в m3u_parser.py:
             # "Россия 24"/"Россия К" через stream.smotrim.ru — обычный 'url'
@@ -328,6 +344,13 @@ class RecordingScheduler:
             logger.error(f"Запись '{name}' не начата: подготовка заняла всё окно расписания")
             self._notify_status(index, 'failed')
             return
+
+        prepared_url = None
+        window = self._active_window(schedule_item, deadline - timedelta(microseconds=1))
+        if source_type == 'channel' and window:
+            key = (video_url, tuple(sorted(extra_headers.items())), window[0])
+            with self._lock:
+                prepared_url = self._prepared_channels.get(key)
 
         output_path = self.recorder.build_output_path(name)
         with self._lock:
@@ -348,8 +371,11 @@ class RecordingScheduler:
             duration_limit_seconds=remaining if source_type == 'link' else None,
             start_deadline_timestamp=deadline.timestamp(),
             is_live_channel=(source_type != 'link'),
+            prepared_stream_url=prepared_url,
             expect_audio=target.get('expect_audio', True) if source_type != 'link' else bool(audio_url),
-            expected_duration_seconds=(min(remaining, info.duration) if source_type == 'link'
+            expected_duration_seconds=(
+                (deadline - window[0]).total_seconds() if source_type == 'channel' and window
+                else min(remaining, info.duration) if source_type == 'link'
                 and isinstance(getattr(info, 'duration', None), (int, float)) else remaining),
         )
         if not task_id:

@@ -20,13 +20,13 @@ _ACTIVE_MARKERS = {}
 FRAGMENT_FLAGS = '+frag_keyframe+default_base_moof'
 
 
-def prepare_recording(output, task_id, *, speed=None, has_audio=True):
+def prepare_recording(output, task_id, *, speed=None, has_audio=True, max_duration=None):
     output = Path(output).resolve()
     capture = output.with_name(f'{output.stem}.{task_id}.recording.mp4')
     directory = Config.DATA_DIR / 'pending_recordings'
     directory.mkdir(parents=True, exist_ok=True)
     marker = directory / f'{task_id}.json'
-    metadata = dict(capture=str(capture), output=str(output), speed=speed, has_audio=has_audio)
+    metadata = dict(capture=str(capture), output=str(output), speed=speed, has_audio=has_audio, max_duration=max_duration)
     temporary_marker = directory / f'.{task_id}.{uuid.uuid4().hex}.tmp'
     lock = temporary_marker.open('x+', encoding='utf-8')
     try:
@@ -79,13 +79,17 @@ def _finalize_recording(marker):
     ensure_space(output.parent, reserve=max(estimated_output, DiskGuard.reserved_bytes(output.parent)),
                  minimum=FINALIZE_MARGIN)
     temp = output.with_name(f'.{output.stem}.{uuid.uuid4().hex}.finalizing.mp4')
+    max_duration = metadata.get('max_duration')
     try:
         if metadata.get('speed'):
             cmd = build_timestretch_cmd(str(capture), str(temp), metadata['speed'],
                                        has_audio=metadata.get('has_audio', True))
         else:
             cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(capture),
-                   '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', '-movflags', '+faststart', str(temp)]
+                   '-map', '0:v:0', '-map', '0:a?', '-c', 'copy']
+            if max_duration and (source_probe.duration or 0) > max_duration:
+                cmd.extend(['-t', str(max_duration)])
+            cmd.extend(['-movflags', '+faststart', str(temp)])
         with tempfile.TemporaryFile() as errors:
             result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=errors,
                                     timeout=max(120, (source_probe.duration or 0)*3) if metadata.get('speed') else 120)
@@ -96,6 +100,8 @@ def _finalize_recording(marker):
             raise RuntimeError(f'Не удалось собрать MP4: {tail}')
         probe = probe_media(temp)
         expected_duration = (source_probe.duration or 0) * (metadata.get('speed') or 1)
+        if max_duration:
+            expected_duration = min(max_duration, expected_duration)
         if (not probe.readable or not probe.has_video
                 or (source_probe.has_audio and not probe.has_audio)
                 or (expected_duration and (probe.duration is None or probe.duration < expected_duration-max(1, expected_duration*.01)))):

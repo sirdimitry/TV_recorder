@@ -134,11 +134,19 @@ class Recorder:
             end = task.stop_timestamp or task.part_ended_wall or time.time()
             if task.deadline is not None:
                 end = min(end, task.deadline)
-            task.expected_seconds = max(0.0, end-task.start_time)
+            task.expected_seconds = (task.content_expected_duration if task.source == 'schedule'
+                                     and task.content_expected_duration is not None
+                                     else max(0.0, end-task.start_time))
         elif not task.stop_requested:
             task.expected_seconds = task.content_expected_duration or task.duration_limit_seconds
         task.missing_seconds = (max(0, task.expected_seconds-task.actual_seconds)
                                 if task.expected_seconds is not None and task.actual_seconds is not None else None)
+        if task.is_live and task.source == 'schedule' and task.deadline and task.content_expected_duration:
+            late = task.start_time - (task.deadline - task.content_expected_duration)
+            if late > 1:
+                if task.result_status == COMPLETED:
+                    task.result_status, task.success = PARTIAL, False
+                task.error_message = ' · '.join(filter(None, (task.error_message, f'Запуск позже расписания на {late:.1f} с')))
         if (task.missing_seconds is not None
                 and task.missing_seconds > duration_tolerance(task.expected_seconds)):
             if task.result_status == COMPLETED:
@@ -282,7 +290,7 @@ class Recorder:
         if '-t' in cmd:
             index = cmd.index('-t')
             cmd[index+1] = str(remaining)
-        elif remaining is not None:
+        elif remaining is not None and task.source != 'schedule':
             cmd[-1:-1] = ['-t', str(remaining)]
         capture, marker = prepare_recording(output, uuid.uuid4().hex)
         cmd[-1] = str(capture)
@@ -299,7 +307,7 @@ class Recorder:
                 task.part_number += 1
                 task.output_path = str(output)
                 task.capture_path, task.recovery_marker = capture, marker
-                task.duration_limit_seconds = remaining
+                task.duration_limit_seconds = remaining if '-t' in cmd else None
                 task.is_recording = True
                 task.finished_at = None
                 task.final_duration = 0
@@ -370,7 +378,8 @@ class Recorder:
                        start_deadline_timestamp: Optional[float] = None,
                        is_live_channel: bool = False,
                        expect_audio: Optional[bool] = None,
-                       expected_duration_seconds: Optional[float] = None) -> str:
+                       expected_duration_seconds: Optional[float] = None,
+                       prepared_stream_url: Optional[str] = None) -> str:
         with self._lock:
             if self._closing:
                 logger.warning(f"Recorder: запуск '{channel_name}' отклонён — приложение закрывается")
@@ -452,8 +461,9 @@ class Recorder:
                 if remaining <= 0:
                     logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска ffmpeg")
                     return ""
-                duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
-                                           if duration_limit_seconds else remaining)]
+                if not is_live_channel or duration_limit_seconds is not None:
+                    duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
+                                               if duration_limit_seconds else remaining)]
             # Видео и звук — уже отдельные закодированные дорожки (типично
             # для YouTube на 720p+): просто мультиплексируем их в один файл,
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
@@ -476,16 +486,20 @@ class Recorder:
             # вариант ближе к 720p/3-5 Мбит вместо того, что выберет сам
             # ffmpeg (обычно самый тяжёлый) — без перекодирования, просто
             # другой исходный вариант для copy-режима.
-            stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref,
-                                             request_headers=headers_dict)
+            if source == 'schedule' and is_live_channel:
+                stream_url = prepared_stream_url or stream_url
+            else:
+                stream_url = resolve_variant_url(stream_url, user_agent=ua, referer=ref,
+                                                 request_headers=headers_dict)
 
             if start_deadline_timestamp is not None:
                 remaining = start_deadline_timestamp - time.time()
                 if remaining <= 0:
                     logger.warning(f"Recorder: окно записи '{channel_name}' закончилось до запуска ffmpeg")
                     return ""
-                duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
-                                           if duration_limit_seconds else remaining)]
+                if not is_live_channel or duration_limit_seconds is not None:
+                    duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
+                                               if duration_limit_seconds else remaining)]
 
             cmd = [
                 'ffmpeg', '-y',
@@ -519,15 +533,17 @@ class Recorder:
             task.deadline = time.time() + duration_limit_seconds
         if not self._check_output_directory(output_file):
             return ""
-        task.capture_path, task.recovery_marker = prepare_recording(output_file, task_id)
+        task.capture_path, task.recovery_marker = prepare_recording(
+            output_file, task_id, max_duration=expected_duration_seconds if source == 'schedule' and is_live_channel else None)
         cmd[-1] = str(task.capture_path)
         cmd[2:2] = ['-progress', 'pipe:1', '-nostats']
         task.command = list(cmd)
 
         try:
             with self._lock:
-                if self._closing:
+                if self._closing or (task.deadline is not None and task.deadline <= time.time()):
                     release_recording(task.recovery_marker)
+                    task.recovery_marker.unlink(missing_ok=True)
                     return ""
                 self._sleep_guard.acquire(task.task_id)
                 task.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
