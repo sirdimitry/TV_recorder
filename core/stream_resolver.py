@@ -10,7 +10,7 @@ master-плейлист на 1080p/6+ Мбит не тянулся целико�
 import re
 import time
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -79,6 +79,18 @@ def hls_opts(url: str) -> list:
     # (seg_max_retry=0): один короткий 404/503 на CDN способен оборвать
     # многочасовую запись, хотя следующий запрос уже прошёл бы нормально.
     return ['-allowed_extensions', 'ALL', '-seg_max_retry', '10']
+
+
+def recording_hls_opts(url: str, live: bool) -> list:
+    opts = hls_opts(url)
+    if not opts or not live:
+        return opts
+    host = urlsplit(url).hostname or ''
+    if host.endswith('.cdn.ngenix.net'):
+        # Zabava can drop TLS between HLS requests. Fetch segments on fresh
+        # connections and keep one request in flight per input.
+        return [*opts, '-http_persistent', '0', '-http_multiple', '0', '-live_start_index', '-2']
+    return [*opts, '-live_start_index', '-3']
 
 
 def resolve_variant_url(url: str, user_agent: str = 'Mozilla/5.0', referer: Optional[str] = None,

@@ -104,8 +104,8 @@ class SingleWindowTests(unittest.TestCase):
             self.assertNotEqual(Path(resources), Path(directory).resolve())
 
     def test_normal_application_routes_cannot_create_secondary_windows(self):
-        # Regression guard: forms and monitor must remain root descendants.
-        for name in ('app_window', 'download_dialog', 'recording_monitor', 'recording_panel'):
+        # The live thumbnail grid is the only separate window in these routes.
+        for name in ('app_window', 'download_dialog', 'recording_panel'):
             tree = ast.parse((Path(__file__).resolve().parents[1]/'gui'/f'{name}.py').read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):

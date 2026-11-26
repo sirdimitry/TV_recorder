@@ -80,6 +80,7 @@ class AppWindow:
             history = None
             messagebox.showwarning('История записей', 'Не удалось открыть историю. Запись медиа остаётся доступной.', parent=self.root)
         self.recorder = Recorder(history=history)
+        self._starting_channels = set()
         self.recorder.history_error_callback = lambda text: self.root.after(
             0, lambda: not self._closing and messagebox.showwarning('История записей', text, parent=self.root))
         self._capture_permissions = {'full_screen': None, 'without_audio': None}
@@ -661,22 +662,35 @@ class AppWindow:
 
     def _record_channel_now(self, name: str, channel: Dict):
         """Мгновенная запись выбранного канала по кнопке записи у канала"""
+        if name in self._starting_channels or self.recorder.find_active_task_id(name):
+            return
         output = str(self.recorder.build_output_path(name))
+        self._starting_channels.add(name)
+        self.recording_panel.set_channel_connecting(name, True)
+        self.channel_list.set_record_starting(name, True)
 
         def start():
-            # start_recording теперь ходит в сеть (выбор варианта качества),
-            # поэтому запускаем его вне главного потока, чтобы не подвесить
-            # интерфейс по клику на кнопку записи. recorder.set_ui_callback
-            # уже надёжно обновляет панель записей из любого потока.
-            task_id = self.recorder.start_recording(
-                name, channel['url'], output, source="manual",
-                on_complete=self._on_record_complete,
-                audio_url=channel.get('audio_url'),
-                extra_headers=self.recorder.channel_headers(channel),
-                is_live_channel=True, expect_audio=channel.get('expect_audio', True)
-            )
-            if task_id:
-                logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")
+            try:
+                task_id = self.recorder.start_recording(
+                    name, channel['url'], output, source="manual",
+                    on_complete=self._on_record_complete,
+                    audio_url=channel.get('audio_url'),
+                    extra_headers=self.recorder.channel_headers(channel),
+                    is_live_channel=True, expect_audio=channel.get('expect_audio', True),
+                )
+                if task_id:
+                    logger.info(f"Начата мгновенная запись: {name} (task: {task_id})")
+            except Exception:
+                logger.exception("Ошибка запуска записи канала %s", name)
+                self.root.after(0, lambda: self.recording_panel.show_notice(
+                    f'Не удалось запустить запись «{name}». Подробности в журнале.', 'red'))
+            finally:
+                self.root.after(0, finish_start)
+
+        def finish_start():
+            self._starting_channels.discard(name)
+            self.recording_panel.set_channel_connecting(name, False)
+            self.channel_list.set_record_starting(name, False)
 
         threading.Thread(target=start, daemon=True).start()
 

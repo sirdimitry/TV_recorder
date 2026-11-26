@@ -18,7 +18,7 @@ from core.live_stream import LiveThumbnailStream
 from core.media_probe import COMPLETED, PARTIAL, classify_media, assess_probe, duration_tolerance
 from core.screen_capture import (build_screen_capture_cmd, build_timestretch_cmd, find_loopback_audio_index,
                                   find_screen_device_index, get_retina_scale_factor)
-from core.stream_resolver import RECONNECT_OPTS, hls_opts, resolve_variant_url
+from core.stream_resolver import RECONNECT_OPTS, recording_hls_opts, resolve_variant_url
 from utils.config import Config
 from utils.filenames import unique_media_path
 from utils.logger import logger
@@ -255,6 +255,9 @@ class Recorder:
                 and (task.stalled or task.ended_early or not task.success))
 
     def _restart_part(self, task, *, after_pause=False):
+        remaining = task.deadline - time.time() if task.deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            return False
         output = Path(task.base_output_path)
         output = output.with_name(f'{output.stem}_part{task.part_number+1:03d}{output.suffix}')
         if not self._check_output_directory(output):
@@ -262,22 +265,20 @@ class Recorder:
             return False
         cmd = list(task.command)
         if not task.audio_url:
-            fresh_url = resolve_variant_url(task.source_stream_url,
-                                            request_headers=task.headers)
-            cmd[cmd.index('-i')+1] = fresh_url
+            fresh_url = resolve_variant_url(task.source_stream_url, request_headers=task.headers)
+            # Rebuild HLS input options as the refreshed URL can point to another CDN.
+            input_index = cmd.index('-i')
+            old_opts = recording_hls_opts(cmd[input_index+1], live=True)
+            cmd[input_index+1] = fresh_url
+            if old_opts or '.m3u8' in fresh_url.lower():
+                start = cmd.index('-rw_timeout') + 2
+                cmd[start:start+len(old_opts)] = recording_hls_opts(fresh_url, live=True)
             task.stream_url = fresh_url
         if after_pause:
             # Resume at the newest HLS segment rather than buffered DVR content.
-            while '-live_start_index' in cmd:
-                index = cmd.index('-live_start_index')
-                del cmd[index:index+2]
-            inputs = [i for i, value in enumerate(cmd[:-1])
-                      if value == '-i' and '.m3u8' in cmd[i+1].lower()]
-            for index in reversed(inputs):
-                cmd[index:index] = ['-live_start_index', '-1']
-        remaining = task.deadline - time.time() if task.deadline is not None else None
-        if remaining is not None and remaining <= 0:
-            return False
+            for index, value in enumerate(cmd[:-1]):
+                if value == '-live_start_index':
+                    cmd[index+1] = '-1'
         if '-t' in cmd:
             index = cmd.index('-t')
             cmd[index+1] = str(remaining)
@@ -458,8 +459,8 @@ class Recorder:
             # без пересчёта варианта — yt-dlp уже выбрал конкретный поток.
             cmd = [
                 'ffmpeg', '-y',
-                *RECONNECT_OPTS, *hls_opts(stream_url), *dual_track_seek_opts, '-headers', headers, '-i', stream_url,
-                *RECONNECT_OPTS, *hls_opts(audio_url), *dual_track_seek_opts, '-headers', headers, '-i', audio_url,
+                *RECONNECT_OPTS, *recording_hls_opts(stream_url, is_live_channel), *dual_track_seek_opts, '-headers', headers, '-i', stream_url,
+                *RECONNECT_OPTS, *recording_hls_opts(audio_url, is_live_channel), *dual_track_seek_opts, '-headers', headers, '-i', audio_url,
                 '-map', '0:v:0', '-map', '1:a:0',
                 *dual_track_trim_opts,
                 '-c', 'copy',
@@ -486,26 +487,9 @@ class Recorder:
                 duration_opts = ['-t', str(min(duration_limit_seconds, remaining)
                                            if duration_limit_seconds else remaining)]
 
-            # У части "instant DVR/catch-up" HLS-источников (обнаружено на
-            # "Доверие" — rt-mos-htlive.cdn.ngenix.net) сегменты в плейлисте
-            # именованы абсолютным UTC-таймштампом и живут в узком катящемся
-            # окне (~60с). #EXT-X-MEDIA-SEQUENCE у них не растёт, из-за чего
-            # HLS-демуксер ffmpeg не опознаёт поток как живой и по умолчанию
-            # пытается начать с САМОГО СТАРОГО сегмента в списке — тот к
-            # моменту реального HTTP-запроса (плюс наши reconnect-задержки)
-            # часто уже успевает вылететь из окна: "Error when loading first
-            # segment". -live_start_index принудительно стартует НЕ с начала
-            # списка, а в −3 сегментах от конца (штатное поведение ffmpeg для
-            # уже верно опознанных live-потоков — тут просто форсируем его
-            # независимо от эвристики). Только для настоящих ТВ-каналов, не
-            # для "Мои ссылки" (там seek_seconds может означать позицию в
-            # конечном VOD-ролике, где ЛЮБОЙ сдвиг от начала — уже баг).
-            live_opts = (['-live_start_index', '-3']
-                         if is_live_channel and not seek_seconds and '.m3u8' in stream_url.lower() else [])
-
             cmd = [
                 'ffmpeg', '-y',
-                *RECONNECT_OPTS, *hls_opts(stream_url), *live_opts,
+                *RECONNECT_OPTS, *recording_hls_opts(stream_url, is_live_channel),
                 *seek_opts,
                 '-headers', headers,
                 '-i', stream_url,
@@ -1156,6 +1140,8 @@ class Recorder:
         expected = None
         if (task.is_live or task.is_screen_capture) and task.part_started_wall:
             end = min(task.part_ended_wall, task.pause_time) if task.pause_pending else task.part_ended_wall
+            if task.stop_timestamp is not None:
+                end = min(end, task.stop_timestamp)
             if task.deadline is not None:
                 end = min(end, task.deadline)
             expected = max(0, end-task.part_started_wall) * (task.speed_factor or 1)
@@ -1354,7 +1340,10 @@ class Recorder:
             stream.stop()
 
     def _start_timer_loop(self):
-        self._running = True
+        with self._lock:
+            if self._running or self._closing:
+                return
+            self._running = True
         
         def loop():
             while self._running:

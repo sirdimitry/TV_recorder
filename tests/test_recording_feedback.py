@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+from threading import Event
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -123,18 +124,17 @@ class RecordingFeedbackTests(unittest.TestCase):
 
     def test_ui_updates_are_coalesced_until_refresh_runs(self):
         panel = object.__new__(RecordingPanel)
-        panel._refresh_pending = False
+        panel._refresh_requested = Event()
         panel.after = Mock()
         panel.refresh = Mock()
         for _ in range(100):
-            panel._schedule_refresh()
-        panel.after.assert_called_once()
-        callback = panel.after.call_args.args[1]
-        callback()
+            panel._refresh_requested.set()
+        panel.after.assert_not_called()
+        panel._poll_refresh()
         panel.refresh.assert_called_once()
-        self.assertFalse(panel._refresh_pending)
-        panel._schedule_refresh()
-        self.assertEqual(panel.after.call_count, 2)
+        self.assertFalse(panel._refresh_requested.is_set())
+        panel._poll_refresh()
+        panel.refresh.assert_called_once()
 
     def test_sizes_and_connecting_labels(self):
         self.assertEqual(size_label(None), '—')

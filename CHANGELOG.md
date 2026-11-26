@@ -1,3 +1,11 @@
+## 1.1.52 — 2026-11-26
+
+- Show live and completed recording cards in the right panel, and restore the list when starting a channel from Live.
+- Prevent duplicate channel recording requests while connecting.
+- Preserve AAC when copying MPEG-TS into fragmented MP4.
+- Open the live thumbnail grid separately and coalesce recording updates on the main Tk thread.
+- Fetch live HLS segments from Ngenix on fresh connections and start closer to the live edge.
+
 ## 1.1.51 — candidate, 2026-11-17
 
 - Move My Links and Downloads into the main navigation beside Live and Archive.

@@ -42,10 +42,10 @@ class ChannelList(ctk.CTkFrame):
         self.channel_widgets: Dict[str, dict] = {}
 
         self._blink_on = True
+        self._record_button_active = set()
         self._setup_ui()
 
         if self.recorder:
-            self.recorder.set_ui_callback(self._on_recorder_update)
             self._blink_tick()
 
     def _setup_ui(self):
@@ -61,6 +61,7 @@ class ChannelList(ctk.CTkFrame):
         self.scroll_frame.pack(fill='both', expand=True, padx=6, pady=(0, 6))
 
     def load_channels(self, channels: List[Dict]):
+        self._record_button_active.clear()
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
         self.channel_widgets.clear()
@@ -199,15 +200,23 @@ class ChannelList(ctk.CTkFrame):
         else:
             logger.info(f"Запрос записи канала: {name}")
 
-    def _on_recorder_update(self):
-        self.after(0, self._refresh_record_buttons)
+    def set_record_starting(self, name: str, starting: bool):
+        widgets = self.channel_widgets.get(name)
+        if widgets:
+            widgets['btn_record'].configure(state='disabled' if starting else 'normal')
+        if not starting:
+            self._refresh_record_buttons()
 
     def _refresh_record_buttons(self):
         if not self.recorder:
             return
         c = self.colors
         active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording or t.recovering}
+        changed_names = active_names ^ self._record_button_active
+        self._record_button_active = active_names
         for name, widgets in self.channel_widgets.items():
+            if name not in changed_names:
+                continue
             btn = widgets['btn_record']
             if name in active_names:
                 btn.configure(image=get_icon('stop', c['red'], 18), fg_color=c['bg_active'])
@@ -222,6 +231,7 @@ class ChannelList(ctk.CTkFrame):
         # общий на все строки — так они мигают синхронно, а не вразнобой.
         if not self.winfo_exists():
             return
+        self._refresh_record_buttons()
         self._blink_on = not self._blink_on
         if self.recorder:
             c = self.colors

@@ -32,11 +32,10 @@ class RecordingPanel(ctk.CTkFrame):
         self.recorder = recorder
         self.storage = Storage()
 
-        self.recorder.set_ui_callback(self._schedule_refresh)
-
         self.task_widgets: Dict[str, dict] = {}
         self.empty_label: Optional[ctk.CTkLabel] = None
-        self._refresh_pending = False
+        self._refresh_requested = threading.Event()
+        self._connecting_channels = set()
         self._view = 'list'
         self._view_generation = 0
         self._filter = 'Все'
@@ -49,10 +48,32 @@ class RecordingPanel(ctk.CTkFrame):
         self._setup_ui()
         self.refresh()
 
-    def _schedule_refresh(self):
-        if not self._refresh_pending:
-            self._refresh_pending = True
-            self.after(0, self._update_timers_only)
+        self.recorder.set_ui_callback(self._refresh_requested.set)
+        self._refresh_job = self.after(100, self._poll_refresh)
+
+    def _poll_refresh(self):
+        self._refresh_job = self.after(100, self._poll_refresh)
+        if self._refresh_requested.is_set():
+            self._refresh_requested.clear()
+            self.refresh()
+
+    def destroy(self):
+        self.recorder.remove_ui_callback(self._refresh_requested.set)
+        self.after_cancel(self._refresh_job)
+        super().destroy()
+
+    def set_channel_connecting(self, name, connecting):
+        if connecting:
+            self._connecting_channels.add(name)
+            self.show_recordings()
+        else:
+            self._connecting_channels.discard(name)
+            self.refresh()
+
+    def show_recordings(self):
+        self._filter = 'Все'
+        self.filter_picker.set(self._filter)
+        self._show_list()
 
     def _open_monitor(self):
         from gui.recording_monitor import RecordingMonitorWindow
@@ -61,7 +82,7 @@ class RecordingPanel(ctk.CTkFrame):
     def _show_list(self):
         self._view_generation += 1
         self._view = 'list'
-        self.list_frame.tkraise()
+        self.list_page.tkraise()
         self.filter_bar.pack(fill='x', padx=12, pady=(0, 6), before=self.body)
         self.refresh()
 
@@ -71,7 +92,7 @@ class RecordingPanel(ctk.CTkFrame):
         generation = self._view_generation
         self._view = 'history'
         self.filter_bar.pack_forget()
-        self.history_frame.tkraise()
+        self.history_page.tkraise()
         for child in self.history_frame.winfo_children():
             child.destroy()
         toolbar = ctk.CTkFrame(self.history_frame, fg_color='transparent')
@@ -178,16 +199,23 @@ class RecordingPanel(ctk.CTkFrame):
         self.body.pack(fill='both', expand=True, padx=6, pady=(0, 6))
         self.body.grid_columnconfigure(0, weight=1)
         self.body.grid_rowconfigure(0, weight=1)
-        self.list_frame = ctk.CTkScrollableFrame(self.body, fg_color='transparent')
-        self.history_frame = ctk.CTkScrollableFrame(self.body, fg_color='transparent')
+        self.list_page = ctk.CTkFrame(self.body, fg_color='transparent')
+        self.history_page = ctk.CTkFrame(self.body, fg_color='transparent')
+        self.list_frame = ctk.CTkScrollableFrame(self.list_page, fg_color='transparent')
+        self.history_frame = ctk.CTkScrollableFrame(self.history_page, fg_color='transparent')
+        self.list_frame.pack(fill='both', expand=True)
+        self.history_frame.pack(fill='both', expand=True)
         self.details_frame = ctk.CTkFrame(self.body, fg_color='transparent')
-        for view in (self.list_frame, self.history_frame, self.details_frame):
+        for view in (self.list_page, self.history_page, self.details_frame):
             view.grid(row=0, column=0, sticky='nsew')
-        self.list_frame.tkraise()
+        self.list_page.tkraise()
 
     def refresh(self):
         tasks = self.recorder.get_all_tasks()
-        self.count_label.configure(text=summary_label(tasks))
+        summary = summary_label(tasks)
+        if self._connecting_channels:
+            summary += f'  ·  Подключение: {len(self._connecting_channels)}'
+        self.count_label.configure(text=summary)
         if self._view != 'list':
             return
         tasks = visible_tasks(tasks, self._filter)
@@ -196,11 +224,14 @@ class RecordingPanel(ctk.CTkFrame):
             if tid not in current_ids:
                 self.task_widgets.pop(tid)['row'].destroy()
         if not tasks and self.empty_label is None:
-            self.empty_label = ctk.CTkLabel(self.list_frame, text='Здесь пока нет записей', text_color=self.colors['text_muted'])
+            self.empty_label = ctk.CTkLabel(self.list_frame, text='', text_color=self.colors['text_muted'])
             self.empty_label.pack(pady=20)
         elif tasks and self.empty_label is not None:
             self.empty_label.destroy()
             self.empty_label = None
+        if self.empty_label is not None:
+            self.empty_label.configure(text='Подключение к эфиру…' if self._connecting_channels
+                                       else 'Здесь пока нет записей')
         for task in tasks:
             if task.task_id not in self.task_widgets:
                 self._add_task_row(task)
@@ -208,10 +239,6 @@ class RecordingPanel(ctk.CTkFrame):
 
     def _task_state(self, task):
         return task_state(task)
-
-    def _update_timers_only(self):
-        self._refresh_pending = False
-        self.refresh()
 
     def _render_task(self, task, widgets):
         model = card_model(task)

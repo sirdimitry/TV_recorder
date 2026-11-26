@@ -68,8 +68,8 @@ changed in Settings.
 ## Install the macOS app
 
 **Version 1.1.48 is available as a ready-to-install DMG for Apple Silicon Macs.**
-Download [TV Recorder 1.1.48 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.48/TV_Recorder_v1.1.48_Apple_Silicon.dmg)
-or see the [release notes and SHA-256 checksum](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.48).
+Download [TV Recorder 1.1.52 — DMG](https://github.com/sirdimitry/TV_recorder/releases/download/v1.1.52/TV_Recorder_v1.1.52_Apple_Silicon.dmg)
+or see the [release notes and SHA-256 checksum](https://github.com/sirdimitry/TV_recorder/releases/tag/v1.1.52).
 
 Download the [latest ready-to-install DMG](https://github.com/sirdimitry/TV_recorder/releases/latest) from GitHub, open it, and drag **TV Recorder** to **Applications**.
 The [latest release page](https://github.com/sirdimitry/TV_recorder/releases/latest) lists the current version and its installer.
@@ -110,7 +110,7 @@ python3 -m pip install --upgrade yt-dlp
 
 ## One main window
 
-Monitor, settings, about and editing forms are pages inside the existing window.
+Settings, about and editing forms stay in the main window. The live recording thumbnail grid opens separately.
 Use **Back** to return; workspace widgets and recording jobs remain alive.
 Leaving a form cancels unsaved input. Notifications and confirmations are inline.
 Link thumbnails use the embedded preview. OS file/folder pickers remain native;

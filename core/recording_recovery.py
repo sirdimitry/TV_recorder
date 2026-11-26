@@ -14,7 +14,10 @@ from utils.config import Config
 
 _ACTIVE_MARKERS = {}
 
-FRAGMENT_FLAGS = '+frag_keyframe+empty_moov+default_base_moof'
+# Let FFmpeg inspect the first packets before writing the MP4 header.
+# With empty_moov, FFmpeg 7.1 can miss automatic ADTS-to-ASC conversion and
+# abort a transport-stream capture as soon as it tries to mux AAC.
+FRAGMENT_FLAGS = '+frag_keyframe+default_base_moof'
 
 
 def prepare_recording(output, task_id, *, speed=None, has_audio=True):

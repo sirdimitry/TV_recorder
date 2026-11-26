@@ -50,10 +50,10 @@ class LinkList(ctk.CTkFrame):
         self._name_font = ctk.CTkFont(size=13, weight='bold')
 
         self._blink_on = True
+        self._record_button_active = set()
         self._setup_ui()
 
         if self.recorder:
-            self.recorder.set_ui_callback(self._on_recorder_update)
             self._blink_tick()
 
     def _setup_ui(self):
@@ -78,6 +78,7 @@ class LinkList(ctk.CTkFrame):
         self.scroll_frame.pack(fill='both', expand=True, padx=6, pady=(0, 6))
 
     def load_links(self, links: List[Dict]):
+        self._record_button_active.clear()
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
         self.link_widgets.clear()
@@ -301,15 +302,16 @@ class LinkList(ctk.CTkFrame):
             if prev:
                 badge.configure(text=prev[0], text_color=prev[1])
 
-    def _on_recorder_update(self):
-        self.after(0, self._refresh_record_buttons)
-
     def _refresh_record_buttons(self):
         if not self.recorder:
             return
         c = self.colors
         active_names = {t.channel_name for t in self.recorder.get_all_tasks() if t.is_recording or t.recovering}
+        changed_names = active_names ^ self._record_button_active
+        self._record_button_active = active_names
         for name, widgets in self.link_widgets.items():
+            if name not in changed_names:
+                continue
             btn = widgets['btn_record']
             if name in active_names:
                 btn.configure(image=get_icon('stop', c['red'], 18), fg_color=c['bg_active'])
@@ -324,6 +326,7 @@ class LinkList(ctk.CTkFrame):
         # общий на все строки — так они мигают синхронно, а не вразнобой.
         if not self.winfo_exists():
             return
+        self._refresh_record_buttons()
         self._blink_on = not self._blink_on
         if self.recorder:
             c = self.colors

@@ -1,9 +1,9 @@
 # gui/recording_monitor.py
-"""Встроенный монитор: сетка живых миниатюр всех активных записей —
+"""Монитор: сетка живых миниатюр всех активных записей —
 для случаев, когда одновременно пишется много каналов (условно 1-16) и
 хочется видеть общую картину сразу, а не листать список по одной строке.
 
-Монитор размещается на странице внутри основного окна.
+Монитор миниатюр открывается отдельным окном.
 Кадры не захватывает сам — читает то, что Recorder и так собирает
 централизованно на каждую активную задачу (core/recorder.py), поэтому
 открытие монитора не удваивает нагрузку поверх панели записей."""
@@ -24,24 +24,36 @@ MODE_LABELS = {'Экономичный': 'economy', 'Обычный': 'normal', 
 
 
 class RecordingMonitorWindow(ctk.CTkFrame):
-    """Встроенная страница; имя класса сохранено для совместимости."""
+    """Окно живых миниатюр активных записей."""
 
     _instance = None
 
     @classmethod
     def show(cls, root, recorder: Recorder):
         if cls._instance is not None and cls._instance.winfo_exists():
+            cls._instance.master.deiconify()
             cls._instance.master.lift()
             return
-        page = root._page_host.open('Монитор записей', scroll=False)
-        cls._instance = RecordingMonitorWindow(page.body, recorder)
-        cls._instance.pack(fill='both', expand=True)
-        page.on_close = cls._instance._close
+        window = ctk.CTkToplevel(root)
+        window.title('TV Recorder — монитор записей')
+        window.geometry('820x520')
+        window.minsize(520, 320)
+        cls._instance = cls(window, recorder)
+        monitor = cls._instance
+        monitor.pack(fill='both', expand=True)
+
+        def close():
+            monitor._close()
+            window.destroy()
+
+        window.protocol('WM_DELETE_WINDOW', close)
 
     @classmethod
     def close_if_open(cls):
         if cls._instance is not None and cls._instance.winfo_exists():
+            window = cls._instance.master
             cls._instance._close()
+            window.destroy()
 
     def __init__(self, root, recorder: Recorder):
         super().__init__(root)
@@ -127,9 +139,7 @@ class RecordingMonitorWindow(ctk.CTkFrame):
             self._clear_images()
 
     def _on_recorder_update(self):
-        if self._running and self._visible and not self._refresh_pending:
-            self._refresh_pending = True
-            self.after(0, self._maybe_rebuild)
+        self._refresh_pending = True
 
     def _monitor_tasks(self):
         return [task for task in self.recorder.get_all_tasks() if task.is_recording or task.recovering]
@@ -157,7 +167,7 @@ class RecordingMonitorWindow(ctk.CTkFrame):
 
         if not tasks:
             ctk.CTkLabel(self.grid_frame, text="Нет активных записей", font=ctk.CTkFont(size=12),
-                         text_color=Config.COLORS['text_muted']).pack(pady=30)
+                         text_color=Config.COLORS['text_muted']).grid(row=0, column=0, pady=30)
             return
 
         columns = self._columns_for(len(tasks))
@@ -277,6 +287,8 @@ class RecordingMonitorWindow(ctk.CTkFrame):
         if not self._visible:
             self._poll_id = self.after(1000, self._poll)
             return
+        if self._refresh_pending:
+            self._maybe_rebuild()
         profile = self.recorder.get_snapshot_profile()
         tasks = {t.task_id: t for t in self._monitor_tasks()}
         for tid, widgets in self.tile_widgets.items():

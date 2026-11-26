@@ -80,6 +80,26 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(probe_media(output).has_audio)
         self.assertEqual(before, hashes(output))
 
+    def test_fragmented_capture_preserves_aac_from_transport_stream(self):
+        transport = self.directory / 'source.ts'
+        output = self.directory / 'result.mp4'
+        capture, marker = prepare_recording(output, 'transport')
+        self.addCleanup(release_recording, marker)
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                        'testsrc2=size=320x180:rate=25', '-f', 'lavfi', '-i',
+                        'sine=frequency=1000:sample_rate=48000', '-t', '3',
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '25',
+                        '-c:a', 'aac', '-f', 'mpegts', str(transport)],
+                       check=True, timeout=15)
+        subprocess.run(['ffmpeg', '-v', 'error', '-i', str(transport), '-c', 'copy',
+                        '-movflags', FRAGMENT_FLAGS, '-frag_duration', '1000000', str(capture)],
+                       check=True, timeout=15)
+        release_recording(marker)
+        finalize_recording(marker)
+        probe = probe_media(output)
+        self.assertGreater(probe.video_duration, 2.9)
+        self.assertGreater(probe.audio_duration, 2.9)
+
     def test_sigkill_leaves_recoverable_fragments(self):
         output, source, marker = self.capture(crash=True)
         release_recording(marker)
