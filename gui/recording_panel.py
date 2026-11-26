@@ -260,13 +260,14 @@ class RecordingPanel(ctk.CTkFrame):
         else:
             widgets['message'].grid_remove()
         widgets['btn_pause'].configure(text='▶' if task.is_paused else 'Ⅱ')
-        for button, permission in (('btn_pause', 'can_pause'), ('btn_stop', 'can_stop'),
-                                   ('btn_del', 'can_remove'), ('btn_open', 'can_open'),
-                                   ('btn_merge', 'can_merge')):
-            if model[permission]:
-                widgets[button].grid()
+        for column, (button, permission) in enumerate((
+            ('btn_pause', 'can_pause'), ('btn_stop', 'can_stop'), ('btn_open', 'can_open'),
+            ('btn_info', None), ('btn_merge', 'can_merge'), ('btn_del', 'can_remove'),
+        )):
+            if permission is None or model[permission]:
+                widgets[button].grid(row=0, column=column, padx=1, pady=1)
             else:
-                widgets[button].grid_remove()
+                widgets[button].grid_forget()
         self._update_name_width(task.task_id)
 
     def _icon_button(self, parent, icon_name, command, color=None):
@@ -363,20 +364,18 @@ class RecordingPanel(ctk.CTkFrame):
         status.bind('<Button-1>', lambda event, item=task: self._show_task_details(item))
         actions = ctk.CTkFrame(row, fg_color='transparent')
         actions.grid(row=0, column=3, rowspan=3, sticky='ne', padx=8, pady=8)
-        def button(text, command, col, icon=None):
+        def button(text, command, icon=None):
             item = ctk.CTkButton(actions, text=text, image=get_icon(icon, c['text_secondary'], 14) if icon else None,
                                 width=28, height=26, corner_radius=6, fg_color=c['bg_tertiary'],
                                 hover_color=c['bg_hover'], command=command)
-            item.grid(row=0, column=col, padx=1, pady=1)
             return item
-        pause = button('Ⅱ', lambda: self._toggle_pause(task), 0)
-        stop = button('', lambda: self._stop_task(task), 1, 'stop')
-        delete = button('×', lambda: self._remove_task(task), 5)
-        folder = button('', lambda: self._open_file(task), 2, 'folder')
-        button('i', lambda: self._show_task_details(task), 3)
+        pause = button('Ⅱ', lambda: self._toggle_pause(task))
+        stop = button('', lambda: self._stop_task(task), 'stop')
+        delete = button('×', lambda: self._remove_task(task))
+        folder = button('', lambda: self._open_file(task), 'folder')
+        details = button('i', lambda: self._show_task_details(task))
         merge = ctk.CTkButton(actions, text='Объединить', width=88, height=26,
                               command=lambda: self._merge_parts(task))
-        merge.grid(row=0, column=4, padx=1, pady=1)
         metrics = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w', justify='left', text_color=c['text_secondary'])
         metrics.grid(row=2, column=2, sticky='ew', pady=(1, 2))
         period = ctk.CTkLabel(row, text='', font=ctk.CTkFont(size=10), anchor='w', text_color=c['text_muted'])
@@ -388,7 +387,7 @@ class RecordingPanel(ctk.CTkFrame):
         self.task_widgets[task.task_id] = dict(row=row, title=title, name_lbl=name, full_name=task.channel_name,
             logo_lbl=logo, timer=timer, result=status, accent_bar=accent, actions=actions,
             metrics=metrics, period=period, disk=disk, message=message,
-            btn_pause=pause, btn_stop=stop, btn_del=delete, btn_open=folder, btn_merge=merge)
+            btn_pause=pause, btn_stop=stop, btn_del=delete, btn_open=folder, btn_info=details, btn_merge=merge)
         row.bind('<Configure>', lambda event, tid=task.task_id: self._update_name_width(tid))
 
     def _update_name_width(self, task_id):
